@@ -17,12 +17,23 @@ import type {} from '@deepseek-ai/dsh-fs'
 import { createOpenAICodexAdapter } from './adapter.ts'
 import { registerOpenAICodexAuthRoutes } from './auth-routes.ts'
 import { viewImageTool } from './view-image.ts'
+import { imagegenTool } from './imagegen.ts'
+import { ImageToolPolicy } from './tool-policy.ts'
 import {
   installOpenAICodexSearchEvent,
   recordOpenAICodexSearchRequest,
 } from './search-event.ts'
 
 export { VIEW_IMAGE_TOOL_NAME } from './view-image.ts'
+export {
+  IMAGEGEN_TOOL_NAME,
+  OPENAI_CODEX_IMAGE_EDITS_URL,
+  OPENAI_CODEX_IMAGE_GENERATIONS_URL,
+  OPENAI_CODEX_IMAGE_MODEL,
+  OpenAICodexImageClient,
+} from './imagegen.ts'
+export { DEFAULT_IMAGE_TOOL_PREFERENCES, ImageToolPolicy } from './tool-policy.ts'
+export type { ImageToolPreferences } from './tool-policy.ts'
 export { OPENAI_CODEX_USAGE_URL, parseOpenAICodexUsage, readOpenAICodexRateLimits } from './usage.ts'
 export type {
   OpenAICodexCredits,
@@ -88,6 +99,10 @@ export interface Config {
   searchContextSize?: OpenAICodexSearchContextSize
   /** Maximum generated tokens returned by the standalone search endpoint. */
   searchMaxOutputTokens?: number
+  /** Allow non-Codex vision models to call view_image. */
+  shareViewImageWithOtherModels?: boolean
+  /** Allow non-Codex vision models to call imagegen. */
+  shareImagegenWithOtherModels?: boolean
 }
 
 export const Config: z<Config> = z.object({
@@ -95,6 +110,8 @@ export const Config: z<Config> = z.object({
   searchMode: z.union(['cached', 'indexed', 'live'] as const).default(DEFAULT_OPENAI_CODEX_SEARCH_MODE),
   searchContextSize: z.union(['low', 'medium', 'high'] as const).default(DEFAULT_OPENAI_CODEX_SEARCH_CONTEXT_SIZE),
   searchMaxOutputTokens: z.number().step(1).min(1).default(DEFAULT_OPENAI_CODEX_SEARCH_MAX_OUTPUT_TOKENS),
+  shareViewImageWithOtherModels: z.boolean().default(true),
+  shareImagegenWithOtherModels: z.boolean().default(true),
 })
 
 /**
@@ -106,6 +123,11 @@ export const Config: z<Config> = z.object({
 export function apply(ctx: Context, config: Config): void {
   installOpenAICodexSearchEvent()
   const credentials = new OpenAICodexCredentialStore()
+  const imageTools = new ImageToolPolicy({
+    shareViewImageWithOtherModels: config.shareViewImageWithOtherModels ?? true,
+    shareImagegenWithOtherModels: config.shareImagegenWithOtherModels ?? true,
+  })
+  ctx.inject(['settings'], settingsCtx => { imageTools.attach(settingsCtx) })
   ctx.llm.registerAdapter(
     [OPENAI_CODEX_PROVIDER],
     createOpenAICodexAdapter(credentials, () => ctx.get('attachments')),
@@ -119,6 +141,9 @@ export function apply(ctx: Context, config: Config): void {
     resolveRequestId: () => String(ctx.get('agents')?.currentInitiator()?.session.id ?? randomUUID()),
     recordRequest: request => { recordOpenAICodexSearchRequest(ctx, request) },
   }))
-  ctx.inject(['webServer'], webCtx => registerOpenAICodexAuthRoutes(webCtx, credentials))
-  ctx.inject(['tools', 'fs', 'attachments'], toolCtx => toolCtx.tools.register(viewImageTool(toolCtx)))
+  ctx.inject(['webServer'], webCtx => registerOpenAICodexAuthRoutes(webCtx, credentials, imageTools))
+  ctx.inject(['tools', 'fs', 'attachments'], toolCtx => {
+    toolCtx.tools.register(viewImageTool(toolCtx, imageTools))
+    toolCtx.tools.register(imagegenTool(toolCtx, credentials, imageTools))
+  })
 }

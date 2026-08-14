@@ -6,7 +6,7 @@ English | [中文](design.zh.md)
 
 ## Scope
 
-`dsh-codex` is a standard DeepSeek Harness bundle. It adds ChatGPT OAuth, the Codex model catalog, a Codex standalone-search provider, browser account settings, and a `view_image` tool without modifying dsh source code. The active dsh profile continues to own the agent loop, attachments, filesystem policy, tools, permissions, compaction, and Web composer.
+`dsh-codex` is a standard DeepSeek Harness bundle. It adds ChatGPT OAuth, the Codex model catalog, a Codex standalone-search provider, browser account settings, `view_image`, and `imagegen` without modifying dsh source code. The active dsh profile continues to own the agent loop, attachments, filesystem policy, tools, permissions, compaction, and Web composer.
 
 ## Authentication
 
@@ -27,6 +27,12 @@ The ChatGPT Codex route does not apply the ordinary Responses output-token limit
 Codex models inherit their declared input modalities from the provider catalog. The existing dsh Web composer already converts pasted or dropped images into durable attachments, so the browser plugin only adds account settings and does not replace the composer.
 
 The plugin-owned `view_image` tool accepts a local path or an HTTP(S) URL. Local reads go through the configured filesystem service. Remote downloads reject embedded URL credentials, limit redirects and bytes, and honor cancellation. PNG, JPEG, WebP, and GIF bytes are detected by signature and saved through the attachment service before the tool returns an actual image content block. The tool refuses to run unless the selected model explicitly declares image input.
+
+`imagegen` always executes against the fixed ChatGPT Codex `gpt-image-2` endpoint, independently of the current conversation model. The caller must still declare image input because the tool result contains an image block used by the next model turn. A generation has no references; an edit accepts up to five workspace paths or the most recent one to five conversation image attachments. These two selectors are mutually exclusive. Path reads use `ctx.fs`; conversation references use the attachment store. Base64 data URLs exist only in the private provider request.
+
+Every generated PNG is saved as an attachment and published into the active workspace. `output_path` selects the destination; without it, the plugin creates a collision-resistant `generated-<timestamp>-<id>.png` name. A keyed `imagegen` tool view resolves the durable attachment through the owning session and displays it inline with an original-size preview. Released dsh versions do not expose a binary write primitive, so the plugin includes an atomic local-file compatibility writer that enforces the active sandbox policy before touching a `file:` target. Non-file execution worlds must expose `writeBytes`; `dsh-remote-ssh` does so and encodes bytes as base64 only inside AHP transport. There is no host-path fallback for a remote target. If policy or filesystem capability rejects the workspace write, the attachment remains available and the result reports the write failure.
+
+Live settings persist two independent cross-provider switches. Codex vision models always retain access; the switches decide whether another provider's vision model may execute `view_image` or `imagegen`. Both defaults are enabled. Execution-time enforcement backs the browser controls.
 
 ## Search and session history
 

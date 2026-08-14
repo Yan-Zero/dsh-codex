@@ -9,6 +9,8 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolDefinition, ToolExecution } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-fs'
+import { assertImageCapable } from './image-capability.ts'
+import type { ImageToolPolicy } from './tool-policy.ts'
 
 /** Stable Codex tool name. */
 export const VIEW_IMAGE_TOOL_NAME = 'view_image'
@@ -46,7 +48,8 @@ function contentOf(value: ViewImageValue): ContentBlock[] {
   ]
 }
 
-function mediaTypeOf(data: Uint8Array): ImageMediaType | undefined {
+/** Detect one supported encoded raster format from its magic bytes. */
+export function imageMediaType(data: Uint8Array): ImageMediaType | undefined {
   if (data.length >= 8 && data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47
     && data[4] === 0x0d && data[5] === 0x0a && data[6] === 0x1a && data[7] === 0x0a) return 'image/png'
   if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) return 'image/jpeg'
@@ -58,19 +61,6 @@ function mediaTypeOf(data: Uint8Array): ImageMediaType | undefined {
     && String.fromCharCode(...data.subarray(0, 4)) === 'RIFF'
     && String.fromCharCode(...data.subarray(8, 12)) === 'WEBP') return 'image/webp'
   return undefined
-}
-
-async function assertImageCapable(ctx: Context, exec: ToolExecution, source: string): Promise<void> {
-  const configured = exec.agent?.session.requestHeader()?.config
-  const provider = configured?.provider ?? exec.agent?.options.provider
-  const model = configured?.model ?? exec.agent?.options.model
-  if (provider === undefined || model === undefined) {
-    throw new Error(`cannot view ${JSON.stringify(source)}: the current model route is unavailable`)
-  }
-  const info = await ctx.llm.resolveModelInfo(provider, model, exec.signal)
-  if (info.inputModalities === undefined || !info.inputModalities.includes('image')) {
-    throw new Error(`cannot view ${JSON.stringify(source)}: model "${model}" does not declare image input`)
-  }
 }
 
 async function boundedResponseBytes(response: Response, maxBytes: number, signal: AbortSignal): Promise<Uint8Array> {
@@ -136,7 +126,7 @@ async function fetchImage(source: string, maxBytes: number, signal: AbortSignal)
 }
 
 /** Build the plugin-owned image viewing tool. */
-export function viewImageTool(ctx: Context): ToolDefinition {
+export function viewImageTool(ctx: Context, policy: ImageToolPolicy): ToolDefinition {
   return defineTool({
     name: VIEW_IMAGE_TOOL_NAME,
     description: 'View an image from a local file path or an http(s) URL. Returns the actual PNG, JPEG, WebP, or GIF image to vision-capable models.',
@@ -174,7 +164,8 @@ export function viewImageTool(ctx: Context): ToolDefinition {
     async execute(args, exec) {
       const source = args.source.trim()
       if (source.length === 0) throw new Error('view_image source must not be empty')
-      await assertImageCapable(ctx, exec, source)
+      policy.assertAllowed(exec, 'view_image')
+      await assertImageCapable(ctx, exec, `view ${JSON.stringify(source)}`)
       const attachments = ctx.attachments
       const maxBytes = Math.min(attachments.imageLimits.maxImageBytes, attachments.imageLimits.maxMessageImageBytes)
       let loaded: { data: Uint8Array; display: string; name?: string }
@@ -193,7 +184,7 @@ export function viewImageTool(ctx: Context): ToolDefinition {
         }
         ctx.emit('fs/observed', target, { kind: 'present', version: info.version }, exec)
       }
-      const mediaType = mediaTypeOf(loaded.data)
+      const mediaType = imageMediaType(loaded.data)
       if (mediaType === undefined) throw new Error('view_image supports PNG, JPEG, WebP, and GIF image bytes')
       if (!attachments.imageLimits.mediaTypes.includes(mediaType)) {
         throw new Error(`${mediaType} images are disabled by this deployment`)

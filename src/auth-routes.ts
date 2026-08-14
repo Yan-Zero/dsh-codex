@@ -6,6 +6,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { loginOpenAICodex, logoutOpenAICodex, openAICodexAuthStatus } from './auth.ts'
 import type { OpenAICodexCredentialStore } from './store.ts'
+import type { ImageToolPolicy, ImageToolPreferences } from './tool-policy.ts'
 import { readOpenAICodexRateLimits } from './usage.ts'
 import type { OpenAICodexUsage } from './usage.ts'
 
@@ -15,6 +16,8 @@ export const OPENAI_CODEX_AUTH_STATUS_PATH = '/plugins/dsh-openai-codex/auth/sta
 export const OPENAI_CODEX_AUTH_LOGIN_PATH = '/plugins/dsh-openai-codex/auth/login'
 /** Plugin-owned logout endpoint consumed by its browser half. */
 export const OPENAI_CODEX_AUTH_LOGOUT_PATH = '/plugins/dsh-openai-codex/auth/logout'
+/** Plugin-owned image-tool preference endpoint consumed by its browser half. */
+export const OPENAI_CODEX_IMAGE_TOOL_SETTINGS_PATH = '/plugins/dsh-openai-codex/image-tools'
 
 export type OpenAICodexWebAuthStatus =
   | { status: 'signed-out' }
@@ -163,10 +166,44 @@ function json(res: ServerResponse, status: number, value: unknown): void {
   res.end(JSON.stringify(value))
 }
 
+async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = []
+  let bytes = 0
+  for await (const chunk of req) {
+    const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    bytes += data.byteLength
+    if (bytes > 16 * 1024) throw new Error('request body is too large')
+    chunks.push(data)
+  }
+  let value: unknown
+  try {
+    value = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  } catch {
+    throw new Error('request body must be valid JSON')
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('request body must be an object')
+  }
+  return value as Record<string, unknown>
+}
+
+function preferencePatch(value: Record<string, unknown>): Partial<ImageToolPreferences> {
+  const allowed = new Set(['shareViewImageWithOtherModels', 'shareImagegenWithOtherModels'])
+  if (Object.keys(value).some(key => !allowed.has(key))) throw new Error('request contains an unknown image-tool setting')
+  const patch: Partial<ImageToolPreferences> = {}
+  for (const key of allowed as Set<keyof ImageToolPreferences>) {
+    if (value[key] === undefined) continue
+    if (typeof value[key] !== 'boolean') throw new Error(`${key} must be a boolean`)
+    patch[key] = value[key]
+  }
+  return patch
+}
+
 /** Register the plugin-owned OAuth routes when the Web server is composed. */
 export function registerOpenAICodexAuthRoutes(
   ctx: Context,
   store: OpenAICodexCredentialStore,
+  imageTools: ImageToolPolicy,
 ): void {
   const auth = new OpenAICodexWebAuth(store)
   ctx.effect(() => {
@@ -201,6 +238,20 @@ export function registerOpenAICodexAuthRoutes(
           if (!trustedRequest(req)) return json(res, 403, { error: 'forbidden' })
           await auth.signOut()
           json(res, 200, { ok: true })
+        },
+      }),
+      ctx.webServer.register({
+        kind: 'exact',
+        path: OPENAI_CODEX_IMAGE_TOOL_SETTINGS_PATH,
+        handler: async (req, res) => {
+          if (!trustedRequest(req)) return json(res, 403, { error: 'forbidden' })
+          if (req.method === 'GET') return json(res, 200, imageTools.snapshot())
+          if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
+          try {
+            json(res, 200, await imageTools.update(preferencePatch(await readJson(req))))
+          } catch (error: unknown) {
+            json(res, 400, { error: safeMessage(error) })
+          }
         },
       }),
     ]

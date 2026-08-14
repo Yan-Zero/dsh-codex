@@ -11,6 +11,7 @@ Use a ChatGPT subscription in [DeepSeek Harness](https://github.com/deepseek-ai/
 - streaming, tool calls, reasoning replay, prompt caching, and dsh compaction through the normal LLM service
 - Codex standalone web search through dsh's existing `web_search` tool
 - a `view_image` tool that can load a local path or an HTTP(S) image URL
+- an `imagegen` tool backed by `gpt-image-2`, with workspace or conversation reference images and automatic workspace output
 - browser image input through dsh's existing paste and drop controls
 
 ChatGPT subscription authentication and usage-based OpenAI API access are different products. This plugin uses the ChatGPT Codex backend only; it does not turn a subscription into a general-purpose OpenAI API credential.
@@ -50,6 +51,10 @@ Image support uses dsh's durable attachment path:
 - PNG, JPEG, WebP, and GIF are accepted within the active dsh attachment limits;
 - only a model that explicitly advertises image input may receive an image.
 
+`imagegen` is available to any vision-capable conversation model. The current model writes an ordinary prompt and may select either `referenced_image_paths` or `num_last_images_to_include`; the plugin reads the bytes from `ctx.fs` or the attachment store and sends them to `gpt-image-2`. The model never emits base64. Every result is shown inline, saved as a durable attachment, and written to the active workspace. `output_path` chooses the destination; omitting it creates a unique `generated-<timestamp>-<id>.png` file. Local saving is included in this plugin, while `dsh-remote-ssh` supplies the remote AHP write path when that plugin owns the workspace.
+
+The Settings page has separate **View Image for other models** and **Image generation for other models** toggles. Both default on. Turning one off keeps that tool available to `openai-codex` vision models and rejects calls from other model providers at execution time.
+
 The tool stores validated bytes as a dsh attachment before returning the actual image block. Local paths pass through the configured filesystem service. Remote redirects are bounded and credentials embedded in URLs are rejected.
 
 ## Search
@@ -87,7 +92,7 @@ Keeping the stores separate prevents two clients from racing the same rotating r
 
 ## Compatibility notes
 
-- The plugin runs on the standard dsh plugin surfaces and does not require a modified Harness checkout.
+- The plugin runs on released dsh plugin surfaces and does not require a modified Harness checkout. It can generate attachments and save local output when installed alone.
 - ChatGPT plan eligibility, model access, quotas, and backend behavior are controlled by OpenAI and may change.
 - The Codex endpoint does not enforce the ordinary Responses `max_output_tokens` field. Compaction works, but its configured summary cap cannot be imposed server-side on this route.
 - Filesystem, shell, skills, MCP, subagents, permissions, attachments, compaction, and the `web_search` tool itself still come from the active dsh profile.

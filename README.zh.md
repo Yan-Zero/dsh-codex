@@ -11,6 +11,7 @@
 - 经标准 LLM 服务运行的流式响应、工具调用、推理回放、提示词缓存与 dsh 压缩
 - 通过 dsh 现有 `web_search` 工具使用 Codex 独立联网搜索
 - 可读取本地路径或 HTTP(S) 图片 URL 的 `view_image` 工具
+- 由 `gpt-image-2` 执行的 `imagegen` 工具，支持工作区／会话参考图和自动工作区输出
 - 复用 dsh Web 输入框的粘贴和拖放图片能力
 
 ChatGPT 订阅认证与按量计费的 OpenAI API 是不同产品。本插件只使用 ChatGPT Codex 后端，不会把订阅转换成通用 OpenAI API 凭据。
@@ -50,6 +51,10 @@ bundle 会为新建 agent 选择 `openai-codex` / `gpt-5.6-sol`，并选择 Code
 - 在当前 dsh 附件限制内支持 PNG、JPEG、WebP 与 GIF；
 - 只有明确声明支持图片输入的模型才能接收图片。
 
+任何支持视觉输入的当前对话模型都可以使用 `imagegen`。当前模型只需编写普通提示词，并在 `referenced_image_paths` 与 `num_last_images_to_include` 中选择一种参考图来源；插件从 `ctx.fs` 或附件存储读取字节，再发送给 `gpt-image-2`。模型不会输出 base64。每个结果都会直接显示在对话中、保存为持久附件，并写入当前工作区。`output_path` 用来指定位置；省略时会创建唯一的 `generated-<时间戳>-<id>.png` 文件。本地保存能力包含在本插件中；当工作区由 `dsh-remote-ssh` 管理时，远程插件负责 AHP 写入路径。
+
+设置页提供独立的 **允许其他模型使用 View Image** 与 **允许其他模型使用生图** 开关，默认均为开启。关闭某一项后，`openai-codex` 视觉模型仍可使用该工具，其他模型提供方的调用会在执行入口被拒绝。
+
 工具在返回实际图片块之前，会先验证图片并把字节持久化为 dsh 附件。本地路径经过已配置的文件系统服务；远程重定向次数受限，URL 中也不允许嵌入凭据。
 
 ## 搜索
@@ -87,7 +92,7 @@ dsh 登录与 Codex CLI／Desktop 相互独立：
 
 ## 兼容性说明
 
-- 插件只使用标准 dsh 插件表层，不要求修改版 Harness checkout。
+- 插件只使用已发布的 dsh 插件表层，不要求修改版 Harness checkout。单独安装时即可生成附件并保存本地输出。
 - ChatGPT 套餐资格、模型权限、配额及后端行为由 OpenAI 控制，可能发生变化。
 - Codex 端点不执行普通 Responses 的 `max_output_tokens` 字段。压缩可以工作，但该路由无法在服务端落实配置的摘要上限。
 - 文件系统、shell、skills、MCP、subagents、权限、附件、压缩和 `web_search` 工具本身仍来自当前 dsh profile。

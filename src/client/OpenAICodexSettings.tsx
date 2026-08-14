@@ -3,11 +3,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
 import type { OpenAICodexUsage } from '../usage.ts'
+import type { ImageToolPreferences } from '../tool-policy.ts'
 import type { OpenAICodexSettingsKey } from './locales.ts'
 
 const STATUS_PATH = '/plugins/dsh-openai-codex/auth/status'
 const LOGIN_PATH = '/plugins/dsh-openai-codex/auth/login'
 const LOGOUT_PATH = '/plugins/dsh-openai-codex/auth/logout'
+const IMAGE_TOOLS_PATH = '/plugins/dsh-openai-codex/image-tools'
 const POLL_INTERVAL_MS = 1_000
 const USAGE_POLL_INTERVAL_MS = 60_000
 
@@ -45,6 +47,49 @@ const quotaGroupStyle: CSSProperties = { display: 'flex', flexDirection: 'column
 const quotaTitleStyle: CSSProperties = { margin: 0, fontSize: 14, lineHeight: '20px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }
 const quotaLabelStyle: CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 13, lineHeight: '20px', color: 'var(--dsw-alias-label-secondary)' }
 const progressTrackStyle: CSSProperties = { height: 8, overflow: 'hidden', borderRadius: 999, background: 'var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.08))' }
+const toggleRowStyle: CSSProperties = { ...rowStyle, flexWrap: 'nowrap', alignItems: 'flex-start' }
+const toggleCopyStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 3 }
+const toggleTrackStyle: CSSProperties = { position: 'relative', width: 40, height: 22, flex: '0 0 auto', marginTop: 1, padding: 0, border: 0, borderRadius: 999, cursor: 'pointer', transition: 'background 120ms ease' }
+
+function PreferenceToggle({
+  checked,
+  disabled,
+  label,
+  onChange,
+}: {
+  checked: boolean
+  disabled: boolean
+  label: string
+  onChange(value: boolean): void
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      style={{
+        ...toggleTrackStyle,
+        opacity: disabled ? 0.55 : 1,
+        background: checked ? 'var(--dsw-alias-brand-primary, #1677ff)' : 'var(--dsw-alias-bg-layer-2, #c8ccd2)',
+      }}
+      onClick={() => { onChange(!checked) }}
+    >
+      <span style={{
+        position: 'absolute',
+        top: 3,
+        left: checked ? 21 : 3,
+        width: 16,
+        height: 16,
+        borderRadius: '50%',
+        background: 'white',
+        boxShadow: '0 1px 3px rgba(0, 0, 0, 0.25)',
+        transition: 'left 120ms ease',
+      }} />
+    </button>
+  )
+}
 
 function progressFillStyle(percent: number): CSSProperties {
   return {
@@ -158,11 +203,12 @@ function dotStyle(status: AccountStatus['status']): CSSProperties {
   return { width: 9, height: 9, borderRadius: '50%', flex: '0 0 auto', background: color }
 }
 
-async function jsonRequest<T>(path: string, method = 'GET'): Promise<T> {
+async function jsonRequest<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   const response = await fetch(path, {
     method,
-    headers: { accept: 'application/json' },
+    headers: { accept: 'application/json', ...body === undefined ? {} : { 'content-type': 'application/json' } },
     credentials: 'same-origin',
+    ...body === undefined ? {} : { body: JSON.stringify(body) },
   })
   const value: unknown = await response.json().catch(() => undefined)
   if (!response.ok) {
@@ -179,6 +225,9 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   if (t === undefined) throw new Error('OpenAI Codex settings requires its translation function')
   const [status, setStatus] = useState<AccountStatus>({ status: 'loading' })
   const [busy, setBusy] = useState(false)
+  const [imageTools, setImageTools] = useState<ImageToolPreferences | undefined>()
+  const [imageToolsBusy, setImageToolsBusy] = useState(false)
+  const [imageToolsError, setImageToolsError] = useState<string | undefined>()
 
   const refresh = useCallback(async () => {
     try {
@@ -189,6 +238,12 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   }, [t])
 
   useEffect(() => { void refresh() }, [refresh])
+  useEffect(() => {
+    void jsonRequest<ImageToolPreferences>(IMAGE_TOOLS_PATH).then(
+      value => { setImageTools(value); setImageToolsError(undefined) },
+      () => { setImageToolsError(t('imageToolSettingsFailed')) },
+    )
+  }, [t])
   useEffect(() => {
     const interval = status.status === 'signing-in'
       ? POLL_INTERVAL_MS
@@ -230,6 +285,18 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
     }
   }
 
+  const updateImageTool = async (patch: Partial<ImageToolPreferences>): Promise<void> => {
+    setImageToolsBusy(true)
+    setImageToolsError(undefined)
+    try {
+      setImageTools(await jsonRequest<ImageToolPreferences>(IMAGE_TOOLS_PATH, 'POST', patch))
+    } catch {
+      setImageToolsError(t('imageToolSettingsFailed'))
+    } finally {
+      setImageToolsBusy(false)
+    }
+  }
+
   const label = status.status === 'signed-in'
     ? t('signedIn')
     : status.status === 'loading'
@@ -266,6 +333,37 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
               t={t}
             />
           : null}
+      </div>
+      <div style={cardStyle}>
+        <div>
+          <h3 style={quotaTitleStyle}>{t('imageTools')}</h3>
+          <p style={{ ...bodyStyle, marginTop: 5 }}>{t('imageToolsIntro')}</p>
+        </div>
+        <div style={toggleRowStyle}>
+          <span style={toggleCopyStyle}>
+            <span style={statusStyle}>{t('shareViewImage')}</span>
+            <span style={bodyStyle}>{t('shareViewImageHint')}</span>
+          </span>
+          <PreferenceToggle
+            label={t('shareViewImage')}
+            disabled={imageTools === undefined || imageToolsBusy}
+            checked={imageTools?.shareViewImageWithOtherModels ?? false}
+            onChange={checked => { void updateImageTool({ shareViewImageWithOtherModels: checked }) }}
+          />
+        </div>
+        <div style={toggleRowStyle}>
+          <span style={toggleCopyStyle}>
+            <span style={statusStyle}>{t('shareImagegen')}</span>
+            <span style={bodyStyle}>{t('shareImagegenHint')}</span>
+          </span>
+          <PreferenceToggle
+            label={t('shareImagegen')}
+            disabled={imageTools === undefined || imageToolsBusy}
+            checked={imageTools?.shareImagegenWithOtherModels ?? false}
+            onChange={checked => { void updateImageTool({ shareImagegenWithOtherModels: checked }) }}
+          />
+        </div>
+        {imageToolsError === undefined ? null : <p style={errorStyle}>{imageToolsError}</p>}
       </div>
     </section>
   )

@@ -6,7 +6,7 @@ Status: implemented
 
 ## 范围
 
-`dsh-codex` 是标准 DeepSeek Harness bundle。它在不修改 dsh 源码的前提下提供 ChatGPT OAuth、Codex 模型目录、Codex 独立搜索提供方、浏览器账号设置和 `view_image` 工具。当前 dsh profile 继续负责 agent loop、附件、文件系统策略、工具、权限、压缩与 Web 输入框。
+`dsh-codex` 是标准 DeepSeek Harness bundle。它在不修改 dsh 源码的前提下提供 ChatGPT OAuth、Codex 模型目录、Codex 独立搜索提供方、浏览器账号设置、`view_image` 与 `imagegen`。当前 dsh profile 继续负责 agent loop、附件、文件系统策略、工具、权限、压缩与 Web 输入框。
 
 ## 认证
 
@@ -27,6 +27,12 @@ ChatGPT Codex 路由不会执行普通 Responses 的输出 token 上限。压缩
 Codex 模型从 provider 目录继承其声明的输入模态。现有 dsh Web 输入框已经会把粘贴或拖放的图片转换为持久附件，因此浏览器插件只增加账号设置，不替换输入框。
 
 插件提供的 `view_image` 工具接受本地路径或 HTTP(S) URL。本地读取经过已配置的文件系统服务；远程下载拒绝 URL 内嵌凭据，限制重定向次数和字节数，并响应取消。PNG、JPEG、WebP 与 GIF 通过文件签名识别；工具先经附件服务保存图片，再返回真正的图片内容块。所选模型未明确声明图片输入时，工具会拒绝执行。
+
+`imagegen` 始终调用固定的 ChatGPT Codex `gpt-image-2` 端点，与当前对话模型相互独立。调用方仍须声明图片输入能力，因为工具结果包含供下一轮模型使用的图片块。纯生成不带参考图；编辑可以接收最多五个工作区路径，或最近一至五张会话图片附件。这两种选择器互斥。路径读取使用 `ctx.fs`，会话参考图使用附件存储。base64 data URL 只存在于私有的提供方请求中。
+
+每张生成的 PNG 都会保存为附件并写入当前工作区。`output_path` 用来指定位置；省略时，插件会创建防冲突的 `generated-<时间戳>-<id>.png` 文件名。插件为 `imagegen` 注册了专用工具视图，通过所属会话读取持久附件，在对话中直接显示缩略图并支持查看原图。已发布的 dsh 版本尚未公开二进制写入原语，因此插件包含本地原子写入兼容层；它只处理 `file:` 目标，并在写入前执行当前沙箱策略。非文件执行世界必须提供 `writeBytes`；`dsh-remote-ssh` 已实现该方法，并且只在 AHP 传输内部把字节编码为 base64。远程目标绝不回退到宿主路径。如果沙箱策略或文件系统能力拒绝写入，附件仍然可用，工具结果会报告保存失败。
+
+实时设置会持久化两个相互独立的跨提供方开关。Codex 视觉模型始终保留访问权；两个开关分别决定其他提供方的视觉模型能否执行 `view_image` 或 `imagegen`，默认均为开启。浏览器控件背后有执行时校验。
 
 ## 搜索与会话历史
 

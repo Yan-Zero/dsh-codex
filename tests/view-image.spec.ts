@@ -32,7 +32,7 @@ afterEach(async () => {
   await rm(dshHome, { recursive: true, force: true })
 })
 
-async function setup(): Promise<Context> {
+async function setup(config: OpenAICodex.Config = {}): Promise<Context> {
   const context = new Context()
   ctx = context
   await context.plugin(SystemPrompt)
@@ -41,28 +41,33 @@ async function setup(): Promise<Context> {
   await context.plugin(LocalAttachmentStore, { dshHome })
   await context.plugin(LlmRuntime)
   await context.plugin(WebRuntime)
-  await context.plugin(OpenAICodex)
+  await context.plugin(OpenAICodex, config)
   return context
 }
 
-function agentOn(model: string): object {
+function agentOn(model: string, provider = OpenAICodex.OPENAI_CODEX_PROVIDER): object {
   return {
     options: {},
     session: {
       header: { cwd: workspace },
-      requestHeader: () => ({ config: { provider: OpenAICodex.OPENAI_CODEX_PROVIDER, model } }),
+      requestHeader: () => ({ config: { provider, model } }),
       append: () => undefined,
     },
   }
 }
 
-async function view(context: Context, source: string, model = 'gpt-5.6-sol') {
+async function view(
+  context: Context,
+  source: string,
+  model = 'gpt-5.6-sol',
+  provider = OpenAICodex.OPENAI_CODEX_PROVIDER,
+) {
   return context.tools.execute({
     signal,
     callId: CallId(`view-image-${++callCounter}`),
     name: OpenAICodex.VIEW_IMAGE_TOOL_NAME,
     arguments: { source },
-    agent: agentOn(model) as never,
+    agent: agentOn(model, provider) as never,
   })
 }
 
@@ -100,5 +105,15 @@ describe('view_image', () => {
 
     expect(result.isError).toBe(true)
     expect(result.content.find(block => block.type === 'text')?.text).toContain('does not declare image input')
+  })
+
+  it('honors the setting that disables view_image for another model provider', async () => {
+    const context = await setup({ shareViewImageWithOtherModels: false })
+    await writeFile(join(workspace, 'pixel.png'), PNG_1X1)
+
+    const result = await view(context, 'pixel.png', 'vision-model', 'another-provider')
+
+    expect(result.isError).toBe(true)
+    expect(result.content.find(block => block.type === 'text')?.text).toContain('disabled for models outside')
   })
 })
