@@ -15,6 +15,7 @@ export default [
     entry: {
       index: 'src/index.ts',
       invariant: 'src/invariant.ts',
+      tui: 'src/tui.ts',
       bin: 'src/bin.ts',
     },
     outDir: 'lib',
@@ -31,6 +32,7 @@ export default [
         '@deepseek-ai/cordis',
         '@deepseek-ai/dsh-agent',
         '@deepseek-ai/dsh-attachment',
+        '@deepseek-ai/dsh-commands',
         '@deepseek-ai/dsh-fs',
         '@deepseek-ai/dsh-host-webserver',
         '@deepseek-ai/dsh-invariants',

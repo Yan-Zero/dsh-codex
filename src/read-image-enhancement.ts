@@ -1,22 +1,23 @@
-/** Codex-compatible `view_image` tool for local paths and HTTP(S) URLs. */
+/** Optional HTTP(S) input for Harness's existing `read_image` tool. */
 
 import { basename } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { ToolDefinition, ToolExecution } from '@deepseek-ai/dsh-tools'
+import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-fs'
 import { assertImageCapable } from './image-capability.ts'
 import type { ImageToolPolicy } from './tool-policy.ts'
 
-/** Stable Codex tool name. */
-export const VIEW_IMAGE_TOOL_NAME = 'view_image'
+/** Harness's canonical image-reading tool name. */
+export const READ_IMAGE_TOOL_NAME = 'read_image'
 
-interface ViewImageValue {
-  source: string
+interface ReadImageValue {
+  path: string
   image: {
     attachmentId: string
     mediaType: ImageMediaType
@@ -27,7 +28,7 @@ interface ViewImageValue {
   }
 }
 
-function refOf(image: ViewImageValue['image']): ImageAttachmentRef {
+function refOf(image: ReadImageValue['image']): ImageAttachmentRef {
   return {
     attachmentId: AttachmentId(image.attachmentId),
     mediaType: image.mediaType,
@@ -38,11 +39,11 @@ function refOf(image: ViewImageValue['image']): ImageAttachmentRef {
   }
 }
 
-function contentOf(value: ViewImageValue): ContentBlock[] {
+function contentOf(value: ReadImageValue): ContentBlock[] {
   return [
     {
       type: 'text',
-      text: `<source>${value.source}</source>\n<image>${value.image.mediaType}, ${value.image.width}x${value.image.height} px, ${value.image.bytes} bytes</image>`,
+      text: `<path>${value.path}</path>\n<type>image</type>\n<content>${value.image.mediaType}, ${value.image.width}x${value.image.height} px, ${value.image.bytes} bytes</content>`,
     },
     { type: 'image', attachment: refOf(value.image) },
   ]
@@ -97,8 +98,8 @@ async function fetchImage(source: string, maxBytes: number, signal: AbortSignal)
   name?: string
 }> {
   let url = new URL(source)
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('view_image URL must use http or https')
-  if (url.username !== '' || url.password !== '') throw new Error('view_image URL must not contain credentials')
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('read_image URL must use http or https')
+  if (url.username !== '' || url.password !== '') throw new Error('read_image URL must not contain credentials')
   for (let redirects = 0; ; redirects++) {
     const response = await fetch(url, {
       method: 'GET',
@@ -125,16 +126,19 @@ async function fetchImage(source: string, maxBytes: number, signal: AbortSignal)
   }
 }
 
-/** Build the plugin-owned image viewing tool. */
-export function viewImageTool(ctx: Context, policy: ImageToolPolicy): ToolDefinition {
+/** Build an agent-scoped `read_image` definition that delegates local paths to Harness. */
+export function enhancedReadImageTool(ctx: Context, original: ToolDefinition): ToolDefinition {
   return defineTool({
-    name: VIEW_IMAGE_TOOL_NAME,
-    description: 'View an image from a local file path or an http(s) URL. Returns the actual PNG, JPEG, WebP, or GIF image to vision-capable models.',
+    name: READ_IMAGE_TOOL_NAME,
+    description: 'Read a PNG/JPEG/WebP/GIF image from a workspace file path or an HTTP(S) URL and return the image itself. Requires the current model to accept image input.',
     parameters: {
-      source: {
+      file_path: {
         type: 'string',
-        required: true,
-        description: 'Local absolute/relative image path, or an http(s) image URL.',
+        description: 'Local image path resolved by the active filesystem backend. Provide exactly one of file_path or url.',
+      },
+      url: {
+        type: 'string',
+        description: 'HTTP(S) image URL. Provide exactly one of file_path or url.',
       },
     },
     output: {
@@ -142,7 +146,7 @@ export function viewImageTool(ctx: Context, policy: ImageToolPolicy): ToolDefini
         type: 'object',
         additionalProperties: false,
         properties: {
-          source: { type: 'string', required: true },
+          path: { type: 'string', required: true },
           image: {
             type: 'object',
             required: true,
@@ -160,32 +164,24 @@ export function viewImageTool(ctx: Context, policy: ImageToolPolicy): ToolDefini
       },
       render: (_args, value) => contentOf(value),
     },
-    isConcurrencySafe: () => true,
+    isConcurrencySafe: args => args.url !== undefined || original.isConcurrencySafe?.({ file_path: args.file_path }) === true,
     async execute(args, exec) {
-      const source = args.source.trim()
-      if (source.length === 0) throw new Error('view_image source must not be empty')
-      policy.assertAllowed(exec, 'view_image')
-      await assertImageCapable(ctx, exec, `view ${JSON.stringify(source)}`)
+      const filePath = args.file_path?.trim()
+      const sourceUrl = args.url?.trim()
+      if ((filePath === undefined || filePath.length === 0) === (sourceUrl === undefined || sourceUrl.length === 0)) {
+        throw new Error('read_image requires exactly one non-empty file_path or url')
+      }
+      if (filePath !== undefined && filePath.length > 0) {
+        return await original.execute({ file_path: filePath }, exec) as ReadImageValue
+      }
+
+      const url = sourceUrl as string
+      await assertImageCapable(ctx, exec, `read ${JSON.stringify(url)}`)
       const attachments = ctx.attachments
       const maxBytes = Math.min(attachments.imageLimits.maxImageBytes, attachments.imageLimits.maxMessageImageBytes)
-      let loaded: { data: Uint8Array; display: string; name?: string }
-      if (/^https?:\/\//iu.test(source)) {
-        loaded = await fetchImage(source, maxBytes, exec.signal)
-      } else {
-        const cwd = exec.agent?.session.header.cwd
-        const target = await ctx.fs.resolve(source, { ...cwd === undefined ? {} : { cwd }, signal: exec.signal })
-        const info = await ctx.fs.stat(target, exec.signal)
-        if (info === undefined) throw new Error(`image path does not exist: ${source}`)
-        if (info.type !== 'file') throw new Error(`image path is not a regular file: ${source}`)
-        loaded = {
-          data: await ctx.fs.readBytes(target, exec.signal, maxBytes),
-          display: target.displayPath,
-          name: basename(target.displayPath),
-        }
-        ctx.emit('fs/observed', target, { kind: 'present', version: info.version }, exec)
-      }
+      const loaded = await fetchImage(url, maxBytes, exec.signal)
       const mediaType = imageMediaType(loaded.data)
-      if (mediaType === undefined) throw new Error('view_image supports PNG, JPEG, WebP, and GIF image bytes')
+      if (mediaType === undefined) throw new Error('read_image supports PNG, JPEG, WebP, and GIF image bytes')
       if (!attachments.imageLimits.mediaTypes.includes(mediaType)) {
         throw new Error(`${mediaType} images are disabled by this deployment`)
       }
@@ -194,8 +190,8 @@ export function viewImageTool(ctx: Context, policy: ImageToolPolicy): ToolDefini
         mediaType,
         ...loaded.name === undefined ? {} : { name: loaded.name },
       })
-      const value: ViewImageValue = {
-        source: loaded.display,
+      const value: ReadImageValue = {
+        path: loaded.display,
         image: {
           attachmentId: ref.attachmentId,
           mediaType: ref.mediaType,
@@ -213,11 +209,68 @@ export function viewImageTool(ctx: Context, policy: ImageToolPolicy): ToolDefini
       }
       return value
     },
-    presentCall: args => ({
-      card: 'generic',
-      title: `View image ${args.source}`,
-      kind: 'read',
-      .../^https?:\/\//iu.test(args.source) ? {} : { locations: [{ path: args.source }] },
-    }),
+    presentCall: args => {
+      if (args.file_path !== undefined) return original.presentCall?.({ file_path: args.file_path })
+      return {
+        card: 'generic',
+        title: `Read image ${args.url ?? ''}`,
+        kind: 'read',
+      }
+    },
   })
+}
+
+interface ScopedEnhancement {
+  readonly original: ToolDefinition
+  readonly dispose: () => void
+}
+
+/** Keep an enhanced `read_image` shadow on every live agent while the setting is enabled. */
+export function installReadImageEnhancement(ctx: Context, policy: ImageToolPolicy): void {
+  const installed = new Map<Agent, ScopedEnhancement>()
+  let syncing = false
+
+  const remove = (agent: Agent): void => {
+    const current = installed.get(agent)
+    if (current === undefined) return
+    installed.delete(agent)
+    current.dispose()
+  }
+
+  const syncAgent = (agent: Agent): void => {
+    const current = installed.get(agent)
+    const original = ctx.tools.get(READ_IMAGE_TOOL_NAME)
+    if (!policy.snapshot().modifyReadImage || original === undefined) {
+      remove(agent)
+      return
+    }
+    if (current?.original === original) return
+    if (current !== undefined) remove(agent)
+    if (ctx.tools.get(READ_IMAGE_TOOL_NAME, agent) !== original) return
+    const dispose = agent.ctx.tools.register(enhancedReadImageTool(ctx, original))
+    installed.set(agent, { original, dispose })
+  }
+
+  const syncAll = (): void => {
+    if (syncing) return
+    syncing = true
+    try {
+      for (const agent of ctx.agents.list()) syncAgent(agent)
+      for (const agent of [...installed.keys()]) {
+        if (ctx.agents.get(agent.id) !== agent) remove(agent)
+      }
+    } finally {
+      syncing = false
+    }
+  }
+
+  ctx.on('agent/created', ({ agent }) => { syncAgent(agent) })
+  ctx.on('agent/disposed', ({ agent }) => { installed.delete(agent) })
+  ctx.on('tools/change', syncAll)
+  const stopPolicy = policy.watchImagePreferences(syncAll)
+  syncAll()
+  ctx.effect(() => () => {
+    stopPolicy()
+    for (const agent of [...installed.keys()]) remove(agent)
+  }, 'dsh-openai-codex: enhanced read_image')
 }

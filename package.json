@@ -1,7 +1,7 @@
 {
   "name": "dsh-codex",
-  "description": "ChatGPT OAuth, Codex models, search, image viewing, and gpt-image-2 generation for DeepSeek Harness",
-  "version": "0.2.2",
+  "description": "ChatGPT OAuth, Codex models, search, read_image URL support, and gpt-image-2 generation for DeepSeek Harness",
+  "version": "0.2.3",
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
@@ -36,6 +36,10 @@
       "types": "./lib/invariant.d.ts",
       "default": "./lib/invariant.js"
     },
+    "./tui": {
+      "types": "./lib/tui.d.ts",
+      "default": "./lib/tui.js"
+    },
     "./client": "./lib/client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
@@ -68,6 +72,7 @@
     "@deepseek-ai/dsh-agent": "*",
     "@deepseek-ai/dsh-atomic-write": "*",
     "@deepseek-ai/dsh-attachment": "*",
+    "@deepseek-ai/dsh-commands": "*",
     "@deepseek-ai/dsh-home-paths": "*",
     "@deepseek-ai/dsh-host-webserver": "*",
     "@deepseek-ai/dsh-invariants": "*",
@@ -91,6 +96,7 @@
     "@deepseek-ai/dsh-atomic-write": "0.1.0-rc.6",
     "@deepseek-ai/dsh-attachment": "0.1.0-rc.6",
     "@deepseek-ai/dsh-attachment-local": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-commands": "0.1.0-rc.6",
     "@deepseek-ai/dsh-client-locale": "0.1.0-rc.6",
     "@deepseek-ai/dsh-client-runtime": "0.1.0-rc.6",
     "@deepseek-ai/dsh-client-ui-settings": "0.1.0-rc.6",

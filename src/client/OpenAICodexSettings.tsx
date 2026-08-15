@@ -4,12 +4,14 @@ import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
 import type { OpenAICodexUsage } from '../usage.ts'
 import type { ImageToolPreferences } from '../tool-policy.ts'
+import type { ResponseApiPreferences } from '../tool-policy.ts'
 import type { OpenAICodexSettingsKey } from './locales.ts'
 
 const STATUS_PATH = '/plugins/dsh-openai-codex/auth/status'
 const LOGIN_PATH = '/plugins/dsh-openai-codex/auth/login'
 const LOGOUT_PATH = '/plugins/dsh-openai-codex/auth/logout'
 const IMAGE_TOOLS_PATH = '/plugins/dsh-openai-codex/image-tools'
+const RESPONSE_API_PATH = '/plugins/dsh-openai-codex/response-api'
 const POLL_INTERVAL_MS = 1_000
 const USAGE_POLL_INTERVAL_MS = 60_000
 
@@ -228,6 +230,9 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   const [imageTools, setImageTools] = useState<ImageToolPreferences | undefined>()
   const [imageToolsBusy, setImageToolsBusy] = useState(false)
   const [imageToolsError, setImageToolsError] = useState<string | undefined>()
+  const [responseApi, setResponseApi] = useState<ResponseApiPreferences | undefined>()
+  const [responseApiBusy, setResponseApiBusy] = useState(false)
+  const [responseApiError, setResponseApiError] = useState<string | undefined>()
 
   const refresh = useCallback(async () => {
     try {
@@ -242,6 +247,12 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
     void jsonRequest<ImageToolPreferences>(IMAGE_TOOLS_PATH).then(
       value => { setImageTools(value); setImageToolsError(undefined) },
       () => { setImageToolsError(t('imageToolSettingsFailed')) },
+    )
+  }, [t])
+  useEffect(() => {
+    void jsonRequest<ResponseApiPreferences>(RESPONSE_API_PATH).then(
+      value => { setResponseApi(value); setResponseApiError(undefined) },
+      () => { setResponseApiError(t('responseApiSettingsFailed')) },
     )
   }, [t])
   useEffect(() => {
@@ -297,6 +308,18 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
     }
   }
 
+  const updateResponseApi = async (patch: Partial<ResponseApiPreferences>): Promise<void> => {
+    setResponseApiBusy(true)
+    setResponseApiError(undefined)
+    try {
+      setResponseApi(await jsonRequest<ResponseApiPreferences>(RESPONSE_API_PATH, 'POST', patch))
+    } catch {
+      setResponseApiError(t('responseApiSettingsFailed'))
+    } finally {
+      setResponseApiBusy(false)
+    }
+  }
+
   const label = status.status === 'signed-in'
     ? t('signedIn')
     : status.status === 'loading'
@@ -341,14 +364,14 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
         </div>
         <div style={toggleRowStyle}>
           <span style={toggleCopyStyle}>
-            <span style={statusStyle}>{t('shareViewImage')}</span>
-            <span style={bodyStyle}>{t('shareViewImageHint')}</span>
+            <span style={statusStyle}>{t('modifyReadImage')}</span>
+            <span style={bodyStyle}>{t('modifyReadImageHint')}</span>
           </span>
           <PreferenceToggle
-            label={t('shareViewImage')}
+            label={t('modifyReadImage')}
             disabled={imageTools === undefined || imageToolsBusy}
-            checked={imageTools?.shareViewImageWithOtherModels ?? false}
-            onChange={checked => { void updateImageTool({ shareViewImageWithOtherModels: checked }) }}
+            checked={imageTools?.modifyReadImage ?? false}
+            onChange={checked => { void updateImageTool({ modifyReadImage: checked }) }}
           />
         </div>
         <div style={toggleRowStyle}>
@@ -364,6 +387,37 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
           />
         </div>
         {imageToolsError === undefined ? null : <p style={errorStyle}>{imageToolsError}</p>}
+      </div>
+      <div style={cardStyle}>
+        <div>
+          <h3 style={quotaTitleStyle}>{t('responseApi')}</h3>
+          <p style={{ ...bodyStyle, marginTop: 5 }}>{t('responseApiIntro')}</p>
+        </div>
+        <div style={toggleRowStyle}>
+          <span style={toggleCopyStyle}>
+            <span style={statusStyle}>{t('webSocketContextReuse')}</span>
+            <span style={bodyStyle}>{t('webSocketContextReuseHint')}</span>
+          </span>
+          <PreferenceToggle
+            label={t('webSocketContextReuse')}
+            disabled={responseApi === undefined || responseApiBusy}
+            checked={responseApi?.useWebSocketContextReuse ?? false}
+            onChange={checked => { void updateResponseApi({ useWebSocketContextReuse: checked }) }}
+          />
+        </div>
+        <div style={toggleRowStyle}>
+          <span style={toggleCopyStyle}>
+            <span style={statusStyle}>{t('nativeCompaction')}</span>
+            <span style={bodyStyle}>{t('nativeCompactionHint')}</span>
+          </span>
+          <PreferenceToggle
+            label={t('nativeCompaction')}
+            disabled={responseApi === undefined || responseApiBusy}
+            checked={responseApi?.useNativeCompaction ?? false}
+            onChange={checked => { void updateResponseApi({ useNativeCompaction: checked }) }}
+          />
+        </div>
+        {responseApiError === undefined ? null : <p style={errorStyle}>{responseApiError}</p>}
       </div>
     </section>
   )

@@ -6,7 +6,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { loginOpenAICodex, logoutOpenAICodex, openAICodexAuthStatus } from './auth.ts'
 import type { OpenAICodexCredentialStore } from './store.ts'
-import type { ImageToolPolicy, ImageToolPreferences } from './tool-policy.ts'
+import type { ImageToolPolicy, ImageToolPreferences, ResponseApiPreferences } from './tool-policy.ts'
 import { readOpenAICodexRateLimits } from './usage.ts'
 import type { OpenAICodexUsage } from './usage.ts'
 
@@ -18,6 +18,8 @@ export const OPENAI_CODEX_AUTH_LOGIN_PATH = '/plugins/dsh-openai-codex/auth/logi
 export const OPENAI_CODEX_AUTH_LOGOUT_PATH = '/plugins/dsh-openai-codex/auth/logout'
 /** Plugin-owned image-tool preference endpoint consumed by its browser half. */
 export const OPENAI_CODEX_IMAGE_TOOL_SETTINGS_PATH = '/plugins/dsh-openai-codex/image-tools'
+/** Plugin-owned Responses API experiment endpoint consumed by its browser half. */
+export const OPENAI_CODEX_RESPONSE_API_SETTINGS_PATH = '/plugins/dsh-openai-codex/response-api'
 
 export type OpenAICodexWebAuthStatus =
   | { status: 'signed-out' }
@@ -188,10 +190,24 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
 }
 
 function preferencePatch(value: Record<string, unknown>): Partial<ImageToolPreferences> {
-  const allowed = new Set(['shareViewImageWithOtherModels', 'shareImagegenWithOtherModels'])
+  const allowed = new Set(['modifyReadImage', 'shareImagegenWithOtherModels'])
   if (Object.keys(value).some(key => !allowed.has(key))) throw new Error('request contains an unknown image-tool setting')
   const patch: Partial<ImageToolPreferences> = {}
   for (const key of allowed as Set<keyof ImageToolPreferences>) {
+    if (value[key] === undefined) continue
+    if (typeof value[key] !== 'boolean') throw new Error(`${key} must be a boolean`)
+    patch[key] = value[key]
+  }
+  return patch
+}
+
+function responseApiPatch(value: Record<string, unknown>): Partial<ResponseApiPreferences> {
+  const allowed = new Set<keyof ResponseApiPreferences>(['useWebSocketContextReuse', 'useNativeCompaction'])
+  if (Object.keys(value).some(key => !allowed.has(key as keyof ResponseApiPreferences))) {
+    throw new Error('request contains an unknown Responses API setting')
+  }
+  const patch: Partial<ResponseApiPreferences> = {}
+  for (const key of allowed) {
     if (value[key] === undefined) continue
     if (typeof value[key] !== 'boolean') throw new Error(`${key} must be a boolean`)
     patch[key] = value[key]
@@ -249,6 +265,20 @@ export function registerOpenAICodexAuthRoutes(
           if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
           try {
             json(res, 200, await imageTools.update(preferencePatch(await readJson(req))))
+          } catch (error: unknown) {
+            json(res, 400, { error: safeMessage(error) })
+          }
+        },
+      }),
+      ctx.webServer.register({
+        kind: 'exact',
+        path: OPENAI_CODEX_RESPONSE_API_SETTINGS_PATH,
+        handler: async (req, res) => {
+          if (!trustedRequest(req)) return json(res, 403, { error: 'forbidden' })
+          if (req.method === 'GET') return json(res, 200, imageTools.responseApiSnapshot())
+          if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
+          try {
+            json(res, 200, await imageTools.updateResponseApi(responseApiPatch(await readJson(req))))
           } catch (error: unknown) {
             json(res, 400, { error: safeMessage(error) })
           }

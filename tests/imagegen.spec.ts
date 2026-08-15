@@ -124,6 +124,15 @@ describe('imagegen', () => {
     expect(result.isError).toBe(false)
     expect(result.content.some(block => block.type === 'image')).toBe(true)
     expect(result.content.find(block => block.type === 'text')?.text).toContain('<output_path operation="create">')
+    const view = ctx.tools.get(OpenAICodex.IMAGEGEN_TOOL_NAME)?.presentResult?.(
+      { prompt: 'A tiny red pixel', output_path: 'art/pixel.png' },
+      result,
+    )
+    expect(view).toMatchObject({
+      card: 'generic',
+      title: 'Generated image art/pixel.png',
+      content: result.content,
+    })
     expect(await readFile(join(workspace, 'art', 'pixel.png'))).toEqual(PNG_1X1)
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe(OpenAICodex.OPENAI_CODEX_IMAGE_GENERATIONS_URL)

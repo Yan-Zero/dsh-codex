@@ -10,7 +10,7 @@ Use a ChatGPT subscription in [DeepSeek Harness](https://github.com/deepseek-ai/
 - the Codex GPT catalog, including vision-capable models when the account offers them
 - streaming, tool calls, reasoning replay, prompt caching, and dsh compaction through the normal LLM service
 - Codex standalone web search through dsh's existing `web_search` tool
-- a `view_image` tool that can load a local path or an HTTP(S) image URL
+- optional HTTP(S) URL input added to Harness's existing `read_image` tool
 - an `imagegen` tool backed by `gpt-image-2`, with workspace or conversation reference images and automatic workspace output
 - browser image input through dsh's existing paste and drop controls
 
@@ -38,6 +38,14 @@ dsh plugin --profile web exec dsh-openai-codex status
 dsh plugin --profile web exec dsh-openai-codex logout
 ```
 
+For `dsh-tui`, install the bundle into the same profile:
+
+```sh
+dsh plugin --profile dsh-tui add dsh-codex
+```
+
+After restarting the TUI, `/model` lists the `openai-codex` catalog. With no explicit route or saved selection, the TUI adopts the bundle's `gpt-5.6-sol` default. Use `/codex status|login|logout|usage|config` for the account and live settings; the four boolean settings can be changed with `/codex set <read-image|imagegen-other-models|websocket-context|native-compaction> <on|off>`. Browser login shares the same dsh credential file used by the Web profile.
+
 Codex, Claude Code, and other automation agents should follow [INSTALL.md](INSTALL.md). It is a complete, idempotent runbook and does not require reading this repository's source or design notes.
 
 The bundle selects `openai-codex` / `gpt-5.6-sol` for new agents and selects the Codex search provider. A model already saved in dsh settings still takes precedence; the model picker can select any other Codex model visible to the signed-in account.
@@ -47,15 +55,16 @@ The bundle selects `openai-codex` / `gpt-5.6-sol` for new agents and selects the
 Image support uses dsh's durable attachment path:
 
 - paste an image into the Web composer with <kbd>Ctrl</kbd>+<kbd>V</kbd>, or drag and drop it;
-- ask the model to call `view_image` with `source` set to a local absolute/relative path or an HTTP(S) URL;
+- on Windows, paste a clipboard image with <kbd>Ctrl</kbd>+<kbd>V</kbd> in the adapted dsh-tui, or enter `@relative/image.png`; clipboard images go straight to the attachment store, while path images use the active workspace filesystem;
+- ask the model to call `read_image` with either `file_path` for a workspace image or `url` for an HTTP(S) image;
 - PNG, JPEG, WebP, and GIF are accepted within the active dsh attachment limits;
 - only a model that explicitly advertises image input may receive an image.
 
 `imagegen` is available to any vision-capable conversation model. The current model writes an ordinary prompt and may select either `referenced_image_paths` or `num_last_images_to_include`; the plugin reads the bytes from `ctx.fs` or the attachment store and sends them to `gpt-image-2`. The model never emits base64. Every result is shown inline, saved as a durable attachment, and written to the active workspace. `output_path` chooses the destination; omitting it creates a unique `generated-<timestamp>-<id>.png` file. Local saving is included in this plugin, while `dsh-remote-ssh` supplies the remote AHP write path when that plugin owns the workspace.
 
-The Settings page has separate **View Image for other models** and **Image generation for other models** toggles. Both default on. Turning one off keeps that tool available to `openai-codex` vision models and rejects calls from other model providers at execution time.
+The Settings page has separate **Enhance read_image** and **Image generation for other models** toggles. Both default on. Turning off the first removes the plugin's agent-scoped override and restores Harness's original local-only `read_image` schema. Turning off the second keeps `imagegen` available to Codex vision models and rejects calls from other model providers at execution time.
 
-The tool stores validated bytes as a dsh attachment before returning the actual image block. Local paths pass through the configured filesystem service. Remote redirects are bounded and credentials embedded in URLs are rejected.
+`read_image` stores validated bytes as a dsh attachment before returning the actual image block. Local paths are delegated unchanged to Harness, including its configured filesystem and sandbox behavior. The URL extension bounds redirects and bytes and rejects credentials embedded in URLs.
 
 ## Search
 
@@ -78,6 +87,15 @@ Configure the `llm-openai-codex` row in a profile patch:
 | `searchMaxOutputTokens` | `10000` | positive integer |
 
 Each resolved, secret-free auxiliary request is recorded before dispatch as the dedicated `web/openai-codex-search-llm-request` session event. The event is owned and registered by this plugin; no generic search event or dsh fork is required.
+
+## Responses API experiments
+
+The Settings page provides two Codex-only switches. Both are off by default:
+
+- **WebSocket context reuse** keeps `store: false` and selects pi-ai's Codex WebSocket continuation transport. While the same session keeps a reusable connection and the next request is an exact extension, it sends `previous_response_id` with only the new input. History edits, compaction, Fork, connection loss, and process restarts fall back to a full request. With the switch off, ordinary turns use SSE and always send the full Harness context.
+- **Native Responses compaction** sends dsh summarization calls to `codex/responses/compact`. Its encrypted compaction item is retained inside the Harness checkpoint and restored as native Responses input on later Codex requests. Existing checkpoints remain readable after the switch is disabled. Compact endpoint errors are reported directly; turn the switch off to return to the existing dsh model summary.
+
+The switches are independent. Every ordinary Codex request keeps `store: false`; the default uses SSE with the text-summary path from `dsh-compaction-basic`.
 
 ## Credentials and privacy
 

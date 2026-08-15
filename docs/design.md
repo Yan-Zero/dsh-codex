@@ -6,7 +6,7 @@ English | [中文](design.zh.md)
 
 ## Scope
 
-`dsh-codex` is a standard DeepSeek Harness bundle. It adds ChatGPT OAuth, the Codex model catalog, a Codex standalone-search provider, browser account settings, `view_image`, and `imagegen` without modifying dsh source code. The active dsh profile continues to own the agent loop, attachments, filesystem policy, tools, permissions, compaction, and Web composer.
+`dsh-codex` is a standard DeepSeek Harness bundle. It adds ChatGPT OAuth, the Codex model catalog, a Codex standalone-search provider, browser account settings, an optional `read_image` URL extension, and `imagegen` without modifying dsh source code. The active dsh profile continues to own the agent loop, attachments, filesystem policy, tools, permissions, compaction, and Web composer.
 
 ## Authentication
 
@@ -18,7 +18,11 @@ Credentials are stored as a versioned JSON document at `$DSH_HOME/.openai-codex-
 
 The bundle constructs the public `PiAiAdapter` with the installed `openai-codex` provider and model catalog. Its credential resolver refreshes OAuth state and supplies the resulting bearer token as an explicit request credential. It does not discover ambient API keys or require a private dsh adapter helper.
 
-Normal turns and `dsh-compaction-basic` therefore use the standard LLM service. Message conversion, streaming, tool calls, image attachment resolution, usage, overflow classification, encrypted reasoning replay, and cancellation remain adapter behavior. Codex requests are stateless (`store: false`), so replay data and complete tool-call/result pairs are kept in the Harness session rather than relying on server-stored response ids.
+Normal turns and `dsh-compaction-basic` therefore use the standard LLM service. Message conversion, streaming, tool calls, image attachment resolution, usage, overflow classification, encrypted reasoning replay, and cancellation remain adapter behavior. Codex requests always use `store: false`, so replay data and complete tool-call/result pairs stay in the Harness session rather than relying on server-persisted response ids.
+
+With WebSocket context reuse disabled, the plugin explicitly selects SSE and each ordinary turn sends the complete Harness context. Enabling it selects pi-ai's `websocket-cached` transport, which mirrors the official Codex client: continuation state belongs to one session's reusable connection, and `previous_response_id` plus an input delta is sent only when non-input request properties match and the new input exactly extends the previous request and response. A mismatch, connection fallback, process restart, Fork session id, or compaction call uses a full request. The plugin stores no response continuation of its own.
+
+Native compaction intercepts calls with `GenerateOptions.purpose === 'compaction'`, removes the private summarizer instruction appended by `dsh-compaction-basic`, and calls `codex/responses/compact`. Returned items are wrapped in a plugin marker so the existing compaction transaction still owns range validation, events, and surface replacement. When an ordinary Codex payload is built, the adapter replaces that marker with the native user/compaction items. Expansion is independent of the current toggle, so checkpoints survive restarts and remain usable after the experiment is disabled.
 
 The ChatGPT Codex route does not apply the ordinary Responses output-token limit. Compaction still uses the catalog context capacity and standard checkpoint replacement, but the configured summary token cap cannot be enforced server-side on this route.
 
@@ -26,13 +30,15 @@ The ChatGPT Codex route does not apply the ordinary Responses output-token limit
 
 Codex models inherit their declared input modalities from the provider catalog. The existing dsh Web composer already converts pasted or dropped images into durable attachments, so the browser plugin only adds account settings and does not replace the composer.
 
-The plugin-owned `view_image` tool accepts a local path or an HTTP(S) URL. Local reads go through the configured filesystem service. Remote downloads reject embedded URL credentials, limit redirects and bytes, and honor cancellation. PNG, JPEG, WebP, and GIF bytes are detected by signature and saved through the attachment service before the tool returns an actual image content block. The tool refuses to run unless the selected model explicitly declares image input.
+When enabled, the plugin installs an agent-scoped definition that shadows Harness's existing `read_image`. Its schema keeps `file_path` and adds a mutually exclusive `url` input. Local calls delegate to the original definition, preserving its filesystem provider, sandbox policy, observation events, validation, and remote-workspace behavior. URL calls reject embedded credentials, limit redirects and bytes, honor cancellation, detect PNG/JPEG/WebP/GIF signatures, and save through the attachment service before returning an image block. The exact routed model must declare image input.
+
+Earlier `view_image` results remain readable after the standalone tool is removed. Harness replays the durable `tool/result` message and attachment reference directly; it does not require the current tool registry to contain the historical name. A model that attempts a new `view_image` call receives the ordinary unknown-tool result and can retry with `read_image`.
 
 `imagegen` always executes against the fixed ChatGPT Codex `gpt-image-2` endpoint, independently of the current conversation model. The caller must still declare image input because the tool result contains an image block used by the next model turn. A generation has no references; an edit accepts up to five workspace paths or the most recent one to five conversation image attachments. These two selectors are mutually exclusive. Path reads use `ctx.fs`; conversation references use the attachment store. Base64 data URLs exist only in the private provider request.
 
 Every generated PNG is saved as an attachment and published into the active workspace. `output_path` selects the destination; without it, the plugin creates a collision-resistant `generated-<timestamp>-<id>.png` name. A keyed `imagegen` tool view resolves the durable attachment through the owning session and displays it inline with an original-size preview. Released dsh versions do not expose a binary write primitive, so the plugin includes an atomic local-file compatibility writer that enforces the active sandbox policy before touching a `file:` target. Non-file execution worlds must expose `writeBytes`; `dsh-remote-ssh` does so and encodes bytes as base64 only inside AHP transport. There is no host-path fallback for a remote target. If policy or filesystem capability rejects the workspace write, the attachment remains available and the result reports the write failure.
 
-Live settings persist two independent cross-provider switches. Codex vision models always retain access; the switches decide whether another provider's vision model may execute `view_image` or `imagegen`. Both defaults are enabled. Execution-time enforcement backs the browser controls.
+Live settings persist two independent switches. `modifyReadImage` adds or removes the scoped `read_image` definition for every live agent; disabling it immediately restores the original Harness definition and schema. `shareImagegenWithOtherModels` controls whether another provider's vision model may execute `imagegen`; Codex vision models retain access. Both default to enabled.
 
 ## Search and session history
 

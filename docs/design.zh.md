@@ -6,7 +6,7 @@ Status: implemented
 
 ## 范围
 
-`dsh-codex` 是标准 DeepSeek Harness bundle。它在不修改 dsh 源码的前提下提供 ChatGPT OAuth、Codex 模型目录、Codex 独立搜索提供方、浏览器账号设置、`view_image` 与 `imagegen`。当前 dsh profile 继续负责 agent loop、附件、文件系统策略、工具、权限、压缩与 Web 输入框。
+`dsh-codex` 是标准 DeepSeek Harness bundle。它在不修改 dsh 源码的前提下提供 ChatGPT OAuth、Codex 模型目录、Codex 独立搜索提供方、浏览器账号设置、可选的 `read_image` URL 扩展与 `imagegen`。当前 dsh profile 继续负责 agent loop、附件、文件系统策略、工具、权限、压缩与 Web 输入框。
 
 ## 认证
 
@@ -18,7 +18,11 @@ Status: implemented
 
 bundle 使用公开的 `PiAiAdapter` 以及随附的 `openai-codex` provider 和模型目录。凭据解析器会刷新 OAuth 状态，并把所得 bearer token 作为显式的单次请求凭据传入。它不会发现环境中的 API Key，也不依赖 dsh 的私有适配器辅助函数。
 
-因此，普通轮次与 `dsh-compaction-basic` 都经过标准 LLM 服务。消息转换、流式输出、工具调用、图片附件解析、用量、溢出分类、加密推理回放和取消仍由适配器负责。Codex 请求采用无状态模式（`store: false`），所以回放数据及完整的工具调用／结果配对保存在 Harness session 中，不依赖服务端 response id。
+因此，普通轮次与 `dsh-compaction-basic` 都经过标准 LLM 服务。消息转换、流式输出、工具调用、图片附件解析、用量、溢出分类、加密推理回放和取消仍由适配器负责。Codex 请求始终使用 `store: false`，所以回放数据及完整的工具调用／结果配对保存在 Harness session 中，不依赖服务端持久化的 response id。
+
+关闭 WebSocket 上下文复用时，插件明确选择 SSE，每个普通轮次都会发送 Harness 完整上下文。开启后选择 pi-ai 的 `websocket-cached` 传输，其行为与官方 Codex 客户端一致：续接状态属于单个会话可复用的连接；只有非输入请求属性一致，且新输入严格延续上一份请求和响应时，才发送 `previous_response_id` 与输入增量。历史失配、连接回退、进程重启、Fork 后的新会话 id 或压缩调用都会发送完整请求。插件不再保存自己的 response continuation。
+
+原生压缩模式在 `GenerateOptions.purpose === 'compaction'` 时调用 `codex/responses/compact`，去掉 `dsh-compaction-basic` 追加的私有摘要指令。返回 item 以插件标记封装成文本，让现有 compaction 事务继续负责范围校验、事件和表层替换。普通 Codex 请求构建完成后，adapter 会把该标记替换回原生 user/compaction items；这项还原不依赖开关当前是否开启，因此检查点可以跨重启并在关闭实验后继续使用。
 
 ChatGPT Codex 路由不会执行普通 Responses 的输出 token 上限。压缩仍使用模型目录中的上下文容量与标准检查点替换，但配置的摘要 token 上限无法在此路由由服务端强制执行。
 
@@ -26,13 +30,15 @@ ChatGPT Codex 路由不会执行普通 Responses 的输出 token 上限。压缩
 
 Codex 模型从 provider 目录继承其声明的输入模态。现有 dsh Web 输入框已经会把粘贴或拖放的图片转换为持久附件，因此浏览器插件只增加账号设置，不替换输入框。
 
-插件提供的 `view_image` 工具接受本地路径或 HTTP(S) URL。本地读取经过已配置的文件系统服务；远程下载拒绝 URL 内嵌凭据，限制重定向次数和字节数，并响应取消。PNG、JPEG、WebP 与 GIF 通过文件签名识别；工具先经附件服务保存图片，再返回真正的图片内容块。所选模型未明确声明图片输入时，工具会拒绝执行。
+开关启用时，插件会在 agent scope 注册一个定义，覆盖 Harness 现有的 `read_image`。它保留 `file_path`，并在 Schema 中增加与之互斥的 `url` 输入。本地调用委托给原定义，继续沿用其文件系统提供方、沙箱策略、观察事件、校验和远程工作区行为。URL 调用拒绝内嵌凭据，限制重定向次数与下载字节数，响应取消，通过签名识别 PNG、JPEG、WebP 与 GIF，并先经附件服务保存再返回图片块。实际路由的模型必须声明图片输入能力。
+
+移除独立工具后，早期会话中的 `view_image` 结果仍可读取。Harness 会直接重放持久化的 `tool/result` 消息和附件引用，不要求当前工具注册表仍包含历史名称。模型若再次发起新的 `view_image` 调用，会收到普通的未知工具结果，并可改用 `read_image` 重试。
 
 `imagegen` 始终调用固定的 ChatGPT Codex `gpt-image-2` 端点，与当前对话模型相互独立。调用方仍须声明图片输入能力，因为工具结果包含供下一轮模型使用的图片块。纯生成不带参考图；编辑可以接收最多五个工作区路径，或最近一至五张会话图片附件。这两种选择器互斥。路径读取使用 `ctx.fs`，会话参考图使用附件存储。base64 data URL 只存在于私有的提供方请求中。
 
 每张生成的 PNG 都会保存为附件并写入当前工作区。`output_path` 用来指定位置；省略时，插件会创建防冲突的 `generated-<时间戳>-<id>.png` 文件名。插件为 `imagegen` 注册了专用工具视图，通过所属会话读取持久附件，在对话中直接显示缩略图并支持查看原图。已发布的 dsh 版本尚未公开二进制写入原语，因此插件包含本地原子写入兼容层；它只处理 `file:` 目标，并在写入前执行当前沙箱策略。非文件执行世界必须提供 `writeBytes`；`dsh-remote-ssh` 已实现该方法，并且只在 AHP 传输内部把字节编码为 base64。远程目标绝不回退到宿主路径。如果沙箱策略或文件系统能力拒绝写入，附件仍然可用，工具结果会报告保存失败。
 
-实时设置会持久化两个相互独立的跨提供方开关。Codex 视觉模型始终保留访问权；两个开关分别决定其他提供方的视觉模型能否执行 `view_image` 或 `imagegen`，默认均为开启。浏览器控件背后有执行时校验。
+实时设置会持久化两个独立开关。`modifyReadImage` 为每个实时 agent 添加或撤销 scoped `read_image` 定义；关闭后立即恢复 Harness 原始定义及其 Schema。`shareImagegenWithOtherModels` 决定其他提供方的视觉模型能否执行 `imagegen`，Codex 视觉模型始终保留访问权。两项默认均为开启。
 
 ## 搜索与会话历史
 

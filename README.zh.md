@@ -10,7 +10,7 @@
 - Codex GPT 模型目录；账号提供视觉模型时自动声明其图片输入能力
 - 经标准 LLM 服务运行的流式响应、工具调用、推理回放、提示词缓存与 dsh 压缩
 - 通过 dsh 现有 `web_search` 工具使用 Codex 独立联网搜索
-- 可读取本地路径或 HTTP(S) 图片 URL 的 `view_image` 工具
+- 为 Harness 现有 `read_image` 工具增加可选的 HTTP(S) URL 输入
 - 由 `gpt-image-2` 执行的 `imagegen` 工具，支持工作区／会话参考图和自动工作区输出
 - 复用 dsh Web 输入框的粘贴和拖放图片能力
 
@@ -38,6 +38,14 @@ dsh plugin --profile web exec dsh-openai-codex status
 dsh plugin --profile web exec dsh-openai-codex logout
 ```
 
+在 `dsh-tui` 中使用时，把 bundle 安装到同一个 profile：
+
+```sh
+dsh plugin --profile dsh-tui add dsh-codex
+```
+
+重新启动 TUI 后，`/model` 会列出 `openai-codex` 的模型；没有显式模型配置或已保存选择时，TUI 会采用 bundle 注册的 `gpt-5.6-sol`。`/codex status|login|logout|usage|config` 用于管理账号与查看配置，四个布尔开关可通过 `/codex set <read-image|imagegen-other-models|websocket-context|native-compaction> <on|off>` 修改。浏览器登录完成后，凭据与 Web profile 共用同一份 dsh 凭据文件。
+
 Codex、Claude Code 及其他自动化 agent 应直接遵循 [INSTALL.md](INSTALL.md)。它是一份完整且可重复执行的 runbook，不要求安装者阅读源码或设计文档。
 
 bundle 会为新建 agent 选择 `openai-codex` / `gpt-5.6-sol`，并选择 Codex 搜索提供方。dsh settings 中已经保存的模型仍然优先；模型选择器可以切换到当前账号可用的其他 Codex 模型。
@@ -47,15 +55,16 @@ bundle 会为新建 agent 选择 `openai-codex` / `gpt-5.6-sol`，并选择 Code
 图片功能使用 dsh 的持久附件路径：
 
 - 在 Web 输入框中按 <kbd>Ctrl</kbd>+<kbd>V</kbd> 粘贴图片，或把图片拖入输入框；
-- 让模型调用 `view_image`，把 `source` 设为本地绝对／相对路径或 HTTP(S) URL；
+- 在 Windows 上的适配版 dsh-tui 按 <kbd>Ctrl</kbd>+<kbd>V</kbd> 粘贴剪贴板图片，或输入 `@相对/图片.png`；剪贴板图片直接进入附件库，路径图片由当前 workspace 的文件系统读取；
+- 让模型调用 `read_image`：工作区图片使用 `file_path`，HTTP(S) 图片使用 `url`；
 - 在当前 dsh 附件限制内支持 PNG、JPEG、WebP 与 GIF；
 - 只有明确声明支持图片输入的模型才能接收图片。
 
 任何支持视觉输入的当前对话模型都可以使用 `imagegen`。当前模型只需编写普通提示词，并在 `referenced_image_paths` 与 `num_last_images_to_include` 中选择一种参考图来源；插件从 `ctx.fs` 或附件存储读取字节，再发送给 `gpt-image-2`。模型不会输出 base64。每个结果都会直接显示在对话中、保存为持久附件，并写入当前工作区。`output_path` 用来指定位置；省略时会创建唯一的 `generated-<时间戳>-<id>.png` 文件。本地保存能力包含在本插件中；当工作区由 `dsh-remote-ssh` 管理时，远程插件负责 AHP 写入路径。
 
-设置页提供独立的 **允许其他模型使用 View Image** 与 **允许其他模型使用生图** 开关，默认均为开启。关闭某一项后，`openai-codex` 视觉模型仍可使用该工具，其他模型提供方的调用会在执行入口被拒绝。
+设置页提供独立的 **增强 read_image** 与 **允许其他模型使用生图** 开关，默认均为开启。关闭第一项会撤销插件的 agent-scope 覆盖，恢复 Harness 原本只接受本地路径的 `read_image` Schema。关闭第二项后，Codex 视觉模型仍可使用 `imagegen`，其他模型提供方的调用会在执行入口被拒绝。
 
-工具在返回实际图片块之前，会先验证图片并把字节持久化为 dsh 附件。本地路径经过已配置的文件系统服务；远程重定向次数受限，URL 中也不允许嵌入凭据。
+`read_image` 在返回实际图片块之前，会先验证图片并把字节持久化为 dsh 附件。本地路径原样委托给 Harness，继续沿用当前文件系统和沙箱行为；URL 扩展会限制重定向次数与下载字节数，也不允许嵌入凭据。
 
 ## 搜索
 
@@ -78,6 +87,15 @@ bundle 会为新建 agent 选择 `openai-codex` / `gpt-5.6-sol`，并选择 Code
 | `searchMaxOutputTokens` | `10000` | 正整数 |
 
 每个已经解析默认值且不含凭据的辅助请求，都会在发送前记录为专用的 `web/openai-codex-search-llm-request` 会话事件。该事件由本插件拥有并注册，不需要通用搜索事件或 dsh fork。
+
+## Responses API 实验功能
+
+设置页提供两个默认关闭、仅作用于 `openai-codex` 的开关：
+
+- **WebSocket 上下文复用**：保持 `store: false`，并选择 pi-ai 的 Codex WebSocket continuation 传输。同一会话继续复用连接，且下一轮与已有上下文严格衔接时，请求会通过 `previous_response_id` 只发送新增输入；历史改写、压缩、Fork、连接中断或进程重启后会自动发送完整上下文。关闭开关时，普通轮次使用 SSE，每次都发送 Harness 完整上下文。
+- **原生 Responses 压缩**：把 dsh 的摘要调用交给 `codex/responses/compact`。返回的加密 compaction item 会保存在 Harness 检查点中，并在后续 Codex 请求发送前还原为原生 Responses item；关闭开关不会破坏已经生成的检查点。端点错误会直接报告；关闭开关即可回到原来的 dsh 模型摘要。
+
+两个开关互相独立。所有普通 Codex 请求都保持 `store: false`；默认配置使用 SSE 和 `dsh-compaction-basic` 的文本摘要路径。
 
 ## 凭据与隐私
 

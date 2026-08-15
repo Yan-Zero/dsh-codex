@@ -34,23 +34,56 @@ describe('ImageToolPolicy', () => {
     policy.attach(ctx)
 
     expect(policy.snapshot()).toEqual({
-      shareViewImageWithOtherModels: true,
+      modifyReadImage: true,
       shareImagegenWithOtherModels: true,
+    })
+    expect(policy.responseApiSnapshot()).toEqual({
+      useWebSocketContextReuse: false,
+      useNativeCompaction: false,
     })
 
     await policy.update({ shareImagegenWithOtherModels: false })
+    await policy.updateResponseApi({ useNativeCompaction: true })
 
     expect(policy.snapshot()).toEqual({
-      shareViewImageWithOtherModels: true,
+      modifyReadImage: true,
       shareImagegenWithOtherModels: false,
+    })
+    expect(policy.responseApiSnapshot()).toEqual({
+      useWebSocketContextReuse: false,
+      useNativeCompaction: true,
     })
   })
 
-  it('keeps Codex access while applying each toggle to another provider', () => {
+  it('notifies the read_image enhancer when its live setting changes', async () => {
+    const ctx = new Context()
+    context = ctx
+    await ctx.plugin(MemorySettings)
     const policy = new ImageToolPolicy({
-      shareViewImageWithOtherModels: false,
+      modifyReadImage: true,
       shareImagegenWithOtherModels: false,
     })
+    policy.attach(ctx)
+    let changes = 0
+    policy.watchImagePreferences(() => { changes++ })
+
+    await policy.update({ modifyReadImage: false })
+
+    expect(policy.snapshot().modifyReadImage).toBe(false)
+    expect(changes).toBe(1)
+  })
+
+  it('migrates the retired store:true preference to WebSocket context reuse', () => {
+    const policy = new ImageToolPolicy({ useStatefulResponses: true })
+
+    expect(policy.responseApiSnapshot()).toEqual({
+      useWebSocketContextReuse: true,
+      useNativeCompaction: false,
+    })
+  })
+
+  it('keeps Codex imagegen access while applying its toggle to another provider', () => {
+    const policy = new ImageToolPolicy({ shareImagegenWithOtherModels: false })
     const execution = (provider: string) => ({
       agent: {
         options: {},
@@ -58,9 +91,7 @@ describe('ImageToolPolicy', () => {
       },
     }) as never
 
-    expect(() => policy.assertAllowed(execution('openai-codex'), 'view_image')).not.toThrow()
     expect(() => policy.assertAllowed(execution('openai-codex'), 'imagegen')).not.toThrow()
-    expect(() => policy.assertAllowed(execution('another-provider'), 'view_image')).toThrow('disabled for models outside')
     expect(() => policy.assertAllowed(execution('another-provider'), 'imagegen')).toThrow('disabled for models outside')
   })
 })

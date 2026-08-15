@@ -17,7 +17,7 @@ import { OPENAI_CODEX_PROVIDER } from './store.ts'
 import { OPENAI_CODEX_BASE_URL } from './search.ts'
 import { writeWorkspaceBytes } from './binary-fs.ts'
 import { assertImageCapable } from './image-capability.ts'
-import { imageMediaType } from './view-image.ts'
+import { imageMediaType } from './read-image-enhancement.ts'
 import type { ImageToolPolicy } from './tool-policy.ts'
 
 /** Stable Codex-compatible tool name. */
@@ -389,6 +389,11 @@ export function imagegenTool(
       title: args.output_path === undefined ? 'Generate image' : `Generate image ${args.output_path}`,
       kind: args.output_path === undefined ? 'execute' : 'edit',
       ...args.output_path === undefined ? {} : { locations: [{ path: args.output_path }] },
+    }),
+    presentResult: (args, result) => ({
+      card: 'generic',
+      title: args.output_path === undefined ? 'Generated image' : `Generated image ${args.output_path}`,
+      content: result.content,
     }),
   })
 }

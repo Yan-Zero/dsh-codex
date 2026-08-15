@@ -34,15 +34,15 @@ function accessToken(accountId: string): string {
   })}.signature`
 }
 
-function responseEvents(): string {
+function responseEvents(id = 'resp_compaction', text = 'summary'): string {
   const events = [
-    { type: 'response.created', response: { id: 'resp_compaction' } },
+    { type: 'response.created', response: { id } },
     {
       type: 'response.output_item.added',
       output_index: 0,
       item: { type: 'message', id: 'msg_compaction', role: 'assistant', content: [] },
     },
-    { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'summary' },
+    { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: text },
     {
       type: 'response.output_item.done',
       output_index: 0,
@@ -51,13 +51,13 @@ function responseEvents(): string {
         id: 'msg_compaction',
         role: 'assistant',
         status: 'completed',
-        content: [{ type: 'output_text', text: 'summary', annotations: [] }],
+        content: [{ type: 'output_text', text, annotations: [] }],
       },
     },
     {
       type: 'response.done',
       response: {
-        id: 'resp_compaction',
+        id,
         status: 'completed',
         output: [],
         usage: { input_tokens: 20, output_tokens: 2, total_tokens: 22 },
@@ -74,6 +74,13 @@ function requestJson(init: RequestInit): Record<string, unknown> {
   if (!(raw instanceof Uint8Array)) throw new Error('expected a string or byte request body')
   const bytes = headers.get('content-encoding') === 'zstd' ? zstdDecompressSync(raw) : raw
   return JSON.parse(Buffer.from(bytes).toString('utf8')) as Record<string, unknown>
+}
+
+function userMessage(text: string) {
+  return createUserMessage({
+    content: [{ type: 'text', text }],
+    source: { kind: 'user' },
+  })
 }
 
 describe('OpenAI Codex compaction request', () => {
@@ -188,6 +195,97 @@ describe('OpenAI Codex compaction request', () => {
         role: 'user',
         content: [{ type: 'input_text', text: 'Summarize the conversation for compaction.' }],
       },
+    ])
+  })
+
+  it('uses native compact output as a durable checkpoint and restores its response items', async () => {
+    root = await mkdtemp(join(tmpdir(), 'dsh-openai-codex-native-compact-'))
+    vi.stubEnv('DSH_HOME', root)
+    const store = new OpenAICodex.OpenAICodexCredentialStore()
+    await store.modify(OpenAICodex.OPENAI_CODEX_PROVIDER, () => Promise.resolve({
+      type: 'oauth',
+      access: accessToken('account-1'),
+      refresh: 'refresh-token',
+      expires: Date.now() + 3_600_000,
+      accountId: 'account-1',
+    }))
+
+    const nativeOutput = [
+      { role: 'user', content: [{ type: 'input_text', text: 'keep this request' }] },
+      { type: 'compaction', id: 'cmp_item_1', encrypted_content: 'encrypted-checkpoint' },
+    ]
+    const requests: Array<{ url: string; init: RequestInit }> = []
+    vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+      if (init === undefined) throw new Error('expected request init')
+      const request = { url: String(input), init }
+      requests.push(request)
+      if (request.url.endsWith('/responses/compact')) {
+        return Response.json({
+          id: 'resp_compact_1',
+          object: 'response.compaction',
+          output: nativeOutput,
+          usage: { input_tokens: 20, output_tokens: 4, total_tokens: 24 },
+        })
+      }
+      return new Response(responseEvents('resp_after_compact', 'continued'), {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      })
+    })
+
+    const ctx = new Context()
+    context = ctx
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(WebRuntime)
+    await ctx.plugin(OpenAICodex, { useNativeCompaction: true })
+    const compacted = new BlockAssembler()
+    for await (const chunk of ctx.llm.stream({
+      provider: 'openai-codex',
+      model: 'gpt-5.6-sol',
+      purpose: 'compaction',
+      system: 'Preserve durable context.',
+      messages: [
+        userMessage('keep this request'),
+        createUserMessage({
+          content: [{ type: 'text', text: 'private Harness summary instruction' }],
+          source: { kind: 'plugin', plugin: 'compaction-basic' },
+        }),
+      ],
+      sessionId: 'session-native-compact' as never,
+    })) compacted.push(chunk)
+    const marker = compacted.message({
+      kind: 'model',
+      provider: 'openai-codex',
+      model: 'gpt-5.6-sol',
+    }).content
+
+    const continued = new BlockAssembler()
+    for await (const chunk of ctx.llm.stream({
+      provider: 'openai-codex',
+      model: 'gpt-5.6-sol',
+      system: 'Preserve durable context.',
+      messages: [
+        createUserMessage({
+          content: marker,
+          source: { kind: 'plugin', plugin: 'compaction-basic' },
+        }),
+        userMessage('continue'),
+      ],
+      sessionId: 'session-native-compact' as never,
+    })) continued.push(chunk)
+
+    expect(requests.map(request => request.url)).toEqual([
+      'https://chatgpt.com/backend-api/codex/responses/compact',
+      'https://chatgpt.com/backend-api/codex/responses',
+    ])
+    const compactBody = requestJson(requests[0]!.init)
+    expect(compactBody.input).toEqual([
+      { role: 'user', content: [{ type: 'input_text', text: 'keep this request' }] },
+    ])
+    const continuedBody = requestJson(requests[1]!.init)
+    expect(continuedBody.input).toEqual([
+      ...nativeOutput,
+      { role: 'user', content: [{ type: 'input_text', text: 'continue' }] },
     ])
   })
 })

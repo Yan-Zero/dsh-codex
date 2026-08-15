@@ -16,7 +16,7 @@ import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-fs'
 import { createOpenAICodexAdapter } from './adapter.ts'
 import { registerOpenAICodexAuthRoutes } from './auth-routes.ts'
-import { viewImageTool } from './view-image.ts'
+import { installReadImageEnhancement } from './read-image-enhancement.ts'
 import { imagegenTool } from './imagegen.ts'
 import { ImageToolPolicy } from './tool-policy.ts'
 import {
@@ -24,7 +24,7 @@ import {
   recordOpenAICodexSearchRequest,
 } from './search-event.ts'
 
-export { VIEW_IMAGE_TOOL_NAME } from './view-image.ts'
+export { READ_IMAGE_TOOL_NAME } from './read-image-enhancement.ts'
 export {
   IMAGEGEN_TOOL_NAME,
   OPENAI_CODEX_IMAGE_EDITS_URL,
@@ -32,8 +32,12 @@ export {
   OPENAI_CODEX_IMAGE_MODEL,
   OpenAICodexImageClient,
 } from './imagegen.ts'
-export { DEFAULT_IMAGE_TOOL_PREFERENCES, ImageToolPolicy } from './tool-policy.ts'
-export type { ImageToolPreferences } from './tool-policy.ts'
+export {
+  DEFAULT_IMAGE_TOOL_PREFERENCES,
+  DEFAULT_RESPONSE_API_PREFERENCES,
+  ImageToolPolicy,
+} from './tool-policy.ts'
+export type { ImageToolPreferences, ResponseApiPreferences } from './tool-policy.ts'
 export { OPENAI_CODEX_USAGE_URL, parseOpenAICodexUsage, readOpenAICodexRateLimits } from './usage.ts'
 export type {
   OpenAICodexCredits,
@@ -56,6 +60,10 @@ import {
 } from './search.ts'
 import type { OpenAICodexSearchContextSize, OpenAICodexSearchMode } from './search.ts'
 import { OpenAICodexCredentialStore, OPENAI_CODEX_PROVIDER } from './store.ts'
+import { OpenAICodexService } from './service.ts'
+
+export { OpenAICodexService } from './service.ts'
+export type { OpenAICodexServiceOptions } from './service.ts'
 
 export { loginOpenAICodex, logoutOpenAICodex, openAICodexAuthStatus } from './auth.ts'
 export type { OpenAICodexAuthStatus } from './auth.ts'
@@ -99,10 +107,14 @@ export interface Config {
   searchContextSize?: OpenAICodexSearchContextSize
   /** Maximum generated tokens returned by the standalone search endpoint. */
   searchMaxOutputTokens?: number
-  /** Allow non-Codex vision models to call view_image. */
-  shareViewImageWithOtherModels?: boolean
+  /** Extend Harness read_image with HTTP(S) URL input. */
+  modifyReadImage?: boolean
   /** Allow non-Codex vision models to call imagegen. */
   shareImagegenWithOtherModels?: boolean
+  /** Reuse matching Codex context through the session's WebSocket connection. */
+  useWebSocketContextReuse?: boolean
+  /** Use the Codex Responses compact endpoint for Harness compaction calls. */
+  useNativeCompaction?: boolean
 }
 
 export const Config: z<Config> = z.object({
@@ -110,8 +122,10 @@ export const Config: z<Config> = z.object({
   searchMode: z.union(['cached', 'indexed', 'live'] as const).default(DEFAULT_OPENAI_CODEX_SEARCH_MODE),
   searchContextSize: z.union(['low', 'medium', 'high'] as const).default(DEFAULT_OPENAI_CODEX_SEARCH_CONTEXT_SIZE),
   searchMaxOutputTokens: z.number().step(1).min(1).default(DEFAULT_OPENAI_CODEX_SEARCH_MAX_OUTPUT_TOKENS),
-  shareViewImageWithOtherModels: z.boolean().default(true),
+  modifyReadImage: z.boolean().default(true),
   shareImagegenWithOtherModels: z.boolean().default(true),
+  useWebSocketContextReuse: z.boolean().default(false),
+  useNativeCompaction: z.boolean().default(false),
 })
 
 /**
@@ -122,15 +136,23 @@ export const Config: z<Config> = z.object({
  */
 export function apply(ctx: Context, config: Config): void {
   installOpenAICodexSearchEvent()
-  const credentials = new OpenAICodexCredentialStore()
-  const imageTools = new ImageToolPolicy({
-    shareViewImageWithOtherModels: config.shareViewImageWithOtherModels ?? true,
+  const service = new OpenAICodexService({
+    modifyReadImage: config.modifyReadImage ?? true,
     shareImagegenWithOtherModels: config.shareImagegenWithOtherModels ?? true,
+    useWebSocketContextReuse: config.useWebSocketContextReuse ?? false,
+    useNativeCompaction: config.useNativeCompaction ?? false,
   })
-  ctx.inject(['settings'], settingsCtx => { imageTools.attach(settingsCtx) })
+  const credentials = service.credentials
+  const imageTools = service.policy
+  ctx.provide('openAICodex', service)
+  ctx.inject(['settings'], settingsCtx => { service.attachSettings(settingsCtx) })
   ctx.llm.registerAdapter(
     [OPENAI_CODEX_PROVIDER],
-    createOpenAICodexAdapter(credentials, () => ctx.get('attachments')),
+    createOpenAICodexAdapter(
+      credentials,
+      () => ctx.get('attachments'),
+      () => imageTools.responseApiSnapshot(),
+    ),
   )
   ctx.web.registerSearchProvider(new OpenAICodexSearchProvider({
     credentials,
@@ -143,7 +165,9 @@ export function apply(ctx: Context, config: Config): void {
   }))
   ctx.inject(['webServer'], webCtx => registerOpenAICodexAuthRoutes(webCtx, credentials, imageTools))
   ctx.inject(['tools', 'fs', 'attachments'], toolCtx => {
-    toolCtx.tools.register(viewImageTool(toolCtx, imageTools))
     toolCtx.tools.register(imagegenTool(toolCtx, credentials, imageTools))
+  })
+  ctx.inject(['tools', 'fs', 'attachments', 'agents'], toolCtx => {
+    installReadImageEnhancement(toolCtx, imageTools)
   })
 }
