@@ -19,8 +19,8 @@ import {
 } from '@earendil-works/pi-ai/api/openai-responses-shared'
 import type { ResponseApiPreferences } from './tool-policy.ts'
 
-/** Native compact endpoint used by the official Codex client. */
-export const OPENAI_CODEX_COMPACT_URL = 'https://chatgpt.com/backend-api/codex/responses/compact'
+/** Responses endpoint used by the official Codex client, including V2 compaction. */
+export const OPENAI_CODEX_RESPONSES_URL = 'https://chatgpt.com/backend-api/codex/responses'
 
 const CODEX_TOOL_CALL_PROVIDERS = new Set(['openai', 'openai-codex', 'opencode'])
 const COMPACTION_MARKER_OPEN = '<dsh-openai-codex-compaction-4f5cf1b7-v1>'
@@ -30,10 +30,12 @@ const NO_SESSION = '<no-session>'
 type JsonRecord = Record<string, unknown>
 
 interface CompactResponse {
-  readonly id: string
+  readonly id?: string
   readonly output: readonly unknown[]
   readonly usage?: JsonRecord
 }
+
+const MAX_NATIVE_COMPACTION_RETRIES = 2
 
 /** Whether an opaque value is a non-array record. */
 function isRecord(value: unknown): value is JsonRecord {
@@ -152,7 +154,7 @@ function markerStream(model: Model<Api>, response: CompactResponse): AssistantMe
     api: 'openai-codex-responses',
     provider: model.provider,
     model: model.id,
-    responseId: response.id,
+    ...response.id === undefined ? {} : { responseId: response.id },
     usage: compactUsage(response.usage),
     stopReason: 'stop',
     timestamp: Date.now(),
@@ -189,16 +191,134 @@ function failedStream(model: Model<Api>, error: unknown, signal?: AbortSignal): 
   return stream
 }
 
-function compactResponse(value: unknown): CompactResponse {
-  if (!isRecord(value) || typeof value['id'] !== 'string' || !Array.isArray(value['output'])) {
-    throw new Error('OpenAI Codex returned a malformed compact response')
+function responseHeaders(headers: Headers): Record<string, string> {
+  const result: Record<string, string> = {}
+  headers.forEach((value, key) => { result[key] = value })
+  return result
+}
+
+function retryDelayMs(response: Response, attempt: number): number {
+  const retryAfterMsHeader = response.headers.get('retry-after-ms')
+  if (retryAfterMsHeader !== null) {
+    const retryAfterMs = Number(retryAfterMsHeader)
+    if (Number.isFinite(retryAfterMs) && retryAfterMs >= 0) return retryAfterMs
   }
-  if (!value['output'].some(item => isRecord(item) && item['type'] === 'compaction')) {
-    throw new Error('OpenAI Codex compact response did not contain a compaction item')
+  const retryAfter = response.headers.get('retry-after')
+  if (retryAfter !== null) {
+    const seconds = Number(retryAfter)
+    if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000
+    const date = Date.parse(retryAfter)
+    if (!Number.isNaN(date)) return Math.max(0, date - Date.now())
   }
-  const usage = value['usage']
-  if (usage !== undefined && !isRecord(usage)) throw new Error('OpenAI Codex returned malformed compact usage')
-  return { id: value['id'], output: value['output'], ...usage === undefined ? {} : { usage } }
+  return Math.min(4_000, 500 * 2 ** attempt)
+}
+
+function retryableStatus(status: number): boolean {
+  return status === 429 || status === 500 || status === 502 || status === 503 || status === 504
+}
+
+async function waitForRetry(delay: number, signal?: AbortSignal): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    if (signal === undefined) {
+      setTimeout(resolve, delay)
+      return
+    }
+    if (signal.aborted) {
+      reject(signal.reason)
+      return
+    }
+    const onAbort = (): void => {
+      clearTimeout(timeout)
+      reject(signal.reason)
+    }
+    const timeout = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, delay)
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+function requestSignal(signal: AbortSignal | undefined, timeoutMs: number | undefined): AbortSignal | undefined {
+  if (timeoutMs === undefined || timeoutMs <= 0) return signal
+  const timeout = AbortSignal.timeout(timeoutMs)
+  return signal === undefined ? timeout : AbortSignal.any([signal, timeout])
+}
+
+/** Parse the V2 compaction item from a normal Responses SSE stream. */
+async function compactResponse(response: Response, retained: readonly unknown[]): Promise<CompactResponse> {
+  if (response.body === null) throw new Error('OpenAI Codex compact response had no body')
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let compaction: unknown
+  let responseId: string | undefined
+  let usage: JsonRecord | undefined
+  let completed = false
+
+  const consumeEvent = (raw: string): void => {
+    const data = raw.split(/\r?\n/)
+      .filter(line => line.startsWith('data:'))
+      .map(line => line.slice(5).trimStart())
+      .join('\n')
+    if (data.length === 0 || data === '[DONE]') return
+    const event: unknown = JSON.parse(data)
+    if (!isRecord(event)) return
+    if (event['type'] === 'response.output_item.done') {
+      const item = event['item']
+      if (isRecord(item) && item['type'] === 'compaction') {
+        if (compaction !== undefined) throw new Error('OpenAI Codex compact response contained multiple compaction items')
+        compaction = item
+      }
+      return
+    }
+    if (event['type'] === 'response.failed' || event['type'] === 'error') {
+      throw new Error(`OpenAI Codex compact stream failed: ${JSON.stringify(event).slice(0, 1000)}`)
+    }
+    if (event['type'] !== 'response.completed' && event['type'] !== 'response.done') return
+    const terminal = event['response']
+    if (!isRecord(terminal)) throw new Error('OpenAI Codex compact stream returned a malformed terminal event')
+    const id = terminal['id']
+    if (id !== undefined && typeof id !== 'string') throw new Error('OpenAI Codex returned a malformed compact response id')
+    responseId = id
+    const rawUsage = terminal['usage']
+    if (rawUsage !== undefined && !isRecord(rawUsage)) throw new Error('OpenAI Codex returned malformed compact usage')
+    usage = rawUsage
+    completed = true
+  }
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      buffer += decoder.decode(value, { stream: !done })
+      let boundary = buffer.search(/\r?\n\r?\n/)
+      while (boundary >= 0) {
+        const match = /\r?\n\r?\n/.exec(buffer)
+        if (match === null) break
+        consumeEvent(buffer.slice(0, match.index))
+        buffer = buffer.slice(match.index + match[0].length)
+        boundary = buffer.search(/\r?\n\r?\n/)
+      }
+      if (done) break
+    }
+    if (buffer.trim().length > 0) consumeEvent(buffer)
+  } finally {
+    reader.releaseLock()
+  }
+  if (!completed) throw new Error('OpenAI Codex compact stream ended before response.completed')
+  if (compaction === undefined) throw new Error('OpenAI Codex compact response did not contain a compaction item')
+  return {
+    ...responseId === undefined ? {} : { id: responseId },
+    output: [...retained, compaction],
+    ...usage === undefined ? {} : { usage },
+  }
+}
+
+/** Match Codex V2's durable-history shape: recent client messages plus the opaque item. */
+function retainedCompactionInput(input: readonly unknown[]): unknown[] {
+  return input.filter(item => isRecord(item) && (
+    item['role'] === 'user' || item['role'] === 'developer' || item['role'] === 'system'
+  ))
 }
 
 /** Mutable request policy shared by the Harness adapter and its pi-ai provider. */
@@ -236,7 +356,7 @@ export class OpenAICodexResponseRuntime {
     const compaction = (this.compactionCalls.get(key) ?? 0) > 0
     const preferences = this.preferences()
     if (compaction && preferences.useNativeCompaction) {
-      return this.nativeCompactionStream(model, context, options)
+      return this.nativeCompactionStream(provider, model, context, options)
     }
     return this.standardStream(provider, model, context, options, !compaction && preferences.useWebSocketContextReuse)
   }
@@ -263,6 +383,7 @@ export class OpenAICodexResponseRuntime {
   }
 
   private nativeCompactionStream(
+    provider: Provider,
     model: Model<Api>,
     context: PiContext,
     options?: SimpleStreamOptions,
@@ -274,8 +395,10 @@ export class OpenAICodexResponseRuntime {
         void (async () => { for await (const event of source) target.push(event) })()
       },
       error => {
-        const failure = failedStream(model, error, options?.signal)
-        void (async () => { for await (const event of failure) target.push(event) })()
+        const source = options?.signal?.aborted === true
+          ? failedStream(model, error, options.signal)
+          : this.standardStream(provider, model, context, options, false)
+        void (async () => { for await (const event of source) target.push(event) })()
       },
     )
     return target
@@ -308,18 +431,27 @@ export class OpenAICodexResponseRuntime {
     const mappedEffort = options?.reasoning === undefined
       ? undefined
       : model.thinkingLevelMap?.[options.reasoning] ?? options.reasoning
-    const body = {
+    const retained = retainedCompactionInput(input)
+    let body: unknown = {
       model: model.id,
-      input,
+      store: false,
+      stream: true,
+      input: [...input, { type: 'compaction_trigger' }],
       instructions: context.systemPrompt ?? '',
       ...tools === undefined ? {} : { tools },
+      tool_choice: 'auto',
       parallel_tool_calls: true,
+      include: ['reasoning.encrypted_content'],
       ...mappedEffort === undefined || mappedEffort === null
         ? {}
         : { reasoning: { effort: mappedEffort, summary: 'auto' } },
       ...options?.sessionId === undefined ? {} : { prompt_cache_key: options.sessionId },
       text: { verbosity: 'low' },
     }
+    if (options?.onPayload !== undefined) {
+      body = await options.onPayload(body, model) ?? body
+    }
+    if (!isRecord(body)) throw new Error('OpenAI Codex generated a non-object compact Responses payload')
     const headers = new Headers(model.headers)
     for (const [key, value] of Object.entries(options?.headers ?? {})) {
       if (value === null) headers.delete(key)
@@ -328,23 +460,41 @@ export class OpenAICodexResponseRuntime {
     headers.set('authorization', `Bearer ${access}`)
     headers.set('chatgpt-account-id', accountIdFromToken(access))
     headers.set('originator', 'dsh-codex')
-    headers.set('accept', 'application/json')
+    headers.set('accept', 'text/event-stream')
     headers.set('content-type', 'application/json')
     headers.set('openai-beta', 'responses=experimental')
     if (options?.sessionId !== undefined) {
       headers.set('session-id', options.sessionId)
+      headers.set('thread-id', options.sessionId)
       headers.set('x-client-request-id', options.sessionId)
     }
-    const response = await fetch(OPENAI_CODEX_COMPACT_URL, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      ...options?.signal === undefined ? {} : { signal: options.signal },
-    })
-    if (!response.ok) {
+    headers.set('x-codex-routing-hint', `model=${model.id}`)
+    const maxRetries = Math.min(MAX_NATIVE_COMPACTION_RETRIES, Math.max(0, options?.maxRetries ?? MAX_NATIVE_COMPACTION_RETRIES))
+    let lastError: unknown
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      let response: Response
+      try {
+        const signal = requestSignal(options?.signal, options?.timeoutMs)
+        response = await fetch(OPENAI_CODEX_RESPONSES_URL, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+          ...signal === undefined ? {} : { signal },
+        })
+      } catch (error: unknown) {
+        if (options?.signal?.aborted === true || attempt === maxRetries) throw error
+        lastError = error
+        await waitForRetry(Math.min(4_000, 500 * 2 ** attempt), options?.signal)
+        continue
+      }
+      await options?.onResponse?.({ status: response.status, headers: responseHeaders(response.headers) }, model)
+      if (response.ok) return await compactResponse(response, retained)
       const detail = (await response.text()).slice(0, 1000)
-      throw new Error(`OpenAI Codex compact request failed with HTTP ${response.status}${detail.length === 0 ? '' : `: ${detail}`}`)
+      const error = new Error(`OpenAI Codex compact request failed with HTTP ${response.status}${detail.length === 0 ? '' : `: ${detail}`}`)
+      if (!retryableStatus(response.status) || attempt === maxRetries) throw error
+      lastError = error
+      await waitForRetry(retryDelayMs(response, attempt), options?.signal)
     }
-    return compactResponse(await response.json())
+    throw lastError
   }
 }

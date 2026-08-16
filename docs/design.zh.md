@@ -22,7 +22,7 @@ bundle 使用公开的 `PiAiAdapter` 以及随附的 `openai-codex` provider 和
 
 关闭 WebSocket 上下文复用时，插件明确选择 SSE，每个普通轮次都会发送 Harness 完整上下文。开启后选择 pi-ai 的 `websocket-cached` 传输，其行为与官方 Codex 客户端一致：续接状态属于单个会话可复用的连接；只有非输入请求属性一致，且新输入严格延续上一份请求和响应时，才发送 `previous_response_id` 与输入增量。历史失配、连接回退、进程重启、Fork 后的新会话 id 或压缩调用都会发送完整请求。插件不再保存自己的 response continuation。
 
-原生压缩模式在 `GenerateOptions.purpose === 'compaction'` 时调用 `codex/responses/compact`，去掉 `dsh-compaction-basic` 追加的私有摘要指令。返回 item 以插件标记封装成文本，让现有 compaction 事务继续负责范围校验、事件和表层替换。普通 Codex 请求构建完成后，adapter 会把该标记替换回原生 user/compaction items；这项还原不依赖开关当前是否开启，因此检查点可以跨重启并在关闭实验后继续使用。
+原生压缩模式在 `GenerateOptions.purpose === 'compaction'` 时去掉 `dsh-compaction-basic` 追加的私有摘要指令，按 Codex V2 流程通过普通 `codex/responses` 流发送请求：在历史末尾追加 `compaction_trigger`，并接收唯一的加密 `compaction` 输出 item。近期客户端消息和该输出会以插件标记封装成文本，让现有 compaction 事务继续负责范围校验、事件和表层替换。普通 Codex 请求构建完成后，adapter 会把该标记替换回原生 items；这项还原不依赖开关当前是否开启，因此检查点可以跨重启并在关闭实验后继续使用。V2 请求失败会在 provider 事件对外发出前切换到普通 SSE 摘要请求，并带上完整的 Harness 压缩提示词。
 
 ChatGPT Codex 路由不会执行普通 Responses 的输出 token 上限。压缩仍使用模型目录中的上下文容量与标准检查点替换，但配置的摘要 token 上限无法在此路由由服务端强制执行。
 

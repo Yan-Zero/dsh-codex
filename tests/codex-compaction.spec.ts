@@ -67,6 +67,26 @@ function responseEvents(id = 'resp_compaction', text = 'summary'): string {
   return `${events.map(event => `data: ${JSON.stringify(event)}`).join('\n\n')}\n\n`
 }
 
+function compactionEvents(encryptedContent = 'encrypted-checkpoint'): string {
+  const events = [
+    {
+      type: 'response.output_item.done',
+      output_index: 0,
+      item: { type: 'compaction', id: 'cmp_item_1', encrypted_content: encryptedContent },
+    },
+    {
+      type: 'response.completed',
+      response: {
+        id: 'resp_native_compaction',
+        status: 'completed',
+        output: [],
+        usage: { input_tokens: 20, output_tokens: 4, total_tokens: 24 },
+      },
+    },
+  ]
+  return `${events.map(event => `data: ${JSON.stringify(event)}`).join('\n\n')}\n\n`
+}
+
 function requestJson(init: RequestInit): Record<string, unknown> {
   const headers = new Headers(init.headers)
   const raw = init.body
@@ -210,7 +230,7 @@ describe('OpenAI Codex compaction request', () => {
       accountId: 'account-1',
     }))
 
-    const nativeOutput = [
+    const restoredOutput = [
       { role: 'user', content: [{ type: 'input_text', text: 'keep this request' }] },
       { type: 'compaction', id: 'cmp_item_1', encrypted_content: 'encrypted-checkpoint' },
     ]
@@ -219,12 +239,13 @@ describe('OpenAI Codex compaction request', () => {
       if (init === undefined) throw new Error('expected request init')
       const request = { url: String(input), init }
       requests.push(request)
-      if (request.url.endsWith('/responses/compact')) {
-        return Response.json({
-          id: 'resp_compact_1',
-          object: 'response.compaction',
-          output: nativeOutput,
-          usage: { input_tokens: 20, output_tokens: 4, total_tokens: 24 },
+      const body = requestJson(init)
+      if (Array.isArray(body.input) && body.input.some(item => (
+        typeof item === 'object' && item !== null && (item as { type?: string }).type === 'compaction_trigger'
+      ))) {
+        return new Response(compactionEvents(), {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
         })
       }
       return new Response(responseEvents('resp_after_compact', 'continued'), {
@@ -275,17 +296,93 @@ describe('OpenAI Codex compaction request', () => {
     })) continued.push(chunk)
 
     expect(requests.map(request => request.url)).toEqual([
-      'https://chatgpt.com/backend-api/codex/responses/compact',
+      'https://chatgpt.com/backend-api/codex/responses',
       'https://chatgpt.com/backend-api/codex/responses',
     ])
     const compactBody = requestJson(requests[0]!.init)
+    const compactHeaders = new Headers(requests[0]!.init.headers)
+    expect(compactHeaders.get('thread-id')).toBe('session-native-compact')
+    expect(compactHeaders.get('x-codex-routing-hint')).toBe('model=gpt-5.6-sol')
+    expect(compactBody).toMatchObject({
+      model: 'gpt-5.6-sol',
+      store: false,
+      stream: true,
+      instructions: 'Preserve durable context.',
+      include: ['reasoning.encrypted_content'],
+    })
     expect(compactBody.input).toEqual([
       { role: 'user', content: [{ type: 'input_text', text: 'keep this request' }] },
+      { type: 'compaction_trigger' },
     ])
     const continuedBody = requestJson(requests[1]!.init)
     expect(continuedBody.input).toEqual([
-      ...nativeOutput,
+      ...restoredOutput,
       { role: 'user', content: [{ type: 'input_text', text: 'continue' }] },
+    ])
+  })
+
+  it('falls back to Harness compaction when the native endpoint is unavailable', async () => {
+    root = await mkdtemp(join(tmpdir(), 'dsh-openai-codex-native-fallback-'))
+    vi.stubEnv('DSH_HOME', root)
+    const store = new OpenAICodex.OpenAICodexCredentialStore()
+    await store.modify(OpenAICodex.OPENAI_CODEX_PROVIDER, () => Promise.resolve({
+      type: 'oauth',
+      access: accessToken('account-1'),
+      refresh: 'refresh-token',
+      expires: Date.now() + 3_600_000,
+      accountId: 'account-1',
+    }))
+
+    const requests: Array<{ url: string; init: RequestInit }> = []
+    vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
+      if (init === undefined) throw new Error('expected request init')
+      const request = { url: String(input), init }
+      requests.push(request)
+      const body = requestJson(init)
+      if (Array.isArray(body.input) && body.input.some(item => (
+        typeof item === 'object' && item !== null && (item as { type?: string }).type === 'compaction_trigger'
+      ))) {
+        return Response.json({ detail: 'Unsupported input item' }, { status: 400 })
+      }
+      return new Response(responseEvents('resp_fallback', 'fallback summary'), {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      })
+    })
+
+    const ctx = new Context()
+    context = ctx
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(WebRuntime)
+    await ctx.plugin(OpenAICodex, { useNativeCompaction: true })
+    const assembler = new BlockAssembler()
+    for await (const chunk of ctx.llm.stream({
+      provider: 'openai-codex',
+      model: 'gpt-5.6-sol',
+      purpose: 'compaction',
+      system: 'Preserve durable context.',
+      messages: [
+        userMessage('keep this request'),
+        createUserMessage({
+          content: [{ type: 'text', text: 'Summarize the conversation.' }],
+          source: { kind: 'plugin', plugin: 'compaction-basic' },
+        }),
+      ],
+      sessionId: 'session-native-fallback' as never,
+    })) assembler.push(chunk)
+
+    expect(assembler.message({
+      kind: 'model',
+      provider: 'openai-codex',
+      model: 'gpt-5.6-sol',
+    }).content).toEqual([{ type: 'text', text: 'fallback summary' }])
+    expect(requests.map(request => request.url)).toEqual([
+      'https://chatgpt.com/backend-api/codex/responses',
+      'https://chatgpt.com/backend-api/codex/responses',
+    ])
+    expect(requestJson(requests[1]!.init).input).toEqual([
+      { role: 'user', content: [{ type: 'input_text', text: 'keep this request' }] },
+      { role: 'user', content: [{ type: 'input_text', text: 'Summarize the conversation.' }] },
     ])
   })
 })

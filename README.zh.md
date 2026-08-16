@@ -93,7 +93,7 @@ bundle 会为新建 agent 选择 `openai-codex` / `gpt-5.6-sol`，并选择 Code
 设置页提供两个默认关闭、仅作用于 `openai-codex` 的开关：
 
 - **WebSocket 上下文复用**：保持 `store: false`，并选择 pi-ai 的 Codex WebSocket continuation 传输。同一会话继续复用连接，且下一轮与已有上下文严格衔接时，请求会通过 `previous_response_id` 只发送新增输入；历史改写、压缩、Fork、连接中断或进程重启后会自动发送完整上下文。关闭开关时，普通轮次使用 SSE，每次都发送 Harness 完整上下文。
-- **原生 Responses 压缩**：把 dsh 的摘要调用交给 `codex/responses/compact`。返回的加密 compaction item 会保存在 Harness 检查点中，并在后续 Codex 请求发送前还原为原生 Responses item；关闭开关不会破坏已经生成的检查点。端点错误会直接报告；关闭开关即可回到原来的 dsh 模型摘要。
+- **原生 Responses 压缩**：按 Codex 当前的 V2 流程，把现有历史和一个 `compaction_trigger` item 发给 `codex/responses`。近期客户端消息与返回的加密 compaction item 会一起保存在 Harness 检查点中，并在后续 Codex 请求发送前还原；关闭开关不会破坏已经生成的检查点。V2 压缩不可用或请求失败时，同一次调用会自动回退到原来的 Harness 模型摘要。
 
 两个开关互相独立。所有普通 Codex 请求都保持 `store: false`；默认配置使用 SSE 和 `dsh-compaction-basic` 的文本摘要路径。
 

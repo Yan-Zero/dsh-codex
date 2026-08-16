@@ -93,7 +93,7 @@ Each resolved, secret-free auxiliary request is recorded before dispatch as the 
 The Settings page provides two Codex-only switches. Both are off by default:
 
 - **WebSocket context reuse** keeps `store: false` and selects pi-ai's Codex WebSocket continuation transport. While the same session keeps a reusable connection and the next request is an exact extension, it sends `previous_response_id` with only the new input. History edits, compaction, Fork, connection loss, and process restarts fall back to a full request. With the switch off, ordinary turns use SSE and always send the full Harness context.
-- **Native Responses compaction** sends dsh summarization calls to `codex/responses/compact`. Its encrypted compaction item is retained inside the Harness checkpoint and restored as native Responses input on later Codex requests. Existing checkpoints remain readable after the switch is disabled. Compact endpoint errors are reported directly; turn the switch off to return to the existing dsh model summary.
+- **Native Responses compaction** follows Codex's current V2 flow: it sends the existing history plus a `compaction_trigger` item through `codex/responses`, retains recent client messages with the returned encrypted compaction item inside the Harness checkpoint, and restores those native items on later requests. Existing checkpoints remain readable after the switch is disabled. If V2 compaction is unavailable or fails, the same call falls back to the existing Harness model summary.
 
 The switches are independent. Every ordinary Codex request keeps `store: false`; the default uses SSE with the text-summary path from `dsh-compaction-basic`.
 

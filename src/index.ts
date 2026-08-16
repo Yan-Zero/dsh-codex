@@ -113,7 +113,7 @@ export interface Config {
   shareImagegenWithOtherModels?: boolean
   /** Reuse matching Codex context through the session's WebSocket connection. */
   useWebSocketContextReuse?: boolean
-  /** Use the Codex Responses compact endpoint for Harness compaction calls. */
+  /** Use Codex V2 Responses compaction for Harness compaction calls. */
   useNativeCompaction?: boolean
 }
 

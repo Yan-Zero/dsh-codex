@@ -46,15 +46,17 @@ async function command(ctx: Context): Promise<CommandDefinition> {
   return definition
 }
 
-describe('optional dsh-tui adapter', () => {
-  it('stays dormant without the TUI marker service', async () => {
+describe('UI-neutral command with optional dsh-tui completion', () => {
+  it('registers the command without requiring dsh-tui', async () => {
     const ctx = new Context()
     context = ctx
     ctx.provide('openAICodex', fakeService())
     await ctx.plugin(CommandRuntime)
     await ctx.plugin(TuiAdapter)
 
-    expect(ctx.commands.list({ ctx } as never)).toEqual([])
+    expect(ctx.commands.list({ ctx } as never)).toEqual([
+      expect.objectContaining({ name: 'codex', description: expect.stringContaining('OpenAI Codex') }),
+    ])
     expect(ctx.get('openAICodexTui')).toBeUndefined()
   })
 
@@ -75,7 +77,6 @@ describe('optional dsh-tui adapter', () => {
     })
     await ctx.plugin(CommandRuntime)
     await ctx.plugin(TuiAdapter)
-    ctx.provide('tuiWorkspaces', {})
     await new Promise(resolve => setTimeout(resolve, 0))
 
     const definition = await command(ctx)

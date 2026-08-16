@@ -26,9 +26,12 @@ interface TuiCommandTreeRuntime {
   }): () => void
 }
 
-interface TuiContext extends Context {
+interface CommandContext extends Context {
   openAICodex: OpenAICodexService
   commands: Context['commands']
+}
+
+interface TuiContext extends Context {
   tuiCommandTrees: TuiCommandTreeRuntime
 }
 
@@ -69,7 +72,7 @@ const CODEX_SETTINGS: readonly TuiSubcommandNode[] = [
   translatedNode('read-image', 'Enhance read_image with HTTP(S) input', '为 read_image 增加 HTTP(S) 图片输入'),
   translatedNode('imagegen-other-models', 'Allow other vision models to call imagegen', '允许其他视觉模型调用 imagegen'),
   translatedNode('websocket-context', 'Reuse Codex WebSocket response context', '复用 Codex WebSocket 响应上下文'),
-  translatedNode('native-compaction', 'Use the Codex Responses compact endpoint', '使用 Codex Responses 压缩端点'),
+  translatedNode('native-compaction', 'Use Codex V2 Responses compaction', '使用 Codex V2 Responses 压缩'),
 ]
 
 const BOOLEAN_VALUES: readonly TuiSubcommandNode[] = [
@@ -110,9 +113,12 @@ function waitForPromptAbort(prompt: AuthPrompt): Promise<string> {
 }
 
 /** Open one provider-issued HTTPS challenge without passing it through shell parsing. */
-function openBrowser(rawUrl: string): void {
+function openBrowser(rawUrl: string): boolean {
   const url = new URL(rawUrl)
   if (url.protocol !== 'https:') throw new Error(`refusing to open non-HTTPS authorization URL from ${url.host}`)
+  if (process.platform === 'linux' && process.env.DISPLAY === undefined && process.env.WAYLAND_DISPLAY === undefined) {
+    return false
+  }
   const command = process.platform === 'win32'
     ? { file: 'rundll32.exe', args: ['url.dll,FileProtocolHandler', url.href] }
     : process.platform === 'darwin'
@@ -125,6 +131,7 @@ function openBrowser(rawUrl: string): void {
   })
   child.on('error', () => {})
   child.unref()
+  return true
 }
 
 type LoginState =
@@ -137,8 +144,8 @@ class TuiLoginController {
   private state: LoginState = { status: 'idle' }
   private operation: Promise<void> | undefined
   private cancellation: AbortController | undefined
-  private challenge: Promise<void> | undefined
-  private resolveChallenge: (() => void) | undefined
+  private challenge: Promise<string> | undefined
+  private resolveChallenge: ((message: string) => void) | undefined
   private rejectChallenge: ((error: unknown) => void) | undefined
 
   constructor(private readonly service: OpenAICodexService) {}
@@ -147,8 +154,9 @@ class TuiLoginController {
     const stored = await this.service.authStatus()
     if (stored.authenticated) return 'OpenAI Codex is already signed in.'
     if (this.operation === undefined) this.begin()
-    await this.challenge
-    return 'Opened the ChatGPT authorization page. Use /codex status after approval.'
+    const challenge = this.challenge
+    if (challenge === undefined) throw new Error('OpenAI Codex sign-in did not create an authorization challenge')
+    return await challenge
   }
 
   status(): LoginState {
@@ -171,7 +179,7 @@ class TuiLoginController {
     const cancellation = new AbortController()
     this.cancellation = cancellation
     this.state = { status: 'signing-in' }
-    this.challenge = new Promise<void>((resolve, reject) => {
+    this.challenge = new Promise<string>((resolve, reject) => {
       this.resolveChallenge = resolve
       this.rejectChallenge = reject
     })
@@ -199,8 +207,10 @@ class TuiLoginController {
   private onEvent(event: AuthEvent): void {
     if (event.type !== 'auth_url') return
     try {
-      openBrowser(event.url)
-      this.resolveChallenge?.()
+      const opened = openBrowser(event.url)
+      this.resolveChallenge?.(opened
+        ? 'Opened the ChatGPT authorization page. Use /codex status after approval.'
+        : `Open this ChatGPT authorization page: ${event.url}\nUse /codex status after approval.`)
     } catch (error: unknown) {
       this.cancellation?.abort(error)
       this.rejectChallenge?.(error)
@@ -261,24 +271,17 @@ async function updateSetting(service: OpenAICodexService, key: string, enabled: 
   }
 }
 
-/** Activate only when dsh-tui's marker and the generic command registry coexist. */
+/** Register executable commands independently from any concrete UI frontend. */
 export function apply(ctx: Context): void {
-  ctx.inject(['tuiWorkspaces', 'tuiCommandTrees', 'commands'], registerTuiCommands)
+  ctx.inject(['commands'], registerCodexCommand)
+  ctx.inject(['tuiCommandTrees'], registerTuiCommandTree)
 }
 
-function registerTuiCommands(ctx: Context): void {
-  const tui = ctx as TuiContext
-  const service = tui.openAICodex
+function registerCodexCommand(ctx: Context): void {
+  const commandCtx = ctx as CommandContext
+  const service = commandCtx.openAICodex
   const login = new TuiLoginController(service)
-  const disposeTree = tui.tuiCommandTrees.register({
-    root: 'codex',
-    descriptions: {
-      en: 'Manage the OpenAI Codex account and provider settings',
-      zh: '管理 OpenAI Codex 账号与提供方设置',
-    },
-    children: codexSubcommands,
-  })
-  const disposeCommand = tui.commands.register({
+  const disposeCommand = commandCtx.commands.register({
     name: 'codex',
     description: 'Manage the OpenAI Codex account and provider settings',
     input: { hint: 'subcommand' },
@@ -322,12 +325,24 @@ function registerTuiCommands(ctx: Context): void {
       }
     },
   })
-  ctx.provide('openAICodexTui', {} as TuiMarkerRuntime)
   ctx.effect(() => async () => {
-    disposeTree()
     disposeCommand()
     await login.dispose()
-  }, 'OpenAI Codex TUI adapter')
+  }, 'OpenAI Codex command adapter')
+}
+
+function registerTuiCommandTree(ctx: Context): void {
+  const tui = ctx as TuiContext
+  const disposeTree = tui.tuiCommandTrees.register({
+    root: 'codex',
+    descriptions: {
+      en: 'Manage the OpenAI Codex account and provider settings',
+      zh: '管理 OpenAI Codex 账号与提供方设置',
+    },
+    children: codexSubcommands,
+  })
+  ctx.provide('openAICodexTui', {} as TuiMarkerRuntime)
+  ctx.effect(() => disposeTree, 'OpenAI Codex TUI completion adapter')
 }
 
 export default apply

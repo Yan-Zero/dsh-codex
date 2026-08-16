@@ -252,6 +252,6 @@ TUI 工具卡应显示经过脱敏的 `failure.message`，展开状态再显示 
 - `imagegen` 无 `output_path` 时仍在当前工作区生成唯一文件；
 - `imagegen` 能用工作区路径和最近会话图片执行 edit；
 - TUI 至少显示 prompt、参数、尺寸、输出路径和完整失败原因；
-- `/compact` 在原生压缩开关启用时走 Codex compact endpoint；
+- `/compact` 在原生压缩开关启用时走 Codex V2 `compaction_trigger` 流程；
 - WebSocket 复用开关启用后，多会话与 fork 不串联 continuation；
 - Remote SSH 下不把远端路径误当作本地路径打开。
