@@ -74,7 +74,7 @@ function PreferenceToggle({
       style={{
         ...toggleTrackStyle,
         opacity: disabled ? 0.55 : 1,
-        background: checked ? 'var(--dsw-alias-brand-primary, #1677ff)' : 'var(--dsw-alias-bg-layer-2, #c8ccd2)',
+        background: checked ? 'var(--dsw-alias-button-primary-fill)' : 'var(--dsw-alias-bg-layer-2, #c8ccd2)',
       }}
       onClick={() => { onChange(!checked) }}
     >
@@ -85,7 +85,7 @@ function PreferenceToggle({
         width: 16,
         height: 16,
         borderRadius: '50%',
-        background: 'white',
+        background: 'var(--dsw-alias-label-primary-foreground)',
         boxShadow: '0 1px 3px rgba(0, 0, 0, 0.25)',
         transition: 'left 120ms ease',
       }} />
