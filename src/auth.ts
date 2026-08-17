@@ -6,6 +6,7 @@
 import { createModels } from '@earendil-works/pi-ai'
 import type { AuthInteraction } from '@earendil-works/pi-ai'
 import { openaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-codex'
+import { installGlobalProxy } from './proxy.ts'
 import { OpenAICodexCredentialStore, OPENAI_CODEX_PROVIDER } from './store.ts'
 
 /** Non-secret login state shown by the launcher. */
@@ -25,6 +26,7 @@ export async function loginOpenAICodex(
   interaction: AuthInteraction,
   store: OpenAICodexCredentialStore = new OpenAICodexCredentialStore(),
 ): Promise<void> {
+  installGlobalProxy()
   const models = createModels({ credentials: store })
   models.setProvider(openaiCodexProvider())
   await models.login(OPENAI_CODEX_PROVIDER, 'oauth', interaction)

@@ -12,6 +12,7 @@ const LOGIN_PATH = '/plugins/dsh-openai-codex/auth/login'
 const LOGOUT_PATH = '/plugins/dsh-openai-codex/auth/logout'
 const IMAGE_TOOLS_PATH = '/plugins/dsh-openai-codex/image-tools'
 const RESPONSE_API_PATH = '/plugins/dsh-openai-codex/response-api'
+const PROXY_PATH = '/plugins/dsh-openai-codex/proxy'
 const POLL_INTERVAL_MS = 1_000
 const USAGE_POLL_INTERVAL_MS = 60_000
 
@@ -43,6 +44,7 @@ const rowStyle: CSSProperties = { display: 'flex', alignItems: 'center', justify
 const statusStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 9, fontSize: 15, fontWeight: 500, color: 'var(--dsw-alias-label-primary)' }
 const buttonStyle: CSSProperties = { boxSizing: 'border-box', minHeight: 34, padding: '6px 14px', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 18, background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)', font: 'inherit', fontSize: 14, cursor: 'pointer' }
 const primaryButtonStyle: CSSProperties = { ...buttonStyle, borderColor: 'var(--dsw-alias-button-primary-fill)', background: 'var(--dsw-alias-button-primary-fill)', color: 'var(--dsw-alias-label-primary-foreground)' }
+const inputStyle: CSSProperties = { boxSizing: 'border-box', flex: '1 1 280px', minHeight: 34, padding: '6px 10px', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 8, background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)', font: 'inherit', fontSize: 14 }
 const errorStyle: CSSProperties = { ...bodyStyle, color: 'var(--dsw-alias-state-error-primary)' }
 const quotaListStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 18, paddingTop: 2 }
 const quotaGroupStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 10 }
@@ -233,6 +235,10 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   const [responseApi, setResponseApi] = useState<ResponseApiPreferences | undefined>()
   const [responseApiBusy, setResponseApiBusy] = useState(false)
   const [responseApiError, setResponseApiError] = useState<string | undefined>()
+  const [proxyDraft, setProxyDraft] = useState('')
+  const [proxyBusy, setProxyBusy] = useState(false)
+  const [proxyError, setProxyError] = useState<string | undefined>()
+  const [proxySaved, setProxySaved] = useState(false)
 
   const refresh = useCallback(async () => {
     try {
@@ -253,6 +259,12 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
     void jsonRequest<ResponseApiPreferences>(RESPONSE_API_PATH).then(
       value => { setResponseApi(value); setResponseApiError(undefined) },
       () => { setResponseApiError(t('responseApiSettingsFailed')) },
+    )
+  }, [t])
+  useEffect(() => {
+    void jsonRequest<{ proxyUrl: string }>(PROXY_PATH).then(
+      value => { setProxyDraft(value.proxyUrl); setProxyError(undefined) },
+      () => { setProxyError(t('proxySettingsFailed')) },
     )
   }, [t])
   useEffect(() => {
@@ -317,6 +329,21 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
       setResponseApiError(t('responseApiSettingsFailed'))
     } finally {
       setResponseApiBusy(false)
+    }
+  }
+
+  const saveProxy = async (): Promise<void> => {
+    setProxyBusy(true)
+    setProxyError(undefined)
+    setProxySaved(false)
+    try {
+      const value = await jsonRequest<{ proxyUrl: string }>(PROXY_PATH, 'POST', { proxyUrl: proxyDraft })
+      setProxyDraft(value.proxyUrl)
+      setProxySaved(true)
+    } catch (error: unknown) {
+      setProxyError(error instanceof Error ? error.message : t('proxySettingsFailed'))
+    } finally {
+      setProxyBusy(false)
     }
   }
 
@@ -418,6 +445,27 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
           />
         </div>
         {responseApiError === undefined ? null : <p style={errorStyle}>{responseApiError}</p>}
+      </div>
+      <div style={cardStyle}>
+        <div>
+          <h3 style={quotaTitleStyle}>{t('proxy')}</h3>
+          <p style={{ ...bodyStyle, marginTop: 5 }}>{t('proxyHint')}</p>
+        </div>
+        <div style={rowStyle}>
+          <input
+            type="text"
+            value={proxyDraft}
+            disabled={proxyBusy}
+            spellCheck={false}
+            onChange={event => { setProxyDraft(event.target.value); setProxySaved(false) }}
+            style={inputStyle}
+          />
+          <button type="button" style={primaryButtonStyle} disabled={proxyBusy} onClick={() => { void saveProxy() }}>
+            {proxyBusy ? t('working') : t('proxySave')}
+          </button>
+        </div>
+        {proxyError === undefined ? null : <p style={errorStyle}>{proxyError}</p>}
+        {proxySaved ? <p style={bodyStyle}>{t('proxySaved')}</p> : null}
       </div>
     </section>
   )

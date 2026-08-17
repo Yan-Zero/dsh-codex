@@ -17,7 +17,12 @@ export interface ResponseApiPreferences {
   useNativeCompaction: boolean
 }
 
-interface OpenAICodexPreferences extends ImageToolPreferences, ResponseApiPreferences {
+/** HTTP(S) proxy applied to every Codex request in this process. */
+export interface ProxyPreferences {
+  proxyUrl: string
+}
+
+interface OpenAICodexPreferences extends ImageToolPreferences, ResponseApiPreferences, ProxyPreferences {
   /** Migration-only key written by the unreleased store:true experiment. */
   useStatefulResponses: boolean
 }
@@ -34,6 +39,11 @@ export const DEFAULT_RESPONSE_API_PREFERENCES: ResponseApiPreferences = {
   useNativeCompaction: false,
 }
 
+/** Default proxy assumed by local Clash/v2ray-style clients; users can override it in Settings. */
+export const DEFAULT_PROXY_PREFERENCES: ProxyPreferences = {
+  proxyUrl: 'http://127.0.0.1:1080',
+}
+
 const NAMESPACE = settingsNamespace('openai-codex')
 const schema: z<OpenAICodexPreferences> = z.object({
   modifyReadImage: z.boolean().default(true),
@@ -41,6 +51,7 @@ const schema: z<OpenAICodexPreferences> = z.object({
   useWebSocketContextReuse: z.boolean().default(false),
   useStatefulResponses: z.boolean().default(false),
   useNativeCompaction: z.boolean().default(false),
+  proxyUrl: z.string().default('http://127.0.0.1:1080'),
 })
 
 /** Live policy shared by the host tools, Codex adapter, and settings HTTP surface. */
@@ -48,11 +59,13 @@ export class ImageToolPolicy {
   private current: OpenAICodexPreferences
   private scope: SettingsScope<OpenAICodexPreferences> | undefined
   private readonly imageWatchers = new Set<() => void>()
+  private readonly proxyWatchers = new Set<() => void>()
 
   constructor(base: Partial<OpenAICodexPreferences> = {}) {
     this.current = {
       ...DEFAULT_IMAGE_TOOL_PREFERENCES,
       ...DEFAULT_RESPONSE_API_PREFERENCES,
+      ...DEFAULT_PROXY_PREFERENCES,
       useStatefulResponses: false,
       ...base,
     }
@@ -85,6 +98,42 @@ export class ImageToolPolicy {
   watchImagePreferences(listener: () => void): () => void {
     this.imageWatchers.add(listener)
     return () => { this.imageWatchers.delete(listener) }
+  }
+
+  /** Return the proxy URL currently applied to all Codex traffic. */
+  proxySnapshot(): string {
+    return this.current.proxyUrl
+  }
+
+  /** Observe live proxy URL changes so the global dispatcher can re-apply. */
+  watchProxy(listener: () => void): () => void {
+    this.proxyWatchers.add(listener)
+    return () => { this.proxyWatchers.delete(listener) }
+  }
+
+  /**
+   * Persist a proxy URL through the settings service. Empty disables the
+   * explicit proxy and falls back to environment variables.
+   */
+  async updateProxy(proxyUrl: string): Promise<string> {
+    if (this.scope === undefined) throw new Error('OpenAI Codex settings service is unavailable')
+    const trimmed = proxyUrl.trim()
+    if (trimmed !== '') {
+      let parsed: URL
+      try {
+        parsed = new URL(trimmed)
+      } catch {
+        throw new Error(`Invalid proxy URL ${JSON.stringify(trimmed)}`)
+      }
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        throw new Error(
+          `Unsupported proxy protocol ${JSON.stringify(parsed.protocol)}; use an http:// or https:// proxy URL (e.g. http://127.0.0.1:7890)`,
+        )
+      }
+    }
+    await this.scope.update({ proxyUrl: trimmed })
+    this.replace(this.scope.get())
+    return this.current.proxyUrl
   }
 
   /** Persist a partial browser update through the settings service. */
@@ -130,9 +179,13 @@ export class ImageToolPolicy {
       : next
     const imageChanged = next.modifyReadImage !== this.current.modifyReadImage
       || next.shareImagegenWithOtherModels !== this.current.shareImagegenWithOtherModels
+    const proxyChanged = next.proxyUrl !== this.current.proxyUrl
     this.current = next
     if (imageChanged) {
       for (const listener of this.imageWatchers) listener()
+    }
+    if (proxyChanged) {
+      for (const listener of this.proxyWatchers) listener()
     }
   }
 }

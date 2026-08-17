@@ -20,6 +20,8 @@ export const OPENAI_CODEX_AUTH_LOGOUT_PATH = '/plugins/dsh-openai-codex/auth/log
 export const OPENAI_CODEX_IMAGE_TOOL_SETTINGS_PATH = '/plugins/dsh-openai-codex/image-tools'
 /** Plugin-owned Responses API experiment endpoint consumed by its browser half. */
 export const OPENAI_CODEX_RESPONSE_API_SETTINGS_PATH = '/plugins/dsh-openai-codex/response-api'
+/** Plugin-owned proxy endpoint consumed by its browser half. */
+export const OPENAI_CODEX_PROXY_SETTINGS_PATH = '/plugins/dsh-openai-codex/proxy'
 
 export type OpenAICodexWebAuthStatus =
   | { status: 'signed-out' }
@@ -279,6 +281,22 @@ export function registerOpenAICodexAuthRoutes(
           if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
           try {
             json(res, 200, await imageTools.updateResponseApi(responseApiPatch(await readJson(req))))
+          } catch (error: unknown) {
+            json(res, 400, { error: safeMessage(error) })
+          }
+        },
+      }),
+      ctx.webServer.register({
+        kind: 'exact',
+        path: OPENAI_CODEX_PROXY_SETTINGS_PATH,
+        handler: async (req, res) => {
+          if (!trustedRequest(req)) return json(res, 403, { error: 'forbidden' })
+          if (req.method === 'GET') return json(res, 200, { proxyUrl: imageTools.proxySnapshot() })
+          if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
+          try {
+            const body = await readJson(req)
+            if (typeof body.proxyUrl !== 'string') throw new Error('proxyUrl must be a string')
+            json(res, 200, { proxyUrl: await imageTools.updateProxy(body.proxyUrl) })
           } catch (error: unknown) {
             json(res, 400, { error: safeMessage(error) })
           }
