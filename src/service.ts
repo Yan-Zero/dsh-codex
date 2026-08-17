@@ -9,6 +9,8 @@ import {
 } from "./auth.ts";
 import type { OpenAICodexAuthStatus } from "./auth.ts";
 import { OpenAICodexCredentialStore } from "./store.ts";
+import { OpenAICodexProxyTransport } from "./proxy.ts";
+import type { ProxyPreferences } from "./proxy.ts";
 import { ImageToolPolicy } from "./tool-policy.ts";
 import type {
   ContextWindowPreferences,
@@ -32,7 +34,8 @@ export interface OpenAICodexServiceOptions
   extends
     ImageToolPreferences,
     ResponseApiPreferences,
-    ContextWindowPreferences {
+    ContextWindowPreferences,
+    ProxyPreferences {
   models?: string[];
   modelCatalog: readonly ModelCatalogEntry[];
 }
@@ -44,9 +47,26 @@ export interface OpenAICodexServiceOptions
 export class OpenAICodexService {
   readonly credentials = new OpenAICodexCredentialStore();
   readonly policy: ImageToolPolicy;
+  readonly proxy: OpenAICodexProxyTransport;
+  private readonly stopProxyWatch: () => void;
 
   constructor(options: OpenAICodexServiceOptions) {
     this.policy = new ImageToolPolicy(options, options.modelCatalog);
+    this.proxy = new OpenAICodexProxyTransport(() =>
+      this.policy.proxySnapshot()
+    );
+    void this.proxy.apply().catch((error: unknown) => {
+      process.stderr.write(
+        `[dsh-codex] failed to apply proxy settings: ${error instanceof Error ? error.message : String(error)}\n`
+      );
+    });
+    this.stopProxyWatch = this.policy.watchProxyPreferences(() => {
+      void this.proxy.apply().catch((error: unknown) => {
+        process.stderr.write(
+          `[dsh-codex] failed to apply proxy settings: ${error instanceof Error ? error.message : String(error)}\n`
+        );
+      });
+    });
   }
 
   /** Attach the durable settings document when the active profile provides it. */
@@ -55,8 +75,9 @@ export class OpenAICodexService {
   }
 
   /** Start the provider-native OAuth lifecycle. */
-  login(interaction: AuthInteraction): Promise<void> {
-    return loginOpenAICodex(interaction, this.credentials);
+  async login(interaction: AuthInteraction): Promise<void> {
+    await this.proxy.apply();
+    return await loginOpenAICodex(interaction, this.credentials);
   }
 
   /** Remove this plugin's credential without touching Codex CLI/Desktop. */
@@ -71,7 +92,7 @@ export class OpenAICodexService {
 
   /** Read current subscription limits without issuing a model request. */
   usage(): Promise<OpenAICodexUsage> {
-    return readOpenAICodexRateLimits(this.credentials);
+    return readOpenAICodexRateLimits(this.credentials, this.proxy.fetch);
   }
 
   imagePreferences(): ImageToolPreferences {
@@ -106,5 +127,22 @@ export class OpenAICodexService {
 
   modelCatalogSettings(): ModelCatalogSettings {
     return this.policy.modelCatalogSnapshot();
+  }
+
+  proxyPreferences(): ProxyPreferences {
+    return this.policy.proxySnapshot();
+  }
+
+  async updateProxyPreferences(
+    patch: Partial<ProxyPreferences>
+  ): Promise<ProxyPreferences> {
+    const preferences = await this.policy.updateProxy(patch);
+    await this.proxy.apply();
+    return preferences;
+  }
+
+  async dispose(): Promise<void> {
+    this.stopProxyWatch();
+    await this.proxy.dispose();
   }
 }

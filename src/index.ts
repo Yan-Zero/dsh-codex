@@ -82,9 +82,17 @@ import type {
 } from "./search.ts";
 import { OpenAICodexCredentialStore, OPENAI_CODEX_PROVIDER } from "./store.ts";
 import { OpenAICodexService } from "./service.ts";
+import { DEFAULT_PROXY_PREFERENCES } from "./proxy.ts";
+import type { OpenAICodexProxyMode } from "./proxy.ts";
 
 export { OpenAICodexService } from "./service.ts";
 export type { OpenAICodexServiceOptions } from "./service.ts";
+export {
+  DEFAULT_PROXY_PREFERENCES,
+  normalizeProxyUrl,
+  OpenAICodexProxyTransport,
+} from "./proxy.ts";
+export type { OpenAICodexProxyMode, ProxyPreferences } from "./proxy.ts";
 
 export {
   assertNoOpenAICodexProviderConflict,
@@ -163,6 +171,10 @@ export interface Config {
   useWebSocketContextReuse?: boolean;
   /** Use Codex V2 Responses compaction for Harness compaction calls. */
   useNativeCompaction?: boolean;
+  /** How this plugin applies its proxy URL. */
+  proxyMode?: OpenAICodexProxyMode;
+  /** HTTP(S) proxy URL; empty uses the launch environment. */
+  proxyUrl?: string;
 }
 
 export const Config: z<Config> = z.object({
@@ -188,6 +200,10 @@ export const Config: z<Config> = z.object({
   shareImagegenWithOtherModels: z.boolean().default(true),
   useWebSocketContextReuse: z.boolean().default(false),
   useNativeCompaction: z.boolean().default(false),
+  proxyMode: z
+    .union(["off", "scoped", "global"] as const)
+    .default(DEFAULT_PROXY_PREFERENCES.proxyMode),
+  proxyUrl: z.string().default(DEFAULT_PROXY_PREFERENCES.proxyUrl),
 });
 
 /**
@@ -207,6 +223,8 @@ export function apply(ctx: Context, config: Config): void {
     shareImagegenWithOtherModels: config.shareImagegenWithOtherModels ?? true,
     useWebSocketContextReuse: config.useWebSocketContextReuse ?? false,
     useNativeCompaction: config.useNativeCompaction ?? false,
+    proxyMode: config.proxyMode ?? DEFAULT_PROXY_PREFERENCES.proxyMode,
+    proxyUrl: config.proxyUrl ?? DEFAULT_PROXY_PREFERENCES.proxyUrl,
   });
   const credentials = service.credentials;
   const imageTools = service.policy;
@@ -215,6 +233,12 @@ export function apply(ctx: Context, config: Config): void {
     ctx.llm.listProviders().map((provider) => provider.id)
   );
   ctx.provide("openAICodex", service);
+  ctx.effect(
+    () => async () => {
+      await service.dispose();
+    },
+    "dsh-openai-codex: proxy transport"
+  );
   ctx.inject(["settings"], (settingsCtx) => {
     service.attachSettings(settingsCtx);
   });
@@ -227,12 +251,14 @@ export function apply(ctx: Context, config: Config): void {
       fastMode,
       () => imageTools.modelCatalogSnapshot().models,
       () => imageTools.contextWindowSnapshot().contextWindow,
-      () => imageTools.contextWindowSnapshot().overrideSparkContextWindow
+      () => imageTools.contextWindowSnapshot().overrideSparkContextWindow,
+      service.proxy.fetch
     )
   );
   ctx.web.registerSearchProvider(
     new OpenAICodexSearchProvider({
       credentials,
+      fetch: service.proxy.fetch,
       model: config.searchModel ?? DEFAULT_OPENAI_CODEX_SEARCH_MODEL,
       mode: config.searchMode ?? DEFAULT_OPENAI_CODEX_SEARCH_MODE,
       contextSize:
@@ -255,11 +281,16 @@ export function apply(ctx: Context, config: Config): void {
       credentials,
       undefined,
       fastMode,
-      imageTools
+      imageTools,
+      service,
+      service.proxy.fetch,
+      () => service.proxy.apply()
     )
   );
   ctx.inject(["tools", "fs", "attachments"], (toolCtx) => {
-    toolCtx.tools.register(imagegenTool(toolCtx, credentials, imageTools));
+    toolCtx.tools.register(
+      imagegenTool(toolCtx, credentials, imageTools, service.proxy.fetch)
+    );
   });
   ctx.inject(["tools", "fs", "attachments", "agents"], (toolCtx) => {
     installReadImageEnhancement(toolCtx, imageTools);

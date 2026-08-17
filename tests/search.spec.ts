@@ -104,6 +104,17 @@ describe('OpenAI Codex search response mapping', () => {
 })
 
 describe('OpenAI Codex standalone search request', () => {
+  it('uses an injected request transport without replacing global fetch', async () => {
+    const requestFetch = vi.fn(async () => jsonResponse(searchPayload))
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('global fetch must not run') }))
+    const search = await provider({ fetch: requestFetch })
+
+    await expect(search.search({ query: 'scoped request' })).resolves.toMatchObject({
+      content: 'A synthesized answer.',
+    })
+    expect(requestFetch).toHaveBeenCalledOnce()
+  })
+
   it.each([
     ['cached', false],
     ['indexed', 'indexed'],

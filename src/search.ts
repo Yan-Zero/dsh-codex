@@ -74,6 +74,8 @@ export interface OpenAICodexSearchRequestRecord {
 export interface OpenAICodexSearchProviderOptions {
   /** Shared persistent OAuth store. */
   readonly credentials: OpenAICodexCredentialStore
+  /** Request transport used after credentials have been resolved. */
+  readonly fetch?: typeof globalThis.fetch
   /** Model sent to the standalone search endpoint. */
   readonly model: string
   /** Cached, indexed, or live external-web policy. */
@@ -282,7 +284,7 @@ export class OpenAICodexSearchProvider implements WebSearchProvider {
 
     let response: Response
     try {
-      response = await fetch(OPENAI_CODEX_SEARCH_URL, {
+      response = await (this.options.fetch ?? globalThis.fetch)(OPENAI_CODEX_SEARCH_URL, {
         method: 'POST',
         redirect: 'error',
         headers: {

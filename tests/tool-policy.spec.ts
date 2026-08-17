@@ -53,12 +53,20 @@ describe("ImageToolPolicy", () => {
       contextWindow: null,
       overrideSparkContextWindow: false,
     });
+    expect(policy.proxySnapshot()).toEqual({
+      proxyMode: "off",
+      proxyUrl: "",
+    });
 
     await policy.update({ shareImagegenWithOtherModels: false });
     await policy.updateResponseApi({ useNativeCompaction: true });
     await policy.updateContextWindow({
       contextWindow: 512_000,
       overrideSparkContextWindow: true,
+    });
+    await policy.updateProxy({
+      proxyMode: "scoped",
+      proxyUrl: "http://127.0.0.1:7890",
     });
 
     expect(policy.snapshot()).toEqual({
@@ -72,6 +80,10 @@ describe("ImageToolPolicy", () => {
     expect(policy.contextWindowSnapshot()).toEqual({
       contextWindow: 512_000,
       overrideSparkContextWindow: true,
+    });
+    expect(policy.proxySnapshot()).toEqual({
+      proxyMode: "scoped",
+      proxyUrl: "http://127.0.0.1:7890",
     });
   });
 
@@ -177,5 +189,22 @@ describe("ImageToolPolicy", () => {
       contextWindow: null,
       overrideSparkContextWindow: false,
     });
+    expect(policy.proxySnapshot()).toEqual({
+      proxyMode: "off",
+      proxyUrl: "",
+    });
+  });
+
+  it("validates proxy URLs before persisting them", async () => {
+    const ctx = new Context();
+    context = ctx;
+    await ctx.plugin(MemorySettings);
+    const policy = new ImageToolPolicy();
+    policy.attach(ctx);
+
+    await expect(
+      policy.updateProxy({ proxyUrl: "socks5://127.0.0.1:1080" })
+    ).rejects.toThrow("http:// or https://");
+    expect(policy.proxySnapshot()).toEqual({ proxyMode: "off", proxyUrl: "" });
   });
 });

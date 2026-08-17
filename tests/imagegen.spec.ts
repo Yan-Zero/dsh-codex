@@ -114,6 +114,18 @@ function successfulFetch() {
 }
 
 describe('imagegen', () => {
+  it('uses an injected request transport for image generation', async () => {
+    const requestFetch = successfulFetch()
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('global fetch must not run') }))
+    const client = new OpenAICodex.OpenAICodexImageClient(
+      new OpenAICodex.OpenAICodexCredentialStore(),
+      requestFetch,
+    )
+
+    await expect(client.generate('A tiny red pixel', [], signal)).resolves.toEqual(PNG_1X1)
+    expect(requestFetch).toHaveBeenCalledOnce()
+  })
+
   it('generates an attachment and optionally publishes the same PNG to the workspace', async () => {
     const ctx = await setup()
     const fetchMock = successfulFetch()

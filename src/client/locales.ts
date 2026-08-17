@@ -45,6 +45,26 @@ export const en = {
   remoteOriginCopy: "Copy command",
   remoteOriginCopied: "Copied",
   remoteOriginCopyFailed: "Could not copy the command.",
+  proxy: "Network proxy",
+  proxyIntro:
+    "Choose how this plugin applies a proxy. Changes take effect without restarting dsh.",
+  proxyMode: "Proxy scope",
+  proxyModeOff: "Follow dsh",
+  proxyModeScoped: "Codex only",
+  proxyModeGlobal: "All dsh",
+  proxyModeOffHint:
+    "The plugin does not override networking. Codex still follows any process-wide proxy configured when dsh started.",
+  proxyModeScopedHint:
+    "Only Codex HTTP requests after authentication use this proxy. OAuth token refresh and WebSocket transport continue to follow dsh networking.",
+  proxyModeGlobalHint:
+    "Applies this proxy to the whole dsh process, including OAuth. Requests from other plugins are affected too.",
+  proxyUrl: "Proxy URL",
+  proxyUrlPlaceholder: "Use proxy environment variables",
+  proxyUrlHint:
+    "Use an HTTP(S) proxy URL. Leave blank to use DSH_CODEX_PROXY or the standard HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, and NO_PROXY environment variables.",
+  proxySave: "Save proxy",
+  proxySaved: "Proxy settings saved.",
+  proxySettingsFailed: "Proxy settings could not be saved.",
   modelCatalog: "Models shown in the selector",
   modelCatalogIntro:
     "Choose which Codex models appear in model selectors. Existing conversations can continue using a hidden model.",
@@ -151,6 +171,25 @@ export const zh: { [Key in OpenAICodexSettingsKey]: string } = {
   remoteOriginCopy: "复制命令",
   remoteOriginCopied: "已复制",
   remoteOriginCopyFailed: "无法复制命令。",
+  proxy: "网络代理",
+  proxyIntro: "选择插件应用代理的范围；修改后无需重启 dsh。",
+  proxyMode: "代理范围",
+  proxyModeOff: "跟随 dsh",
+  proxyModeScoped: "仅 Codex",
+  proxyModeGlobal: "整个 dsh",
+  proxyModeOffHint:
+    "插件不覆盖网络设置；如果 dsh 启动时已配置进程级代理，Codex 仍会遵循该策略。",
+  proxyModeScopedHint:
+    "仅认证完成后的 Codex HTTP 请求使用此代理；OAuth Token 刷新和 WebSocket 仍遵循 dsh 的网络策略。",
+  proxyModeGlobalHint:
+    "把此代理应用到整个 dsh 进程，并覆盖 OAuth；其他插件的请求也会受到影响。",
+  proxyUrl: "代理 URL",
+  proxyUrlPlaceholder: "使用代理环境变量",
+  proxyUrlHint:
+    "请输入 HTTP(S) 代理 URL；留空时读取 DSH_CODEX_PROXY，或标准的 HTTP_PROXY、HTTPS_PROXY、ALL_PROXY 与 NO_PROXY 环境变量。",
+  proxySave: "保存代理",
+  proxySaved: "代理设置已保存。",
+  proxySettingsFailed: "无法保存代理设置。",
   modelCatalog: "模型选择器中显示的模型",
   modelCatalogIntro:
     "选择要在模型选择器中显示的 Codex 模型；隐藏模型后，已有会话仍可继续使用。",

@@ -36,6 +36,7 @@ import type {
   ModelCatalogPreferences,
   ResponseApiPreferences,
 } from "./tool-policy.ts";
+import type { ProxyPreferences } from "./proxy.ts";
 
 export {
   OPENAI_CODEX_AUTH_LOGIN_PATH,
@@ -56,6 +57,9 @@ export const OPENAI_CODEX_MODEL_CATALOG_SETTINGS_PATH =
 /** Plugin-owned client-side context capacity endpoint consumed by its browser half. */
 export const OPENAI_CODEX_CONTEXT_WINDOW_SETTINGS_PATH =
   "/plugins/dsh-openai-codex/context-window";
+/** Plugin-owned proxy preference endpoint consumed by its browser half. */
+export const OPENAI_CODEX_PROXY_SETTINGS_PATH =
+  "/plugins/dsh-openai-codex/proxy";
 
 /** Maximum time a browser request waits for the provider's authorization URL. */
 export const OPENAI_CODEX_AUTH_URL_TIMEOUT_MS = 30_000;
@@ -90,6 +94,8 @@ export const OPENAI_CODEX_SIGN_IN_TIMEOUT_MS = 10 * 60 * 1000;
 export interface OpenAICodexWebAuthOptions {
   challengeTimeoutMs?: number;
   signInTimeoutMs?: number;
+  requestFetch?: typeof globalThis.fetch;
+  beforeNetworkRequest?: () => Promise<void>;
 }
 
 /** Redact provider diagnostics before they cross to the browser. */
@@ -135,6 +141,8 @@ export class OpenAICodexWebAuth {
   private challengeTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly challengeTimeoutMs: number;
   private readonly signInTimeoutMs: number;
+  private readonly requestFetch: typeof globalThis.fetch;
+  private readonly beforeNetworkRequest: (() => Promise<void>) | undefined;
 
   constructor(
     private readonly store: OpenAICodexCredentialStore,
@@ -144,6 +152,8 @@ export class OpenAICodexWebAuth {
       options.challengeTimeoutMs ?? OPENAI_CODEX_AUTH_URL_TIMEOUT_MS;
     this.signInTimeoutMs =
       options.signInTimeoutMs ?? OPENAI_CODEX_SIGN_IN_TIMEOUT_MS;
+    this.requestFetch = options.requestFetch ?? globalThis.fetch;
+    this.beforeNetworkRequest = options.beforeNetworkRequest;
     if (
       !Number.isFinite(this.challengeTimeoutMs) ||
       this.challengeTimeoutMs <= 0
@@ -211,18 +221,24 @@ export class OpenAICodexWebAuth {
       );
     }, this.signInTimeoutMs);
     signInTimer.unref();
-    this.operation = loginOpenAICodex(
-      {
-        signal: cancellation.signal,
-        prompt: (prompt) =>
-          prompt.type === "select"
-            ? Promise.resolve("browser")
-            : waitForPromptAbort(prompt),
-        notify: (event) => {
-          this.onEvent(event);
-        },
-      },
-      this.store
+    const login = (): Promise<void> =>
+      loginOpenAICodex(
+          {
+            signal: cancellation.signal,
+            prompt: (prompt) =>
+              prompt.type === "select"
+                ? Promise.resolve("browser")
+                : waitForPromptAbort(prompt),
+            notify: (event) => {
+              this.onEvent(event);
+            },
+          },
+          this.store
+        );
+    this.operation = (
+      this.beforeNetworkRequest === undefined
+        ? login()
+        : this.beforeNetworkRequest().then(login)
     )
       .then(
         async () => {
@@ -287,12 +303,13 @@ export class OpenAICodexWebAuth {
   }
 
   private async readStoredStatus(): Promise<OpenAICodexWebAuthStatus> {
+    await this.beforeNetworkRequest?.();
     const stored = await openAICodexAuthStatus(this.store);
     if (!stored.authenticated) return { status: "signed-out" };
     try {
       return {
         status: "signed-in",
-        usage: await readOpenAICodexRateLimits(this.store),
+        usage: await readOpenAICodexRateLimits(this.store, this.requestFetch),
       };
     } catch (error: unknown) {
       if (isOpenAICodexReauthRequiredError(error)) {
@@ -672,15 +689,64 @@ function modelCatalogPatch(
   return { models };
 }
 
+function proxyPreferencePatch(
+  value: Record<string, unknown>
+): Partial<ProxyPreferences> {
+  const allowed = new Set<keyof ProxyPreferences>([
+    "proxyMode",
+    "proxyUrl",
+  ]);
+  if (
+    Object.keys(value).some(
+      (key) => !allowed.has(key as keyof ProxyPreferences)
+    )
+  ) {
+    throw new TypeError("request contains an unknown proxy setting");
+  }
+  const patch: Partial<ProxyPreferences> = {};
+  const proxyMode = value["proxyMode"];
+  if (proxyMode !== undefined) {
+    if (
+      proxyMode !== "off" &&
+      proxyMode !== "scoped" &&
+      proxyMode !== "global"
+    ) {
+      throw new TypeError("proxyMode must be off, scoped, or global");
+    }
+    patch.proxyMode = proxyMode;
+  }
+  const proxyUrl = value["proxyUrl"];
+  if (proxyUrl !== undefined) {
+    if (typeof proxyUrl !== "string") {
+      throw new TypeError("proxyUrl must be a string");
+    }
+    patch.proxyUrl = proxyUrl;
+  }
+  return patch;
+}
+
+interface ProxySettingsController {
+  proxyPreferences(): ProxyPreferences;
+  updateProxyPreferences(
+    patch: Partial<ProxyPreferences>
+  ): Promise<ProxyPreferences>;
+}
+
 /** Register the plugin-owned OAuth routes when the Web server is composed. */
 export function registerOpenAICodexAuthRoutes(
   ctx: Context,
   store: OpenAICodexCredentialStore,
   trustedOriginsOverride?: OpenAICodexTrustedOriginsStore,
   fastModeOverride?: FastModeRegistry,
-  imageTools?: ImageToolPolicy
+  imageTools?: ImageToolPolicy,
+  proxySettings?: ProxySettingsController,
+  requestFetch?: typeof globalThis.fetch,
+  beforeNetworkRequest?: () => Promise<void>
 ): void {
-  const auth = new OpenAICodexWebAuth(store);
+  const auth = new OpenAICodexWebAuth(store, {
+    ...(requestFetch === undefined ? {} : { requestFetch }),
+    ...(beforeNetworkRequest === undefined ? {} : { beforeNetworkRequest }),
+  });
   const storedFilename = (
     store as OpenAICodexCredentialStore & { filename?: unknown }
   ).filename;
@@ -864,6 +930,34 @@ export function registerOpenAICodexAuthRoutes(
                     200,
                     await imageTools.updateModelCatalog(
                       modelCatalogPatch(await readSettingsBody(req))
+                    )
+                  );
+                } catch (error: unknown) {
+                  return json(res, 400, { error: safeMessage(error) });
+                }
+              },
+            }),
+          ]),
+      ...(proxySettings === undefined
+        ? []
+        : [
+            ctx.webServer.register({
+              kind: "exact",
+              path: OPENAI_CODEX_PROXY_SETTINGS_PATH,
+              handler: async (req, res) => {
+                if (!(await authorize(req, res))) return;
+                if (req.method === "GET") {
+                  return json(res, 200, proxySettings.proxyPreferences());
+                }
+                if (req.method !== "POST") {
+                  return json(res, 405, { error: "method not allowed" });
+                }
+                try {
+                  return json(
+                    res,
+                    200,
+                    await proxySettings.updateProxyPreferences(
+                      proxyPreferencePatch(await readSettingsBody(req))
                     )
                   );
                 } catch (error: unknown) {

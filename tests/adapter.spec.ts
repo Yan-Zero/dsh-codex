@@ -23,6 +23,8 @@ describe("OpenAI Codex adapter policy", () => {
     expect(Config({}).models).toBeUndefined();
     expect(Config({}).contextWindow).toBeUndefined();
     expect(Config({}).overrideSparkContextWindow).toBe(false);
+    expect(Config({}).proxyMode).toBe("off");
+    expect(Config({}).proxyUrl).toBe("");
     expect(
       Config({
         models: [],
@@ -35,6 +37,7 @@ describe("OpenAI Codex adapter policy", () => {
       overrideSparkContextWindow: true,
     });
     expect(() => Config({ contextWindow: 0 })).toThrow();
+    expect(() => Config({ proxyMode: "sometimes" as never })).toThrow();
   });
 
   it("supplies the complete request-image policy required by current DSH runtimes", () => {

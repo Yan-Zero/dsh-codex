@@ -12,6 +12,7 @@ import {
   OPENAI_CODEX_AUTH_STATUS_PATH,
   OPENAI_CODEX_CONTEXT_WINDOW_SETTINGS_PATH,
   OPENAI_CODEX_MODEL_CATALOG_SETTINGS_PATH,
+  OPENAI_CODEX_PROXY_SETTINGS_PATH,
   REMOTE_WEB_ORIGIN_NOT_TRUSTED,
   registerOpenAICodexAuthRoutes,
   trustedRequestDecision,
@@ -75,6 +76,10 @@ interface CapturedRoute {
 function captureRoutes(
   trustedOrigins: OpenAICodexTrustedOriginsStore = emptyTrustedOrigins,
   preferences?: ImageToolPolicy,
+  proxySettings?: {
+    proxyPreferences(): { proxyMode: 'off' | 'scoped' | 'global'; proxyUrl: string }
+    updateProxyPreferences(patch: Partial<{ proxyMode: 'off' | 'scoped' | 'global'; proxyUrl: string }>): Promise<{ proxyMode: 'off' | 'scoped' | 'global'; proxyUrl: string }>
+  },
 ): CapturedRoute[] {
   const routes: CapturedRoute[] = []
   const ctx = {
@@ -88,7 +93,7 @@ function captureRoutes(
       return factory()
     },
   } as unknown as Context
-  registerOpenAICodexAuthRoutes(ctx, store, trustedOrigins, undefined, preferences)
+  registerOpenAICodexAuthRoutes(ctx, store, trustedOrigins, undefined, preferences, proxySettings)
   return routes
 }
 
@@ -140,6 +145,36 @@ afterEach(async () => {
 })
 
 describe('OpenAI Codex Web OAuth boundary', () => {
+  it('serves and validates the three-state proxy settings', async () => {
+    let current = { proxyMode: 'off' as 'off' | 'scoped' | 'global', proxyUrl: '' }
+    const proxySettings = {
+      proxyPreferences: vi.fn(() => ({ ...current })),
+      updateProxyPreferences: vi.fn(async (patch: Partial<typeof current>) => {
+        current = { ...current, ...patch }
+        return { ...current }
+      }),
+    }
+    const route = captureRoutes(emptyTrustedOrigins, undefined, proxySettings)
+      .find(candidate => candidate.path === OPENAI_CODEX_PROXY_SETTINGS_PATH)
+    if (route === undefined) throw new Error('proxy settings route was not registered')
+
+    const getResponse = response()
+    await route.handler(request({}), getResponse)
+    expect(JSON.parse(getResponse.observed.body ?? 'null')).toEqual({ proxyMode: 'off', proxyUrl: '' })
+
+    const postResponse = response()
+    await route.handler(request({
+      method: 'POST',
+      body: JSON.stringify({ proxyMode: 'scoped', proxyUrl: 'http://127.0.0.1:7890' }),
+    }), postResponse)
+    expect(postResponse.observed.status).toBe(200)
+    expect(current).toEqual({ proxyMode: 'scoped', proxyUrl: 'http://127.0.0.1:7890' })
+
+    const invalidResponse = response()
+    await route.handler(request({ method: 'POST', body: JSON.stringify({ proxyMode: 'sometimes' }) }), invalidResponse)
+    expect(invalidResponse.observed.status).toBe(400)
+  })
+
   it('serves and updates the model discovery subset through the plugin settings route', async () => {
     const snapshot = {
       availableModels: [
