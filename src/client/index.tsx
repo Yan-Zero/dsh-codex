@@ -7,8 +7,10 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-tool/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
-import { OpenAICodexSettings } from './OpenAICodexSettings.tsx'
 import type { OpenAICodexSettingsInjected } from './OpenAICodexSettings.tsx'
+import { OpenAICodexSettingsGate } from './OpenAICodexSettingsGate.tsx'
+import { loadCodexRuntimeAvailability } from './standard-runtime.ts'
+import type { CodexRuntimeAvailability } from './standard-runtime.ts'
 import { ImagegenToolView } from './ImagegenToolView.tsx'
 import type { ImageLoader } from './ImagegenToolView.tsx'
 import { en, zh } from './locales.ts'
@@ -57,13 +59,14 @@ export function apply(ctx: ClientContext): void {
     createdUrls.clear()
     imageUrls.clear()
   }, 'dsh-openai-codex: release image URLs')
+  const loadAvailability = (): Promise<CodexRuntimeAvailability> => loadCodexRuntimeAvailability()
   ctx.slots.inject('settings.section', () => ctx.slots.register({
-    name: 'settings.section',
-    id: 'openai-codex',
-    order: 15,
-    label: () => t('nav'),
-    inject: (): OpenAICodexSettingsInjected => ({ t }),
-  }, OpenAICodexSettings))
+      name: 'settings.section',
+      id: 'openai-codex',
+      order: 15,
+      label: () => t('nav'),
+      inject: () => ({ t, loadAvailability }),
+    }, OpenAICodexSettingsGate))
   ctx.slots.inject('tool.call.toolview', () => ctx.slots.register({
     name: 'tool.call.toolview',
     key: 'imagegen',

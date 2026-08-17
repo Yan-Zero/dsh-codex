@@ -1,8 +1,3 @@
-import type { Context } from '@deepseek-ai/cordis'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
-import type { SettingsScope } from '@deepseek-ai/dsh-settings'
-import type { ToolExecution } from '@deepseek-ai/dsh-tools'
-import z from '@deepseek-ai/schemastery'
 import { OPENAI_CODEX_PROVIDER } from './store.ts'
 
 /** User-controlled image-tool integration. */
@@ -34,19 +29,9 @@ export const DEFAULT_RESPONSE_API_PREFERENCES: ResponseApiPreferences = {
   useNativeCompaction: false,
 }
 
-const NAMESPACE = settingsNamespace('openai-codex')
-const schema: z<OpenAICodexPreferences> = z.object({
-  modifyReadImage: z.boolean().default(true),
-  shareImagegenWithOtherModels: z.boolean().default(true),
-  useWebSocketContextReuse: z.boolean().default(false),
-  useStatefulResponses: z.boolean().default(false),
-  useNativeCompaction: z.boolean().default(false),
-})
-
 /** Live policy shared by the host tools, Codex adapter, and settings HTTP surface. */
 export class ImageToolPolicy {
   private current: OpenAICodexPreferences
-  private scope: SettingsScope<OpenAICodexPreferences> | undefined
   private readonly imageWatchers = new Set<() => void>()
 
   constructor(base: Partial<OpenAICodexPreferences> = {}) {
@@ -59,18 +44,6 @@ export class ImageToolPolicy {
     if (this.current.useStatefulResponses && base.useWebSocketContextReuse === undefined) {
       this.current = { ...this.current, useWebSocketContextReuse: true }
     }
-  }
-
-  /** Register durable live settings when the active profile supplies ctx.settings. */
-  attach(ctx: Context): void {
-    const scope = ctx.settings.register(NAMESPACE, schema, { base: this.current, applies: 'live' })
-    this.scope = scope
-    this.replace(scope.get())
-    const unwatch = scope.watch(next => { this.replace(next) })
-    ctx.effect(() => () => {
-      unwatch()
-      if (this.scope === scope) this.scope = undefined
-    }, 'dsh-openai-codex: image tool preferences')
   }
 
   /** Return a detached settings projection for the browser. */
@@ -87,11 +60,9 @@ export class ImageToolPolicy {
     return () => { this.imageWatchers.delete(listener) }
   }
 
-  /** Persist a partial browser update through the settings service. */
+  /** Apply a partial preference update. Durable storage is supplied by a standard settings implementation. */
   async update(patch: Partial<ImageToolPreferences>): Promise<ImageToolPreferences> {
-    if (this.scope === undefined) throw new Error('OpenAI Codex settings service is unavailable')
-    await this.scope.update(patch)
-    this.replace(this.scope.get())
+    this.replace({ ...this.current, ...patch })
     return this.snapshot()
   }
 
@@ -103,21 +74,17 @@ export class ImageToolPolicy {
     }
   }
 
-  /** Persist a partial Responses API experiment update. */
+  /** Apply a partial Responses API preference update. */
   async updateResponseApi(patch: Partial<ResponseApiPreferences>): Promise<ResponseApiPreferences> {
-    if (this.scope === undefined) throw new Error('OpenAI Codex settings service is unavailable')
-    await this.scope.update({
+    this.replace({ ...this.current,
       ...patch,
       ...patch.useWebSocketContextReuse === undefined ? {} : { useStatefulResponses: false },
     })
-    this.replace(this.scope.get())
     return this.responseApiSnapshot()
   }
 
   /** Enforce imagegen's cross-provider toggle at execution time. */
-  assertAllowed(exec: ToolExecution, tool: 'imagegen'): void {
-    const configured = exec.agent?.session.requestHeader()?.config
-    const provider = configured?.provider ?? exec.agent?.options.provider
+  assertAllowed(provider: string | undefined, tool: 'imagegen'): void {
     if (provider === OPENAI_CODEX_PROVIDER) return
     if (!this.current.shareImagegenWithOtherModels) {
       throw new Error(`${tool} is disabled for models outside the openai-codex provider in Settings`)

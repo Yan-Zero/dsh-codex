@@ -9,9 +9,9 @@ import type { AuthEvent, AuthPrompt } from '@earendil-works/pi-ai'
 import {
   loginOpenAICodex,
   logoutOpenAICodex,
-  openAICodexAuthPath,
   openAICodexAuthStatus,
-} from './index.ts'
+} from './auth.ts'
+import { openAICodexAuthPath } from './store.ts'
 
 type Action = 'login' | 'logout' | 'status'
 

@@ -3,11 +3,11 @@
  * @module dsh-codex/store
  */
 
-import { mkdir, readFile, rm, stat } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { homedir } from 'node:os'
+import { basename, dirname, join, resolve } from 'node:path'
 import type { Credential, CredentialInfo, CredentialStore, OAuthCredential } from '@earendil-works/pi-ai'
-import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
-import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 
 /** Provider route and pi-ai provider id owned by this bundle. */
 export const OPENAI_CODEX_PROVIDER = 'openai-codex'
@@ -98,7 +98,36 @@ function cloneCredential(credential: OAuthCredential): OAuthCredential {
  * @returns the absolute owner-only document path.
  */
 export function openAICodexAuthPath(dshHome?: string): string {
-  return resolve(join(resolveDshHome(dshHome), OPENAI_CODEX_AUTH_FILENAME))
+  const root = dshHome ?? process.env['DSH_HOME'] ?? join(homedir(), '.dsh')
+  return resolve(join(root, OPENAI_CODEX_AUTH_FILENAME))
+}
+
+async function withCredentialLock<T>(filename: string, task: () => Promise<T>): Promise<T> {
+  const lockname = `${filename}.lock`
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const handle = await open(lockname, 'wx', 0o600)
+      try { return await task() } finally { await handle.close(); await rm(lockname, { force: true }) }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || attempt >= 200) throw error
+      await new Promise(resolveWait => setTimeout(resolveWait, 25))
+    }
+  }
+}
+
+async function writeCredentialAtomic(filename: string, text: string): Promise<void> {
+  const temp = join(dirname(filename), `.${basename(filename)}.${process.pid}.${randomUUID()}.tmp`)
+  const handle = await open(temp, 'wx', 0o600)
+  try {
+    await handle.writeFile(text, 'utf8')
+    await handle.sync()
+  } catch (error) {
+    await handle.close()
+    await rm(temp, { force: true })
+    throw error
+  }
+  await handle.close()
+  try { await rename(temp, filename) } catch (error) { await rm(temp, { force: true }); throw error }
 }
 
 /** File-backed pi-ai store scoped to the single OpenAI Codex provider. */
@@ -147,7 +176,7 @@ export class OpenAICodexCredentialStore implements CredentialStore {
       throw new Error(`openai-codex: credential store does not own provider "${providerId}"`)
     }
     await mkdir(dirname(this.filename), { recursive: true, mode: 0o700 })
-    return withFileLock(this.filename, async () => {
+    return withCredentialLock(this.filename, async () => {
       const current = await this.readCurrent()
       const candidate = await fn(current)
       if (candidate === undefined) return current
@@ -155,10 +184,7 @@ export class OpenAICodexCredentialStore implements CredentialStore {
         version: AUTH_FORMAT_VERSION,
         credential: candidate,
       }), this.filename)
-      await writeFileAtomic(this.filename, `${JSON.stringify(document, null, 2)}\n`, {
-        mode: 0o600,
-        dirMode: 0o700,
-      })
+      await writeCredentialAtomic(this.filename, `${JSON.stringify(document, null, 2)}\n`)
       return cloneCredential(document.credential)
     })
   }
@@ -167,6 +193,6 @@ export class OpenAICodexCredentialStore implements CredentialStore {
   async delete(providerId: string): Promise<void> {
     if (providerId !== OPENAI_CODEX_PROVIDER) return
     await mkdir(dirname(this.filename), { recursive: true, mode: 0o700 })
-    await withFileLock(this.filename, () => rm(this.filename, { force: true }))
+    await withCredentialLock(this.filename, () => rm(this.filename, { force: true }))
   }
 }

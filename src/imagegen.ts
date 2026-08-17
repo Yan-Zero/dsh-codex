@@ -341,7 +341,8 @@ export function imagegenTool(
     isConcurrencySafe: args => args.output_path === undefined,
     async execute(rawArgs, exec) {
       const args = parseArgs(rawArgs)
-      policy.assertAllowed(exec, 'imagegen')
+      const configured = exec.agent?.session.requestHeader()?.config
+      policy.assertAllowed(configured?.provider ?? exec.agent?.options.provider, 'imagegen')
       await assertImageCapable(ctx, exec, 'generate an image')
       const images = args.referenced_image_paths !== undefined
         ? await workspaceImages(ctx, exec, args.referenced_image_paths)

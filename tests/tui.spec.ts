@@ -1,13 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import CommandRuntime from '@deepseek-ai/dsh-commands'
-import type { CommandDefinition } from '@deepseek-ai/dsh-commands'
+import { readFileSync } from 'node:fs'
+import type { CommandHandler } from '@dsh-std/command'
+import { parseManifest } from '@dsh-std/manifest'
 import type { OpenAICodexService } from '../src/service.ts'
 import * as TuiAdapter from '../src/tui.ts'
+import standardFacet, { createOpenAICodexFacet } from '../src/standard.ts'
+import packageJson from '../package.json' with { type: 'json' }
 
+const standardManifest = parseManifest(readFileSync(new URL('../dsh-plugin.json', import.meta.url), 'utf8'))
 let context: Context | undefined
+const facetCleanup: Array<() => void | Promise<void>> = []
 
 afterEach(async () => {
+  for (const dispose of facetCleanup.splice(0).reverse()) await dispose()
   await context?.fiber.dispose()
   context = undefined
 })
@@ -17,12 +23,9 @@ function fakeService(): OpenAICodexService {
   let responsePreferences = { useWebSocketContextReuse: false, useNativeCompaction: false }
   return {
     authStatus: vi.fn(async () => ({ authenticated: true, expiresAt: new Date('2026-08-17T00:00:00Z') })),
+    models: vi.fn(() => [{ id: 'gpt-test', name: 'GPT Test' }]),
     usage: vi.fn(async () => ({
-      rateLimits: [{
-        id: 'codex',
-        name: 'Codex',
-        windows: [{ windowSeconds: 18_000, remainingPercent: 62.5 }],
-      }],
+      rateLimits: [{ id: 'codex', name: 'Codex', windows: [{ windowSeconds: 18_000, remainingPercent: 62.5 }] }],
     })),
     login: vi.fn(async () => undefined),
     logout: vi.fn(async () => undefined),
@@ -39,77 +42,108 @@ function fakeService(): OpenAICodexService {
   } as unknown as OpenAICodexService
 }
 
-async function command(ctx: Context): Promise<CommandDefinition> {
-  const agent = { ctx } as never
-  const definition = ctx.commands.find(agent, 'codex')
-  if (definition === undefined) throw new Error('/codex was not registered')
-  return definition
+async function activateStandard(facet = standardFacet): Promise<{ command: CommandHandler; published: string[] }> {
+  let command: CommandHandler | undefined
+  const published: string[] = []
+  await facet.activate({
+    extensions: {
+      publish(reference: { apiVersion: string; kind: string }, name: string, handler: unknown) {
+        published.push(`${reference.apiVersion} ${reference.kind} ${name}`)
+        if (reference.kind === 'Command') command = handler as CommandHandler
+        return () => undefined
+      },
+    },
+    scope: {
+      add(dispose: () => void | Promise<void>) {
+        facetCleanup.push(dispose)
+        return dispose
+      },
+    },
+  } as never)
+  if (command === undefined) throw new Error('standard facet did not publish the Codex command')
+  return { command, published }
 }
 
-describe('UI-neutral command with optional dsh-tui completion', () => {
-  it('registers the command without requiring dsh-tui', async () => {
-    const ctx = new Context()
-    context = ctx
-    ctx.provide('openAICodex', fakeService())
-    await ctx.plugin(CommandRuntime)
-    await ctx.plugin(TuiAdapter)
+const invocation = {
+  signal: new AbortController().signal,
+  present: () => false,
+}
 
-    expect(ctx.commands.list({ ctx } as never)).toEqual([
-      expect.objectContaining({ name: 'codex', description: expect.stringContaining('OpenAI Codex') }),
-    ])
-    expect(ctx.get('openAICodexTui')).toBeUndefined()
+describe('standard command with optional dsh-tui completion', () => {
+  it('keeps the v0.15 manifest aligned with the package and portable lifecycle', () => {
+    expect(standardManifest.version).toBe(packageJson.version)
+    expect(standardManifest.facets.host).toEqual({ entry: 'lib/standard.js', apiVersion: 'v1alpha1' })
+    expect(standardManifest.contributes.commands).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'ai.openai.codex.command.codex' }),
+    ]))
   })
 
-  it('registers one provider command when dsh-tui is present', async () => {
+  it('keeps the TUI subpath optional and limited to completion metadata', async () => {
     const ctx = new Context()
     context = ctx
-    const service = fakeService()
-    ctx.provide('openAICodex', service)
-    let commandTree: {
-      descriptions?: Readonly<Partial<Record<'zh' | 'en', string>>>
-      children(path: readonly string[]): readonly { name: string }[]
-    } | undefined
-    ctx.provide('tuiCommandTrees', {
-      register(provider: typeof commandTree & { root: string }) {
-        commandTree = provider
-        return () => { commandTree = undefined }
-      },
-    })
-    await ctx.plugin(CommandRuntime)
     await ctx.plugin(TuiAdapter)
-    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(ctx.get('openAICodexTui')).toBeUndefined()
 
-    const definition = await command(ctx)
-    expect(definition.description).toContain('OpenAI Codex')
-    if (commandTree === undefined) throw new Error('Codex command tree was not registered')
-    expect(commandTree.descriptions?.zh).toBe('管理 OpenAI Codex 账号与提供方设置')
-    expect(commandTree.children(['codex']).map(item => item.name)).toEqual([
-      'status', 'login', 'logout', 'usage', 'config', 'set',
-    ])
-    expect(commandTree.children(['codex'])[0]).toMatchObject({
-      descriptions: { en: 'Show the ChatGPT sign-in state', zh: '查看 ChatGPT 登录状态' },
+    let tree: { children(path: readonly string[]): readonly { name: string }[] } | undefined
+    ctx.provide('tuiCommandTrees', {
+      register(provider: typeof tree & { root: string }) { tree = provider; return () => { tree = undefined } },
     })
-    expect(commandTree.children(['codex', 'set']).map(item => item.name)).toEqual([
-      'read-image', 'imagegen-other-models', 'websocket-context', 'native-compaction',
-    ])
-    expect(commandTree.children(['codex', 'set', 'native-compaction']).map(item => item.name)).toEqual(['on', 'off'])
-    await expect(definition.handler({ rawInput: ' status' } as never)).resolves.toEqual({
+    await new Promise(resolve => setTimeout(resolve, 0))
+    if (tree === undefined) throw new Error('Codex completion tree was not registered')
+    expect(tree.children(['codex']).map(row => row.name)).toEqual(['status', 'login', 'logout', 'usage', 'config', 'set'])
+    expect(tree.children(['codex', 'login']).map(row => row.name)).toEqual(['browser', 'device'])
+  })
+
+  it('publishes and executes the command through the standard handler', async () => {
+    const service = fakeService()
+    const { command, published } = await activateStandard(createOpenAICodexFacet(service))
+    expect(published).toEqual(expect.arrayContaining([
+      'commands.dsh/v1alpha1 Command codex',
+      'models.dsh/v1alpha1 ModelProvider openai-codex',
+    ]))
+    await expect(command.execute({ rawInput: ' status' }, invocation)).resolves.toEqual({
       kind: 'success',
       text: 'OpenAI Codex is signed in. Access token expires 2026-08-17T00:00:00.000Z; refresh is automatic.',
     })
-    await expect(definition.handler({ rawInput: ' usage' } as never)).resolves.toEqual({
-      kind: 'success',
-      text: 'Codex (18000s): 62.5% remaining',
-    })
-    await expect(definition.handler({ rawInput: ' config' } as never)).resolves.toMatchObject({
-      kind: 'success',
-      text: expect.stringContaining('read-image: on'),
-    })
-    await expect(definition.handler({ rawInput: ' set native-compaction on' } as never)).resolves.toMatchObject({
-      kind: 'success',
-      text: expect.stringContaining('native-compaction: on'),
+    await expect(command.execute({ rawInput: ' set native-compaction on' }, invocation)).resolves.toMatchObject({
+      kind: 'success', text: expect.stringContaining('native-compaction: on'),
     })
     expect(service.updateResponsePreferences).toHaveBeenCalledWith({ useNativeCompaction: true })
-    expect(ctx.get('openAICodexTui')).toEqual({})
+  })
+
+  it('uses device login when the negotiated presentation cannot open a browser', async () => {
+    const service = fakeService()
+    vi.mocked(service.authStatus).mockResolvedValue({ authenticated: false })
+    let selected: string | undefined
+    vi.mocked(service.login).mockImplementation(async interaction => {
+      selected = await interaction.prompt({
+        type: 'select', message: 'Choose login method',
+        options: [{ id: 'browser', label: 'Browser' }, { id: 'device_code', label: 'Device' }],
+      })
+      await interaction.notify({
+        type: 'device_code', verificationUri: 'https://example.test/device', userCode: 'ABCD-EFGH',
+      })
+    })
+    const { command } = await activateStandard(createOpenAICodexFacet(service))
+    await expect(command.execute({ rawInput: ' login' }, {
+      ...invocation,
+      presentation: { clientId: 'tui-1', contracts: [] },
+    })).resolves.toEqual({
+      kind: 'success',
+      text: 'Open https://example.test/device\nEnter code: ABCD-EFGH\nUse /codex status after approval.',
+    })
+    expect(selected).toBe('device_code')
+  })
+
+  it('projects provider authentication state without an adapter-specific snapshot type', async () => {
+    const service = fakeService()
+    vi.mocked(service.authStatus).mockResolvedValue({ authenticated: false })
+    const facet = createOpenAICodexFacet(service)
+    await expect(facet.snapshot?.()).resolves.toMatchObject({
+      extensions: [{
+        apiVersion: 'models.dsh/v1alpha1', kind: 'ModelProvider', name: 'openai-codex',
+        status: { state: 'authentication-required' },
+      }],
+    })
   })
 })

@@ -1,7 +1,7 @@
 /** Shared host service consumed by optional OpenAI Codex front-door adapters. */
 
 import type { AuthInteraction } from '@earendil-works/pi-ai'
-import type { Context } from '@deepseek-ai/cordis'
+import { openaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-codex'
 import { loginOpenAICodex, logoutOpenAICodex, openAICodexAuthStatus } from './auth.ts'
 import type { OpenAICodexAuthStatus } from './auth.ts'
 import { OpenAICodexCredentialStore } from './store.ts'
@@ -13,15 +13,14 @@ import type {
 import { readOpenAICodexRateLimits } from './usage.ts'
 import type { OpenAICodexUsage } from './usage.ts'
 
-declare module '@deepseek-ai/cordis' {
-  interface Context {
-    /** Provider-owned account and preference service for optional front doors. */
-    openAICodex: OpenAICodexService
-  }
-}
-
 /** Initial settings contributed by the bundle configuration. */
-export interface OpenAICodexServiceOptions extends ImageToolPreferences, ResponseApiPreferences {}
+export type OpenAICodexServiceOptions = Partial<ImageToolPreferences & ResponseApiPreferences>
+
+export interface OpenAICodexModelSummary {
+  readonly id: string
+  readonly name: string
+  readonly description?: string
+}
 
 /**
  * One provider-owned host service shared by Web routes and terminal adapters.
@@ -33,11 +32,6 @@ export class OpenAICodexService {
 
   constructor(options: OpenAICodexServiceOptions) {
     this.policy = new ImageToolPolicy(options)
-  }
-
-  /** Attach the durable settings document when the active profile provides it. */
-  attachSettings(ctx: Context): void {
-    this.policy.attach(ctx)
   }
 
   /** Start the provider-native OAuth lifecycle. */
@@ -53,6 +47,14 @@ export class OpenAICodexService {
   /** Read non-secret authentication metadata. */
   authStatus(): Promise<OpenAICodexAuthStatus> {
     return openAICodexAuthStatus(this.credentials)
+  }
+
+  /** Enumerate the models contributed by this installed provider. */
+  models(): readonly OpenAICodexModelSummary[] {
+    return openaiCodexProvider().getModels().map(model => ({
+      id: model.id,
+      name: model.name,
+    }))
   }
 
   /** Read current subscription limits without issuing a model request. */
@@ -76,4 +78,3 @@ export class OpenAICodexService {
     return this.policy.updateResponseApi(patch)
   }
 }
-

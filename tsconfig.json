@@ -14,6 +14,19 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["src", "tests"],
-  "exclude": ["src/client"]
+  "include": [
+    "src/standard.ts",
+    "src/command.ts",
+    "src/model-handler.ts",
+    "src/service.ts",
+    "src/auth.ts",
+    "src/store.ts",
+    "src/usage.ts",
+    "src/responses.ts",
+    "src/tool-policy.ts",
+    "src/bin.ts",
+    "tests/standard-component.spec.ts",
+    "tests/store.spec.ts",
+    "tests/response-runtime.spec.ts"
+  ]
 }

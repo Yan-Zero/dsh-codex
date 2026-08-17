@@ -1,6 +1,6 @@
 {
   "name": "dsh-codex",
-  "description": "ChatGPT OAuth, Codex models, search, read_image URL support, and gpt-image-2 generation for DeepSeek Harness",
+  "description": "Portable OpenAI Codex model provider for DSH standard runtimes",
   "version": "0.2.4",
   "publishConfig": {
     "access": "public",
@@ -15,113 +15,44 @@
     "url": "https://github.com/Yan-Zero/dsh-codex/issues"
   },
   "type": "module",
-  "main": "lib/index.js",
-  "types": "lib/index.d.ts",
+  "main": "lib/standard.js",
+  "types": "lib/standard.d.ts",
   "bin": {
     "dsh-openai-codex": "lib/bin.js"
   },
   "scripts": {
     "build": "pnpm run typecheck && tsdown",
-    "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.client.json",
+    "test": "vitest run tests/standard-component.spec.ts tests/store.spec.ts tests/response-runtime.spec.ts",
+    "typecheck": "tsc -p tsconfig.json",
     "check": "pnpm run typecheck && pnpm run test && pnpm run build",
     "prepublishOnly": "pnpm --config.minimum-release-age=0 run check"
   },
   "exports": {
     ".": {
-      "types": "./lib/index.d.ts",
-      "default": "./lib/index.js"
+      "types": "./lib/standard.d.ts",
+      "default": "./lib/standard.js"
     },
-    "./invariant": {
-      "types": "./lib/invariant.d.ts",
-      "default": "./lib/invariant.js"
+    "./standard": {
+      "types": "./lib/standard.d.ts",
+      "default": "./lib/standard.js"
     },
-    "./tui": {
-      "types": "./lib/tui.d.ts",
-      "default": "./lib/tui.js"
-    },
-    "./client": "./lib/client.js",
-    "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "files": [
     "lib",
-    "src",
-    "cordis.patch.yml",
-    "docs",
+    "dsh-plugin.json",
     "INSTALL.md"
   ],
   "license": "Apache-2.0",
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "inject": [
-        "@deepseek-ai/dsh-client-runtime",
-        "@deepseek-ai/dsh-client-ui-tool",
-        "@deepseek-ai/dsh-client-ui-settings",
-        "@deepseek-ai/dsh-client-locale"
-      ],
-      "platform": "web"
-    }
-  },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "^0.82.1",
-    "@deepseek-ai/cordis": "^4.0.1-rc.1",
-    "@deepseek-ai/dsh-agent": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-atomic-write": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-attachment": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-commands": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-home-paths": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-llm-pi-ai": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-fs": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-session": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-settings": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-web": "^0.1.0-rc.6",
-    "@deepseek-ai/schemastery": "^3.18.1-rc.1",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "@dsh-std/command": "^0.1.0",
+    "@dsh-std/model": "^0.1.0",
+    "@dsh-std/sdk": "^0.1.0",
+    "@earendil-works/pi-ai": "^0.82.1"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "0.82.1",
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/cordis-plugin-include": "1.0.6",
-    "@deepseek-ai/cordis-plugin-loader": "1.0.2",
-    "@deepseek-ai/dsh-agent": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-atomic-write": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-attachment": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-attachment-local": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-commands": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-locale": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-runtime": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-settings": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-slots": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-tool": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-fs": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-fs-local": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-fs-sandbox": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-home-paths": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-host-webserver": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-invariants": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-llm": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-llm-pi-ai": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-session": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-sandbox-policy": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-settings": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-system-prompt": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-tools": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-web": "0.1.0-rc.6",
-    "@deepseek-ai/schemastery": "3.18.1",
     "@types/node": "^22.20.0",
-    "@types/react": "~18.3.1",
-    "@types/react-dom": "~18.3.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
     "tsdown": "^0.22.2",
     "typescript": "^5.9.3",
     "vitest": "^4.1.8"

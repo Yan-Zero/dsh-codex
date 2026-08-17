@@ -10,19 +10,16 @@ import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-session'
+import { KNOWN_SESSION_EVENT_TYPES } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-web'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-fs'
 import { createOpenAICodexAdapter } from './adapter.ts'
 import { registerOpenAICodexAuthRoutes } from './auth-routes.ts'
-import { installReadImageEnhancement } from './read-image-enhancement.ts'
 import { imagegenTool } from './imagegen.ts'
 import { ImageToolPolicy } from './tool-policy.ts'
-import {
-  installOpenAICodexSearchEvent,
-  recordOpenAICodexSearchRequest,
-} from './search-event.ts'
+import { recordOpenAICodexSearchRequest } from './search-event.ts'
 
 export { READ_IMAGE_TOOL_NAME } from './read-image-enhancement.ts'
 export {
@@ -47,7 +44,6 @@ export type {
   OpenAICodexUsage,
 } from './usage.ts'
 export {
-  installOpenAICodexSearchEvent,
   OPENAI_CODEX_SEARCH_MODEL_REQUEST_EVENT,
   recordOpenAICodexSearchRequest,
 } from './search-event.ts'
@@ -135,7 +131,6 @@ export const Config: z<Config> = z.object({
  * @param config - standalone-search model, access mode, context size, and output budget.
  */
 export function apply(ctx: Context, config: Config): void {
-  installOpenAICodexSearchEvent()
   const service = new OpenAICodexService({
     modifyReadImage: config.modifyReadImage ?? true,
     shareImagegenWithOtherModels: config.shareImagegenWithOtherModels ?? true,
@@ -145,7 +140,6 @@ export function apply(ctx: Context, config: Config): void {
   const credentials = service.credentials
   const imageTools = service.policy
   ctx.provide('openAICodex', service)
-  ctx.inject(['settings'], settingsCtx => { service.attachSettings(settingsCtx) })
   ctx.llm.registerAdapter(
     [OPENAI_CODEX_PROVIDER],
     createOpenAICodexAdapter(
@@ -161,13 +155,14 @@ export function apply(ctx: Context, config: Config): void {
     contextSize: config.searchContextSize ?? DEFAULT_OPENAI_CODEX_SEARCH_CONTEXT_SIZE,
     maxOutputTokens: config.searchMaxOutputTokens ?? DEFAULT_OPENAI_CODEX_SEARCH_MAX_OUTPUT_TOKENS,
     resolveRequestId: () => String(ctx.get('agents')?.currentInitiator()?.session.id ?? randomUUID()),
-    recordRequest: request => { recordOpenAICodexSearchRequest(ctx, request) },
+    recordRequest: request => {
+      if (KNOWN_SESSION_EVENT_TYPES.has('web/openai-codex-search-llm-request')) {
+        recordOpenAICodexSearchRequest(ctx, request)
+      }
+    },
   }))
   ctx.inject(['webServer'], webCtx => registerOpenAICodexAuthRoutes(webCtx, credentials, imageTools))
   ctx.inject(['tools', 'fs', 'attachments'], toolCtx => {
     toolCtx.tools.register(imagegenTool(toolCtx, credentials, imageTools))
-  })
-  ctx.inject(['tools', 'fs', 'attachments', 'agents'], toolCtx => {
-    installReadImageEnhancement(toolCtx, imageTools)
   })
 }

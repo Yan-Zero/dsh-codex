@@ -4,7 +4,6 @@ import { basename } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
-import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -218,59 +217,4 @@ export function enhancedReadImageTool(ctx: Context, original: ToolDefinition): T
       }
     },
   })
-}
-
-interface ScopedEnhancement {
-  readonly original: ToolDefinition
-  readonly dispose: () => void
-}
-
-/** Keep an enhanced `read_image` shadow on every live agent while the setting is enabled. */
-export function installReadImageEnhancement(ctx: Context, policy: ImageToolPolicy): void {
-  const installed = new Map<Agent, ScopedEnhancement>()
-  let syncing = false
-
-  const remove = (agent: Agent): void => {
-    const current = installed.get(agent)
-    if (current === undefined) return
-    installed.delete(agent)
-    current.dispose()
-  }
-
-  const syncAgent = (agent: Agent): void => {
-    const current = installed.get(agent)
-    const original = ctx.tools.get(READ_IMAGE_TOOL_NAME)
-    if (!policy.snapshot().modifyReadImage || original === undefined) {
-      remove(agent)
-      return
-    }
-    if (current?.original === original) return
-    if (current !== undefined) remove(agent)
-    if (ctx.tools.get(READ_IMAGE_TOOL_NAME, agent) !== original) return
-    const dispose = agent.ctx.tools.register(enhancedReadImageTool(ctx, original))
-    installed.set(agent, { original, dispose })
-  }
-
-  const syncAll = (): void => {
-    if (syncing) return
-    syncing = true
-    try {
-      for (const agent of ctx.agents.list()) syncAgent(agent)
-      for (const agent of [...installed.keys()]) {
-        if (ctx.agents.get(agent.id) !== agent) remove(agent)
-      }
-    } finally {
-      syncing = false
-    }
-  }
-
-  ctx.on('agent/created', ({ agent }) => { syncAgent(agent) })
-  ctx.on('agent/disposed', ({ agent }) => { installed.delete(agent) })
-  ctx.on('tools/change', syncAll)
-  const stopPolicy = policy.watchImagePreferences(syncAll)
-  syncAll()
-  ctx.effect(() => () => {
-    stopPolicy()
-    for (const agent of [...installed.keys()]) remove(agent)
-  }, 'dsh-openai-codex: enhanced read_image')
 }

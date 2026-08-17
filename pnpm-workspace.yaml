@@ -6,4 +6,4 @@ allowBuilds:
   koffi: false
   protobufjs: false
 
-autoInstallPeers: true
+autoInstallPeers: false

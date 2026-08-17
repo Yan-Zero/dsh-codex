@@ -13,8 +13,7 @@
 - insert:
     - id: llm-openai-codex
       name: dsh-codex
-    # Optional terminal front-door adapter. It stays dormant on Web because
-    # tuiWorkspaces is absent, and contributes /codex when dsh-tui is mounted.
+    # Optional terminal completion adapter. Command execution is contributed
+    # by the standard facet; this row only describes its completion tree.
     - id: openai-codex-tui
       name: dsh-codex/tui
-      inject: [openAICodex]
