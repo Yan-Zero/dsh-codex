@@ -42,7 +42,7 @@ const cardStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap
 const rowStyle: CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }
 const statusStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 9, fontSize: 15, fontWeight: 500, color: 'var(--dsw-alias-label-primary)' }
 const buttonStyle: CSSProperties = { boxSizing: 'border-box', minHeight: 34, padding: '6px 14px', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 18, background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)', font: 'inherit', fontSize: 14, cursor: 'pointer' }
-const primaryButtonStyle: CSSProperties = { ...buttonStyle, borderColor: 'var(--dsw-alias-brand-primary)', background: 'var(--dsw-alias-brand-primary)', color: 'white' }
+const primaryButtonStyle: CSSProperties = { ...buttonStyle, borderColor: 'var(--dsw-alias-button-primary-fill)', background: 'var(--dsw-alias-button-primary-fill)', color: 'var(--dsw-alias-label-primary-foreground)' }
 const errorStyle: CSSProperties = { ...bodyStyle, color: 'var(--dsw-alias-state-error-primary)' }
 const quotaListStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 18, paddingTop: 2 }
 const quotaGroupStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 10 }
@@ -74,7 +74,7 @@ function PreferenceToggle({
       style={{
         ...toggleTrackStyle,
         opacity: disabled ? 0.55 : 1,
-        background: checked ? 'var(--dsw-alias-brand-primary, #1677ff)' : 'var(--dsw-alias-bg-layer-2, #c8ccd2)',
+        background: checked ? 'var(--dsw-alias-button-primary-fill)' : 'var(--dsw-alias-bg-layer-2, #c8ccd2)',
       }}
       onClick={() => { onChange(!checked) }}
     >
@@ -85,7 +85,7 @@ function PreferenceToggle({
         width: 16,
         height: 16,
         borderRadius: '50%',
-        background: 'white',
+        background: 'var(--dsw-alias-label-primary-foreground)',
         boxShadow: '0 1px 3px rgba(0, 0, 0, 0.25)',
         transition: 'left 120ms ease',
       }} />
