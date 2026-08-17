@@ -2,6 +2,7 @@
 
 import type { AuthEvent, AuthPrompt } from '@earendil-works/pi-ai'
 import type { CommandHandler, CommandHandlerContext } from '@dsh-std/command'
+import type { OpenExternalClient, PresentationClients } from '@dsh-std/presentation'
 import type { OpenAICodexService } from './service.ts'
 import type { OpenAICodexUsage } from './usage.ts'
 
@@ -48,9 +49,9 @@ class LoginController {
   constructor(readonly service: OpenAICodexService) {}
   state(): LoginState { return this.stateValue }
 
-  async start(method: 'browser' | 'device_code', present: CommandHandlerContext['present']): Promise<string> {
+  async start(method: 'browser' | 'device_code', presentation: PresentationClients | undefined): Promise<string> {
     if ((await this.service.authStatus()).authenticated) return 'OpenAI Codex is already signed in.'
-    if (this.operation === undefined) this.begin(method, present)
+    if (this.operation === undefined) this.begin(method, presentation?.openExternal)
     if (this.challenge === undefined) throw new Error('OpenAI Codex sign-in did not create an authorization challenge')
     return await this.challenge
   }
@@ -67,7 +68,7 @@ class LoginController {
     await this.operation?.catch(() => undefined)
   }
 
-  private begin(method: 'browser' | 'device_code', present: CommandHandlerContext['present']): void {
+  private begin(method: 'browser' | 'device_code', openExternal: OpenExternalClient | undefined): void {
     const cancellation = new AbortController()
     this.cancellation = cancellation
     this.stateValue = { status: 'signing-in' }
@@ -75,13 +76,15 @@ class LoginController {
       this.resolveChallenge = resolve
       this.rejectChallenge = reject
     })
+    let notifications = Promise.resolve()
     this.operation = this.service.login({
       signal: cancellation.signal,
       prompt: prompt => prompt.type === 'select' ? Promise.resolve(method) : waitForPromptAbort(prompt),
-      notify: event => { this.onEvent(event, present) },
+      notify: event => { notifications = notifications.then(() => this.onEvent(event, openExternal)) },
     }).then(
-      () => { this.stateValue = { status: 'idle' } },
-      (error: unknown) => {
+      async () => { await notifications; this.stateValue = { status: 'idle' } },
+      async (error: unknown) => {
+        await notifications.catch(() => undefined)
         this.stateValue = { status: 'error', message: safeMessage(error) }
         this.rejectChallenge?.(error)
       },
@@ -93,15 +96,19 @@ class LoginController {
     })
   }
 
-  private onEvent(event: AuthEvent, present: CommandHandlerContext['present']): void {
+  private async onEvent(event: AuthEvent, openExternal: OpenExternalClient | undefined): Promise<void> {
     if (event.type === 'device_code') {
       this.resolveChallenge?.(`Open ${event.verificationUri}\nEnter code: ${event.userCode}\nUse /codex status after approval.`)
       return
     }
     if (event.type !== 'auth_url') return
     try {
-      const opened = present({ apiVersion: 'presentation.dsh/v1alpha1', kind: 'OpenExternal', uri: event.url })
-      this.resolveChallenge?.(opened
+      const signal = this.cancellation?.signal
+      const result = await openExternal?.openExternal(
+        { uri: event.url },
+        signal === undefined ? undefined : { signal },
+      )
+      this.resolveChallenge?.(result?.status === 'submitted'
         ? 'Opened the ChatGPT authorization page. Use /codex status after approval.'
         : `Open this ChatGPT authorization page: ${event.url}\nUse /codex status after approval.`)
     } catch (error: unknown) {
@@ -174,10 +181,9 @@ export class OpenAICodexCommand implements CommandHandler {
       }
       if (action === 'login') {
         if (parts.length > 2 || (parts[1] !== undefined && parts[1] !== 'browser' && parts[1] !== 'device')) return failure(HELP)
-        const canOpen = context.presentation?.contracts.some(contract =>
-          contract.apiVersion === 'presentation.dsh/v1alpha1' && contract.kind === 'OpenExternal') === true
+        const canOpen = context.presentation?.openExternal !== undefined
         const method = parts[1] === 'browser' ? 'browser' : parts[1] === 'device' || !canOpen ? 'device_code' : 'browser'
-        return success(await login.start(method, context.present))
+        return success(await login.start(method, context.presentation))
       }
       if (action === 'logout' && parts.length === 1) { await login.logout(); return success('OpenAI Codex is signed out.') }
       if (action === 'usage' && parts.length === 1) return success(formatUsage(await service.usage()))

@@ -66,7 +66,6 @@ async function activateStandard(facet = standardFacet): Promise<{ command: Comma
 
 const invocation = {
   signal: new AbortController().signal,
-  present: () => false,
 }
 
 describe('standard command with optional dsh-tui completion', () => {
@@ -127,12 +126,46 @@ describe('standard command with optional dsh-tui completion', () => {
     const { command } = await activateStandard(createOpenAICodexFacet(service))
     await expect(command.execute({ rawInput: ' login' }, {
       ...invocation,
-      presentation: { clientId: 'tui-1', contracts: [] },
+      presentation: { descriptor: { clientId: 'tui-1', contracts: [] } },
     })).resolves.toEqual({
       kind: 'success',
       text: 'Open https://example.test/device\nEnter code: ABCD-EFGH\nUse /codex status after approval.',
     })
     expect(selected).toBe('device_code')
+  })
+
+  it('opens browser login through the scoped OpenExternal client', async () => {
+    const service = fakeService()
+    vi.mocked(service.authStatus).mockResolvedValue({ authenticated: false })
+    const openExternal = vi.fn(async () => ({
+      status: 'submitted' as const,
+      value: { accepted: true as const },
+    }))
+    vi.mocked(service.login).mockImplementation(async interaction => {
+      expect(await interaction.prompt({
+        type: 'select', message: 'Choose login method',
+        options: [{ id: 'browser', label: 'Browser' }, { id: 'device_code', label: 'Device' }],
+      })).toBe('browser')
+      interaction.notify({ type: 'auth_url', url: 'https://example.test/authorize' })
+    })
+    const { command } = await activateStandard(createOpenAICodexFacet(service))
+    await expect(command.execute({ rawInput: ' login' }, {
+      ...invocation,
+      presentation: {
+        descriptor: {
+          clientId: 'tui-1',
+          contracts: [{ apiVersion: 'presentation.dsh/v1alpha1', kind: 'OpenExternal' }],
+        },
+        openExternal: { openExternal },
+      },
+    })).resolves.toEqual({
+      kind: 'success',
+      text: 'Opened the ChatGPT authorization page. Use /codex status after approval.',
+    })
+    expect(openExternal).toHaveBeenCalledWith(
+      { uri: 'https://example.test/authorize' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
   })
 
   it('projects provider authentication state without an adapter-specific snapshot type', async () => {

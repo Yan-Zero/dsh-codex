@@ -15,6 +15,12 @@
       {
         "apiVersion": "commands.dsh/v1alpha1",
         "kind": "Command"
+      },
+      {
+        "apiVersion": "presentation.dsh/v1alpha1",
+        "kind": "OpenExternal",
+        "optional": true,
+        "fallback": "use device-code authentication"
       }
     ]
   },

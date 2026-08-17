@@ -47,6 +47,7 @@
   "peerDependencies": {
     "@dsh-std/command": "^0.1.0",
     "@dsh-std/model": "^0.1.0",
+    "@dsh-std/presentation": "^0.1.0",
     "@dsh-std/sdk": "^0.1.0",
     "@earendil-works/pi-ai": "^0.82.1"
   },
