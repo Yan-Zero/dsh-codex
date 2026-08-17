@@ -66,6 +66,9 @@
       "platform": "web"
     }
   },
+  "dependencies": {
+    "undici": "8.10.0"
+  },
   "peerDependencies": {
     "@earendil-works/pi-ai": "^0.82.1",
     "@deepseek-ai/cordis": "^4.0.1-rc.1",

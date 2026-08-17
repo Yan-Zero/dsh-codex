@@ -75,5 +75,15 @@ export class OpenAICodexService {
   updateResponsePreferences(patch: Partial<ResponseApiPreferences>): Promise<ResponseApiPreferences> {
     return this.policy.updateResponseApi(patch)
   }
+
+  /** Return the proxy URL currently applied to all Codex traffic. */
+  proxyUrl(): string {
+    return this.policy.proxySnapshot()
+  }
+
+  /** Persist a new proxy URL; the global dispatcher re-applies it immediately. */
+  updateProxyUrl(proxyUrl: string): Promise<string> {
+    return this.policy.updateProxy(proxyUrl)
+  }
 }
 
