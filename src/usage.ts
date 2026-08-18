@@ -16,6 +16,8 @@ export interface OpenAICodexRateLimitWindow {
   readonly remainingPercent: number
   /** Server-declared rolling-window length in seconds. */
   readonly windowSeconds: number
+  /** Exact Unix timestamp at which this window next resets, when disclosed. */
+  readonly resetsAt?: number
 }
 
 /** One separately metered Codex quota bucket. */
@@ -46,6 +48,8 @@ export interface OpenAICodexIndividualLimit {
   readonly remaining: string
   /** Percent still available for progress rendering. */
   readonly remainingPercent: number
+  /** Exact Unix timestamp at which this limit next resets, when disclosed. */
+  readonly resetsAt?: number
 }
 
 /** Secret-free quota projection returned to the browser. */
@@ -62,6 +66,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function parseResetTimestamp(value: unknown): number | undefined {
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0
+    || value > 253_402_300_799) {
+    throw new Error('OpenAI Codex returned an invalid reset timestamp')
+  }
+  return value
+}
+
 function parseWindow(value: unknown): OpenAICodexRateLimitWindow | undefined {
   if (value === undefined || value === null) return undefined
   if (!isRecord(value)) throw new Error('OpenAI Codex returned a malformed rate-limit window')
@@ -73,7 +86,12 @@ function parseWindow(value: unknown): OpenAICodexRateLimitWindow | undefined {
   if (typeof windowSeconds !== 'number' || !Number.isInteger(windowSeconds) || windowSeconds <= 0) {
     throw new Error('OpenAI Codex returned an invalid rate-limit window duration')
   }
-  return { remainingPercent: 100 - usedPercent, windowSeconds }
+  const resetsAt = parseResetTimestamp(value['reset_at'])
+  return {
+    remainingPercent: 100 - usedPercent,
+    windowSeconds,
+    ...resetsAt === undefined ? {} : { resetsAt },
+  }
 }
 
 function parseLimit(id: string, name: string | undefined, value: unknown): OpenAICodexRateLimit | undefined {
@@ -120,11 +138,13 @@ function parseIndividualLimit(value: unknown): OpenAICodexIndividualLimit | unde
     || remainingPercent < 0 || remainingPercent > 100) {
     throw new Error('OpenAI Codex returned an invalid individual-limit percentage')
   }
+  const resetsAt = parseResetTimestamp(individual['reset_at'])
   return {
     limit: exactAmount(individual, 'limit'),
     used: exactAmount(individual, 'used'),
     remaining: exactAmount(individual, 'remaining'),
     remainingPercent,
+    ...resetsAt === undefined ? {} : { resetsAt },
   }
 }
 

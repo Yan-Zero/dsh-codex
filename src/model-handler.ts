@@ -186,7 +186,16 @@ export class OpenAICodexModelHandler implements ModelProviderHandler {
   }
 
   listModels() {
-    return this.models.getModels(OPENAI_CODEX_PROVIDER).map(model => ({
+    const models = this.models.getModels(OPENAI_CODEX_PROVIDER)
+    const modelOrder = new Map([
+      ['gpt-5.6-luna', 0],
+      ['gpt-5.6-terra', 1],
+      ['gpt-5.6-sol', 2],
+    ])
+    const orderedModels = models.filter(model => modelOrder.has(model.id))
+      .sort((left, right) => modelOrder.get(left.id)! - modelOrder.get(right.id)!)
+    let orderedIndex = 0
+    return models.map(model => modelOrder.has(model.id) ? orderedModels[orderedIndex++]! : model).map(model => ({
       id: model.id, name: model.name, inputModalities: model.input,
       contextWindow: model.contextWindow, maxTokens: model.maxTokens, reasoning: model.reasoning,
       selectable: true,

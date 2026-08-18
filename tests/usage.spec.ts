@@ -31,8 +31,8 @@ function payload(): unknown {
     rate_limit: {
       allowed: true,
       limit_reached: false,
-      primary_window: { used_percent: 13, limit_window_seconds: 604_800 },
-      secondary_window: { used_percent: 40.5, limit_window_seconds: 18_000 },
+      primary_window: { used_percent: 13, limit_window_seconds: 604_800, reset_at: 1_800_000_000 },
+      secondary_window: { used_percent: 40.5, limit_window_seconds: 18_000, reset_at: 1_799_500_000 },
     },
     credits: { has_credits: true, unlimited: false, balance: '42.5' },
     spend_control: {
@@ -42,6 +42,7 @@ function payload(): unknown {
         used: '25',
         remaining: '75',
         remaining_percent: 75,
+        reset_at: 1_800_500_000,
       },
     },
     additional_rate_limits: [{
@@ -50,7 +51,7 @@ function payload(): unknown {
       rate_limit: {
         allowed: true,
         limit_reached: false,
-        primary_window: { used_percent: 0, limit_window_seconds: 604_800 },
+        primary_window: { used_percent: 0, limit_window_seconds: 604_800, reset_at: 1_800_000_000 },
       },
     }],
   }
@@ -78,14 +79,14 @@ describe('OpenAI Codex usage', () => {
           id: 'codex',
           name: 'Codex',
           windows: [
-            { remainingPercent: 87, windowSeconds: 604_800 },
-            { remainingPercent: 59.5, windowSeconds: 18_000 },
+            { remainingPercent: 87, windowSeconds: 604_800, resetsAt: 1_800_000_000 },
+            { remainingPercent: 59.5, windowSeconds: 18_000, resetsAt: 1_799_500_000 },
           ],
         },
         {
           id: 'codex_spark',
           name: 'Codex Spark',
-          windows: [{ remainingPercent: 100, windowSeconds: 604_800 }],
+          windows: [{ remainingPercent: 100, windowSeconds: 604_800, resetsAt: 1_800_000_000 }],
         },
       ],
       credits: { unlimited: false, balance: '42.5' },
@@ -94,6 +95,7 @@ describe('OpenAI Codex usage', () => {
         used: '25',
         remaining: '75',
         remainingPercent: 75,
+        resetsAt: 1_800_500_000,
       },
     })
   })
@@ -104,6 +106,14 @@ describe('OpenAI Codex usage', () => {
         primary_window: { used_percent: 101, limit_window_seconds: 18_000 },
       },
     })).toThrow(/invalid used percentage/)
+  })
+
+  it('rejects invalid reset timestamps instead of publishing misleading dates', () => {
+    expect(() => parseOpenAICodexUsage({
+      rate_limit: {
+        primary_window: { used_percent: 1, limit_window_seconds: 18_000, reset_at: 'tomorrow' },
+      },
+    })).toThrow(/invalid reset timestamp/)
   })
 
   it('reads the fixed usage endpoint with refreshed plugin credentials', async () => {

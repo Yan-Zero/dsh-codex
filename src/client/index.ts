@@ -1,19 +1,24 @@
-/** Browser half: standard UI facet mapped to DSH Web by @dsh-std/adapter-dsh. */
+/** Browser half: a standard local UI facet, mapped by the active shell adapter. */
 
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import {
-  defineDshWebUiFacet,
-  WEB_CLIENT_ACTIVATION_API_VERSION,
-  WEB_CLIENT_ACTIVATION_KIND,
-  WEB_SETTINGS_SECTION,
-  WEB_TOOL_CALL_VIEW,
-  webSettingsSectionRequirement,
-  webToolCallViewRequirement,
-  type DshWebLocalHost,
-} from '@dsh-std/adapter-dsh/client'
 import { defineComponentManifest } from '@dsh-std/manifest'
-import { defineFacet } from '@dsh-std/sdk'
-import { contributionHostRequirement, type ContributionHostClient } from '@dsh-std/ui'
+import {
+  defineFacet,
+} from '@dsh-std/sdk'
+import {
+  contributionHostRequirement,
+  type ContributionHostClient,
+} from '@dsh-std/ui'
+import {
+  API_VERSION as BROWSER_UI_API_VERSION,
+  LOCAL_MODULE_ACTIVATION_KIND,
+  SETTINGS_SECTION,
+  TOOL_CALL_VIEW,
+  defineBrowserUiFacet,
+  settingsSectionRequirement,
+  toolCallViewRequirement,
+  type BrowserUiHost,
+} from '@dsh-std/ui-browser'
 import { ImagegenToolView, type ImageLoader } from './ImagegenToolView.tsx'
 import { OpenAICodexSettings } from './OpenAICodexSettings.tsx'
 import { en, zh, type OpenAICodexSettingsKey } from './locales.ts'
@@ -25,13 +30,13 @@ const manifest = defineComponentManifest({
   spec: { facets: [{
     name: 'web',
     activation: {
-      apiVersion: WEB_CLIENT_ACTIVATION_API_VERSION,
-      kind: WEB_CLIENT_ACTIVATION_KIND,
+      apiVersion: BROWSER_UI_API_VERSION,
+      kind: LOCAL_MODULE_ACTIVATION_KIND,
       spec: { module: './client.js' },
     },
     protocols: { requires: [contributionHostRequirement({ surfaces: [
-      webSettingsSectionRequirement(),
-      webToolCallViewRequirement(),
+      settingsSectionRequirement(),
+      toolCallViewRequirement(),
     ] })] },
   }] },
 })
@@ -43,12 +48,12 @@ const facet = defineFacet(activation => {
   if (ui === undefined) throw new Error('OpenAI Codex Web facet requires a ContributionHost')
   const settings = ui.register({
     descriptor: {
-      id: 'openai-codex', surface: WEB_SETTINGS_SECTION,
+      id: 'openai-codex', surface: SETTINGS_SECTION,
       content: { label: 'OpenAI Codex', order: 15 },
     },
     localModule: {
       component: OpenAICodexSettings,
-      setup(host: DshWebLocalHost) {
+      setup(host: BrowserUiHost) {
         const locale = host.locale('settings.openai-codex', { zh, en })
         return {
           locale: 'settings.openai-codex',
@@ -64,12 +69,12 @@ const facet = defineFacet(activation => {
   })
   const tool = ui.register({
     descriptor: {
-      id: 'imagegen', surface: WEB_TOOL_CALL_VIEW,
+      id: 'imagegen', surface: TOOL_CALL_VIEW,
       content: { tool: 'imagegen' },
     },
     localModule: {
       component: ImagegenToolView,
-      setup(host: DshWebLocalHost) {
+      setup(host: BrowserUiHost) {
         const locale = host.locale('tool.openai-codex', { zh, en })
         const imageUrls = new Map<string, Promise<string>>()
         const createdUrls = new Set<string>()
@@ -113,7 +118,7 @@ const facet = defineFacet(activation => {
   activation.scope.add(() => tool.dispose())
 })
 
-const plugin = defineDshWebUiFacet({ manifest, facet: 'web', module: facet })
+const plugin = defineBrowserUiFacet({ manifest, facet: 'web', module: facet })
 
 export const name = plugin.name
 export const inject = plugin.inject

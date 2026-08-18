@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
-import type { DshWebCommandResult } from '@dsh-std/adapter-dsh/client'
+import type { BrowserUiCommandResult } from '@dsh-std/ui-browser'
 import type { OpenAICodexUsage } from '../usage.ts'
 import type { ImageToolPreferences } from '../preferences.ts'
 import type { ResponseApiPreferences } from '../preferences.ts'
@@ -23,7 +23,7 @@ export interface OpenAICodexSettingsInjected {
   /** Localized page copy. */
   t: (key: OpenAICodexSettingsKey, params?: Record<string, unknown>) => string
   /** Execute the component's standard command in one live DSH session. */
-  runCommand(sessionId: string, line: string): Promise<DshWebCommandResult | undefined>
+  runCommand(sessionId: string, line: string): Promise<BrowserUiCommandResult | undefined>
 }
 
 /** Props delivered by the settings slot renderer. */
@@ -109,6 +109,12 @@ function formatPercent(percent: number): string {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(percent)
 }
 
+function resetDetail(resetsAt: number | undefined, t: OpenAICodexSettingsInjected['t']): string | undefined {
+  return resetsAt === undefined
+    ? undefined
+    : t('resetsAt', { time: new Date(resetsAt * 1_000).toLocaleString() })
+}
+
 function QuotaBar({
   label,
   percent,
@@ -117,7 +123,7 @@ function QuotaBar({
 }: {
   label: string
   percent: number
-  detail?: string
+  detail?: string | undefined
   t: OpenAICodexSettingsInjected['t']
 }) {
   const display = formatPercent(percent)
@@ -160,6 +166,7 @@ function UsageLimits({ usage, quotaError, t }: {
               key={window.windowSeconds}
               label={windowLabel(window.windowSeconds, t)}
               percent={window.remainingPercent}
+              detail={resetDetail(window.resetsAt, t)}
               t={t}
             />
           ))}
@@ -169,10 +176,10 @@ function UsageLimits({ usage, quotaError, t }: {
         <QuotaBar
           label={t('monthlyLimit')}
           percent={usage.individualLimit.remainingPercent}
-          detail={t('exactRemaining', {
+          detail={[t('exactRemaining', {
             remaining: usage.individualLimit.remaining,
             limit: usage.individualLimit.limit,
-          })}
+          }), resetDetail(usage.individualLimit.resetsAt, t)].filter(Boolean).join(' · ')}
           t={t}
         />
       )}
@@ -201,7 +208,7 @@ function dotStyle(status: AccountStatus['status']): CSSProperties {
   return { width: 9, height: 9, borderRadius: '50%', flex: '0 0 auto', background: color }
 }
 
-function commandText(result: DshWebCommandResult | undefined, line: string): string {
+function commandText(result: BrowserUiCommandResult | undefined, line: string): string {
   if (result === undefined) throw new Error(`unknown command: ${line}`)
   if (result.kind === 'error') throw new Error(result.text ?? `command failed: ${line}`)
   return result.text ?? ''
@@ -223,29 +230,51 @@ function parseConfig(text: string): ImageToolPreferences & ResponseApiPreference
 }
 
 function parseUsage(text: string): OpenAICodexUsage {
-  const limits = new Map<string, { id: string; name: string; windows: Array<{ remainingPercent: number; windowSeconds: number }> }>()
+  const limits = new Map<string, {
+    id: string
+    name: string
+    windows: Array<OpenAICodexUsage['rateLimits'][number]['windows'][number]>
+  }>()
   let credits: OpenAICodexUsage['credits']
   let individualLimit: OpenAICodexUsage['individualLimit']
+  const parseDuration = (value: string): number => {
+    const match = /^(\d+)(d|h|min|s)$/u.exec(value)
+    if (match === null) return Number.NaN
+    const multiplier = match[2] === 'd' ? 86_400 : match[2] === 'h' ? 3_600 : match[2] === 'min' ? 60 : 1
+    return Number(match[1]) * multiplier
+  }
+  const parseReset = (value: string | undefined): number | undefined => {
+    if (value === undefined) return undefined
+    const milliseconds = Date.parse(value)
+    return Number.isFinite(milliseconds) ? Math.floor(milliseconds / 1_000) : undefined
+  }
   for (const line of text.split(/\r?\n/u)) {
-    const window = /^(.*?) \((\d+)s\): (\d+(?:\.\d+)?)% remaining$/u.exec(line)
+    const window = /^(.*?) \((\d+(?:d|h|min|s))\): (\d+(?:\.\d+)?)% remaining(?: · resets (.+))?$/u.exec(line)
     if (window !== null) {
       const name = window[1]!
       const entry = limits.get(name) ?? { id: name, name, windows: [] }
-      entry.windows.push({ windowSeconds: Number(window[2]), remainingPercent: Number(window[3]) })
+      const resetsAt = parseReset(window[4])
+      entry.windows.push({
+        windowSeconds: parseDuration(window[2]!),
+        remainingPercent: Number(window[3]),
+        ...resetsAt === undefined ? {} : { resetsAt },
+      })
       limits.set(name, entry)
       continue
     }
-    const individual = /^Individual limit: (\d+(?:\.\d+)?)% remaining \(([^/]+)\/([^\)]+)\)$/u.exec(line)
+    const individual = /^Individual limit: (\d+(?:\.\d+)?)% remaining \(([^/]+)\/([^\)]+)\)(?: · resets (.+))?$/u.exec(line)
     if (individual !== null) {
       const remaining = individual[2]!
       const limit = individual[3]!
       const remainingNumber = Number(remaining)
       const limitNumber = Number(limit)
+      const resetsAt = parseReset(individual[4])
       individualLimit = {
         remainingPercent: Number(individual[1]), remaining, limit,
         used: Number.isFinite(remainingNumber) && Number.isFinite(limitNumber)
           ? String(limitNumber - remainingNumber)
           : '0',
+        ...resetsAt === undefined ? {} : { resetsAt },
       }
       continue
     }

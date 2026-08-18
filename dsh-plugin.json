@@ -52,6 +52,12 @@
             "zh": "管理 OpenAI Codex"
           },
           "description": "Manage the OpenAI Codex account and provider settings.",
+          "placements": [
+            {
+              "apiVersion": "x-ccch1mneyyy.tui/v1alpha1",
+              "kind": "CommandLine"
+            }
+          ],
           "children": [
             {
               "name": "status",

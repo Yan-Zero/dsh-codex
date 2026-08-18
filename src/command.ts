@@ -2,7 +2,11 @@
 
 import type { AuthEvent, AuthPrompt } from '@earendil-works/pi-ai'
 import type { CommandHandler, CommandHandlerContext } from '@dsh-std/command'
-import type { ExternalRedirectClient, PresentationClients } from '@dsh-std/presentation'
+import {
+  externalRedirectSupport,
+  type ExternalRedirectClient,
+  type PresentationClients,
+} from '@dsh-std/presentation'
 import type { OpenAICodexService } from './service.ts'
 import type { OpenAICodexUsage } from './usage.ts'
 
@@ -46,6 +50,12 @@ function redirectUrl(query: Readonly<Record<string, readonly string[]>>): string
     for (const value of values) url.searchParams.append(name, value)
   }
   return url.href
+}
+
+function supportsExternalRedirect(presentation: PresentationClients | undefined): boolean {
+  return presentation?.descriptor.contracts.some(contract =>
+    contract.apiVersion === externalRedirectSupport.apiVersion
+      && contract.kind === externalRedirectSupport.kind) ?? false
 }
 
 class LoginController {
@@ -179,13 +189,35 @@ function formatExpiry(expiresAt: Date | undefined): string {
     : ` Access token expires ${expiresAt.toISOString()}; refresh is automatic.`
 }
 
+function formatWindowDuration(seconds: number): string {
+  if (seconds % 86_400 === 0) return `${seconds / 86_400}d`
+  if (seconds % 3_600 === 0) return `${seconds / 3_600}h`
+  if (seconds % 60 === 0) return `${seconds / 60}min`
+  return `${seconds}s`
+}
+
+function formatResetTimestamp(resetsAt: number | undefined): string {
+  if (resetsAt === undefined) return ''
+  const date = new Date(resetsAt * 1_000)
+  const part = (value: number): string => String(value).padStart(2, '0')
+  const offsetMinutes = -date.getTimezoneOffset()
+  const offsetSign = offsetMinutes >= 0 ? '+' : '-'
+  const absoluteOffset = Math.abs(offsetMinutes)
+  const offset = `${offsetSign}${part(Math.floor(absoluteOffset / 60))}:${part(absoluteOffset % 60)}`
+  return ` · resets ${date.getFullYear()}-${part(date.getMonth() + 1)}-${part(date.getDate())}`
+    + `T${part(date.getHours())}:${part(date.getMinutes())}:${part(date.getSeconds())}${offset}`
+}
+
 function formatUsage(usage: OpenAICodexUsage): string {
   const lines: string[] = []
   for (const limit of usage.rateLimits) for (const window of limit.windows) {
-    lines.push(`${limit.name ?? limit.id} (${window.windowSeconds}s): ${window.remainingPercent.toFixed(1)}% remaining`)
+    lines.push(`${limit.name ?? limit.id} (${formatWindowDuration(window.windowSeconds)}): `
+      + `${window.remainingPercent.toFixed(1)}% remaining${formatResetTimestamp(window.resetsAt)}`)
   }
   if (usage.individualLimit !== undefined) {
-    lines.push(`Individual limit: ${usage.individualLimit.remainingPercent.toFixed(1)}% remaining (${usage.individualLimit.remaining}/${usage.individualLimit.limit})`)
+    lines.push(`Individual limit: ${usage.individualLimit.remainingPercent.toFixed(1)}% remaining `
+      + `(${usage.individualLimit.remaining}/${usage.individualLimit.limit})`
+      + formatResetTimestamp(usage.individualLimit.resetsAt))
   }
   if (usage.credits !== undefined) lines.push(`Credits: ${usage.credits.unlimited ? 'unlimited' : usage.credits.balance ?? 'available'}`)
   return lines.length === 0 ? 'OpenAI Codex usage is currently unavailable.' : lines.join('\n')
@@ -236,7 +268,11 @@ export class OpenAICodexCommand implements CommandHandler {
       }
       if (action === 'login') {
         if (parts.length > 2 || (parts[1] !== undefined && parts[1] !== 'browser' && parts[1] !== 'device')) return failure(HELP)
-        const method = parts[1] === 'browser' ? 'browser' : 'device_code'
+        const method = parts[1] === 'device'
+          ? 'device_code'
+          : parts[1] === 'browser' || supportsExternalRedirect(context.presentation)
+            ? 'browser'
+            : 'device_code'
         return success(await login.start(method, context.presentation))
       }
       if (action === 'logout' && parts.length === 1) { await login.logout(); return success('OpenAI Codex is signed out.') }

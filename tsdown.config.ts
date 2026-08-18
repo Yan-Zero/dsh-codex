@@ -5,7 +5,6 @@ const CLIENT_EXTERNALS = [
   'react/jsx-runtime',
   'react-dom',
   'react-dom/client',
-  '@dsh-std/adapter-dsh/client',
   '@deepseek-ai/cordis',
   '@deepseek-ai/dsh-attachment',
   '@deepseek-ai/dsh-client-runtime/client',
@@ -40,7 +39,7 @@ export default [
     dts: false,
     clean: false,
     deps: {
-      alwaysBundle: [/^@dsh-std\/(?!adapter-dsh)/],
+      alwaysBundle: [/^@dsh-std\//],
       neverBundle: [...CLIENT_EXTERNALS],
     },
     define: { 'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production') },

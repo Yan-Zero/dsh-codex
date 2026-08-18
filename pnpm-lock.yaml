@@ -39,6 +39,34 @@ overrides:
 importers:
 
   .:
+    dependencies:
+      '@dsh-std/command':
+        specifier: 0.1.0-rc2
+        version: 0.1.0-rc2
+      '@dsh-std/manifest':
+        specifier: 0.1.0-rc1
+        version: 0.1.0-rc1
+      '@dsh-std/model':
+        specifier: 0.1.0-rc2
+        version: 0.1.0-rc2
+      '@dsh-std/presentation':
+        specifier: 0.1.0-rc1
+        version: 0.1.0-rc1
+      '@dsh-std/sdk':
+        specifier: 0.1.0-rc1
+        version: 0.1.0-rc1
+      '@dsh-std/session':
+        specifier: 0.1.0-rc1
+        version: 0.1.0-rc1
+      '@dsh-std/tool':
+        specifier: 0.1.0-rc1
+        version: 0.1.0-rc1
+      '@dsh-std/ui':
+        specifier: 0.1.0-rc1
+        version: 0.1.0-rc1
+      '@dsh-std/ui-browser':
+        specifier: 0.1.0-rc1
+        version: 0.1.0-rc1
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: 4.0.1
@@ -620,6 +648,58 @@ packages:
 
   '@deepseek-ai/schemastery@3.18.1':
     resolution: {integrity: sha512-Qn0FCSwCQnpnj6SB31I6i2sIKgKWnkbJM8O0EU91Gv2UsYVvtZTl6IA0sCwk2e2MZf5S8w5hpq9QkeVvK9qwxg==}
+
+  '@dsh-std/command@0.1.0-rc2':
+    resolution: {integrity: sha512-4kvnTxalYz+osXOh6EuPiJU7wCSV8CrXFeHCwfxaPqse0sWcQVQufXmxIhYdPq02KZzlppuwB9ZJmxhFF5eaKw==}
+    engines: {node: ^22.19 || >=24}
+
+  '@dsh-std/composition@0.1.0-rc1':
+    resolution: {integrity: sha512-sXZOjgicYfJNNhVu2erE8aExY/LFQuWJbdjDuNdCHe6DEvHOol2MdOxTyi4KeOEKPZmIMp8roA4OemTWo1Ak+w==}
+    engines: {node: ^22.19 || >=24}
+
+  '@dsh-std/connection@0.1.0-rc1':
+    resolution: {integrity: sha512-98fjGqfxnGJurPoMYzjqKl7hBCzLJFvWYmBcej8NxaL6enSuOA1/bpxd0B+tM8LEMyQzLsSAdKwSNL1SH/wGNg==}
+    engines: {node: ^22.19 || >=24}
+
+  '@dsh-std/core@0.1.0-rc1':
+    resolution: {integrity: sha512-jzr2BpH0wQ+peq0ywA+QazjeO6hRpuXLKd4x3EupozUYzynVkXJzf07xk89c9DzO9yfB1WNh9T+LCGcpxRq8PA==}
+    engines: {node: ^22.19 || >=24}
+
+  '@dsh-std/lifecycle@0.1.0-rc1':
+    resolution: {integrity: sha512-e13Atp+cnp/VaY44F2Cni9G3ki2OrvGLoHgGY91/gnq0B2tp587XmSqJvfK9VpeaIqW6WDJVqsHBigtml3Y40w==}
+    engines: {node: ^22.19 || >=24}
+
+  '@dsh-std/manifest@0.1.0-rc1':
+    resolution: {integrity: sha512-u4iaXOg8N03tPZYgwPwtrzvy7zODdjriQYolS6SyfYFCo5ojZCsACCPK0NZxQgHTVnQVZr8XMBHt/+GvQ++xmg==}
+    engines: {node: ^22.19 || >=24}
+
+  '@dsh-std/model@0.1.0-rc2':
+    resolution: {integrity: sha512-N62Du8QS5iqsOcdf7jvGVRHZqZloXin3p5ulLUJA2BYrSy5dsWM7XJaJb/2/4YWW4Eyfan5eN5ncPRBQpp6NJQ==}
+    engines: {node: ^22.19 || >=24}
+
+  '@dsh-std/presentation@0.1.0-rc1':
+    resolution: {integrity: sha512-5yqXp+QJa/uSQm2IrfriqYGvf6EvmUCluWIRkH6hTJNNhYMcTUb3aFhLJCA8SlCt96912zy4LHinUbiYZqfH8A==}
+    engines: {node: ^22.19 || >=24}
+
+  '@dsh-std/sdk@0.1.0-rc1':
+    resolution: {integrity: sha512-qWGGoJ5TZC8uckbpnFcg6mhXV3/YohPOoxCWVkoZPG/vRmmRUfAdG0l5Ci/XPljekHR9dko2747fhk81l6CBaw==}
+    engines: {node: ^22.19 || >=24}
+
+  '@dsh-std/session@0.1.0-rc1':
+    resolution: {integrity: sha512-H8RsR23vxp9Ck6XYDlaxyIifz0ae84Ukl8dQDmfhWtArU1fmVpnv1duns0MiBRGNn0m99TbdydNMAz8wRLrzIw==}
+    engines: {node: ^22.19 || >=24}
+
+  '@dsh-std/tool@0.1.0-rc1':
+    resolution: {integrity: sha512-nIni1yyTApZ66jbDo6pdXbFXmBaHfD7+nS7QAs/E5Iki9xGNPkKYd1zIY9aePdJfb0N0/3iMd8PNxx+mn/t5pQ==}
+    engines: {node: ^22.19 || >=24}
+
+  '@dsh-std/ui-browser@0.1.0-rc1':
+    resolution: {integrity: sha512-w48mOX8A3bESDIy7BScuJ+iW/ffx+rSmFAzQgP+TwpiG5x6eV3uOhij2FCk/rp9bRba5opigJnI8rQoX9oHrWQ==}
+    engines: {node: ^22.19 || >=24}
+
+  '@dsh-std/ui@0.1.0-rc1':
+    resolution: {integrity: sha512-a6NsXZ3JSy7Tkz7cJKM/VwRNvSyyakrh6Ar34YdoaUQjBi3OsMU58ULzEKQ6Rf+QAqW8DBmQuB+Y8Ho+hHuzWA==}
+    engines: {node: ^22.19 || >=24}
 
   '@earendil-works/pi-ai@0.82.1':
     resolution: {integrity: sha512-3WFYRhEp3lQB3444EhPMBcM7zSaEUE3eJgHOR7s4081NLqbw/FsWilIKWXSua0Gv3sRr7m9xMidR3pPDE7jI/A==}
@@ -2271,6 +2351,71 @@ snapshots:
     dependencies:
       '@deepseek-ai/cosmokit': 1.8.2
       '@standard-schema/spec': 1.1.0
+
+  '@dsh-std/command@0.1.0-rc2':
+    dependencies:
+      '@dsh-std/connection': 0.1.0-rc1
+      '@dsh-std/core': 0.1.0-rc1
+      '@dsh-std/manifest': 0.1.0-rc1
+      '@dsh-std/presentation': 0.1.0-rc1
+
+  '@dsh-std/composition@0.1.0-rc1':
+    dependencies:
+      '@dsh-std/core': 0.1.0-rc1
+      '@dsh-std/manifest': 0.1.0-rc1
+
+  '@dsh-std/connection@0.1.0-rc1':
+    dependencies:
+      '@dsh-std/core': 0.1.0-rc1
+
+  '@dsh-std/core@0.1.0-rc1': {}
+
+  '@dsh-std/lifecycle@0.1.0-rc1':
+    dependencies:
+      '@dsh-std/composition': 0.1.0-rc1
+      '@dsh-std/core': 0.1.0-rc1
+      '@dsh-std/manifest': 0.1.0-rc1
+
+  '@dsh-std/manifest@0.1.0-rc1':
+    dependencies:
+      '@dsh-std/core': 0.1.0-rc1
+
+  '@dsh-std/model@0.1.0-rc2':
+    dependencies:
+      '@dsh-std/command': 0.1.0-rc2
+      '@dsh-std/connection': 0.1.0-rc1
+      '@dsh-std/core': 0.1.0-rc1
+      '@dsh-std/manifest': 0.1.0-rc1
+
+  '@dsh-std/presentation@0.1.0-rc1':
+    dependencies:
+      '@dsh-std/connection': 0.1.0-rc1
+      '@dsh-std/core': 0.1.0-rc1
+
+  '@dsh-std/sdk@0.1.0-rc1':
+    dependencies:
+      '@dsh-std/core': 0.1.0-rc1
+      '@dsh-std/lifecycle': 0.1.0-rc1
+
+  '@dsh-std/session@0.1.0-rc1':
+    dependencies:
+      '@dsh-std/manifest': 0.1.0-rc1
+
+  '@dsh-std/tool@0.1.0-rc1':
+    dependencies:
+      '@dsh-std/composition': 0.1.0-rc1
+      '@dsh-std/manifest': 0.1.0-rc1
+
+  '@dsh-std/ui-browser@0.1.0-rc1':
+    dependencies:
+      '@dsh-std/manifest': 0.1.0-rc1
+      '@dsh-std/sdk': 0.1.0-rc1
+      '@dsh-std/ui': 0.1.0-rc1
+
+  '@dsh-std/ui@0.1.0-rc1':
+    dependencies:
+      '@dsh-std/core': 0.1.0-rc1
+      '@dsh-std/manifest': 0.1.0-rc1
 
   '@earendil-works/pi-ai@0.82.1(ws@8.21.3)(zod@4.4.3)':
     dependencies:

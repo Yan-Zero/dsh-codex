@@ -108,7 +108,7 @@ describe('standard component boundary', () => {
     })).resolves.toMatchObject({ kind: 'success' })
   })
 
-  it('defaults to device-code login even when OpenExternal is available', async () => {
+  it('defaults to device-code login when no callback receiver is available', async () => {
     const candidate = service()
     candidate.authStatus = async () => ({ authenticated: false })
     candidate.login = async interaction => {
@@ -140,7 +140,33 @@ describe('standard component boundary', () => {
     expect(openExternal).not.toHaveBeenCalled()
   })
 
-  it('routes the exact browser callback through invocation-scoped presentation clients', async () => {
+  it('shows readable quota windows and the exact next reset time', async () => {
+    const candidate = service()
+    candidate.usage = async () => ({
+      rateLimits: [{
+        id: 'codex', name: 'Codex',
+        windows: [{ remainingPercent: 35, windowSeconds: 604_800, resetsAt: 1_800_000_000 }],
+      }],
+    })
+    const facet = createOpenAICodexFacet(candidate)
+    let command: CommandHandler | undefined
+    await facet.activate({
+      extensions: { publish(reference: { kind: string }, _name: string, handler: unknown) {
+        if (reference.kind === 'Command') command = handler as CommandHandler
+        return () => undefined
+      } },
+      scope: { signal: new AbortController().signal, add: (dispose: () => void | Promise<void>) => dispose },
+    } as never)
+
+    const result = await command!.execute({ rawInput: 'usage' }, {
+      signal: new AbortController().signal,
+    })
+    expect(result).toMatchObject({ kind: 'success' })
+    expect(result.text).toMatch(/^Codex \(7d\): 35\.0% remaining · resets \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/u)
+    expect(result.text).not.toContain('604800s')
+  })
+
+  it('defaults to browser login and routes the exact callback through invocation-scoped presentation clients', async () => {
     const candidate = service()
     candidate.authStatus = async () => ({ authenticated: false })
     candidate.login = async interaction => {
@@ -170,7 +196,7 @@ describe('standard component boundary', () => {
       cancel() {},
     }))
     const command = published.get('Command:codex') as CommandHandler
-    await expect(command.execute({ rawInput: 'login browser' }, {
+    await expect(command.execute({ rawInput: 'login' }, {
       signal: new AbortController().signal,
       presentation: {
         descriptor: {
