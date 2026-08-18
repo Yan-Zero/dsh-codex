@@ -12,7 +12,7 @@ import type { Credential, CredentialInfo, CredentialStore, OAuthCredential } fro
 /** Provider route and pi-ai provider id owned by this bundle. */
 export const OPENAI_CODEX_PROVIDER = 'openai-codex'
 
-/** Basename of the OAuth document inside the Harness home. */
+/** Basename of the OAuth document inside the DSH home. */
 export const OPENAI_CODEX_AUTH_FILENAME = '.openai-codex-auth.json'
 
 /** Current on-disk format; pre-release readers reject every other version. */
@@ -94,7 +94,7 @@ function cloneCredential(credential: OAuthCredential): OAuthCredential {
 
 /**
  * Resolve the default OAuth document path.
- * @param dshHome - optional Harness-home override.
+ * @param dshHome - optional DSH-home override.
  * @returns the absolute owner-only document path.
  */
 export function openAICodexAuthPath(dshHome?: string): string {

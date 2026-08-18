@@ -2,38 +2,34 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
+import type { DshWebCommandResult } from '@dsh-std/adapter-dsh/client'
 import type { OpenAICodexUsage } from '../usage.ts'
-import type { ImageToolPreferences } from '../tool-policy.ts'
-import type { ResponseApiPreferences } from '../tool-policy.ts'
+import type { ImageToolPreferences } from '../preferences.ts'
+import type { ResponseApiPreferences } from '../preferences.ts'
 import type { OpenAICodexSettingsKey } from './locales.ts'
 
-const STATUS_PATH = '/plugins/dsh-openai-codex/auth/status'
-const LOGIN_PATH = '/plugins/dsh-openai-codex/auth/login'
-const LOGOUT_PATH = '/plugins/dsh-openai-codex/auth/logout'
-const IMAGE_TOOLS_PATH = '/plugins/dsh-openai-codex/image-tools'
-const RESPONSE_API_PATH = '/plugins/dsh-openai-codex/response-api'
 const POLL_INTERVAL_MS = 1_000
 const USAGE_POLL_INTERVAL_MS = 60_000
 
 type AccountStatus =
   | { status: 'loading' }
   | { status: 'signed-out' }
-  | { status: 'signing-in' }
+  | { status: 'signing-in'; message?: string }
   | { status: 'signed-in'; usage: OpenAICodexUsage; quotaError?: string }
   | { status: 'error'; message: string }
-
-interface LoginChallenge {
-  url: string
-}
 
 /** Dependencies injected by the browser plugin entry. */
 export interface OpenAICodexSettingsInjected {
   /** Localized page copy. */
   t: (key: OpenAICodexSettingsKey, params?: Record<string, unknown>) => string
+  /** Execute the component's standard command in one live DSH session. */
+  runCommand(sessionId: string, line: string): Promise<DshWebCommandResult | undefined>
 }
 
 /** Props delivered by the settings slot renderer. */
-export type OpenAICodexSettingsProps = Partial<OpenAICodexSettingsInjected>
+export type OpenAICodexSettingsProps = Partial<OpenAICodexSettingsInjected> & {
+  useSessions?<T>(selector: (state: { readonly current?: string }) => T): T
+}
 
 const pageStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 720 }
 const titleStyle: CSSProperties = { margin: 0, fontSize: 20, lineHeight: '28px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }
@@ -205,26 +201,76 @@ function dotStyle(status: AccountStatus['status']): CSSProperties {
   return { width: 9, height: 9, borderRadius: '50%', flex: '0 0 auto', background: color }
 }
 
-async function jsonRequest<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-  const response = await fetch(path, {
-    method,
-    headers: { accept: 'application/json', ...body === undefined ? {} : { 'content-type': 'application/json' } },
-    credentials: 'same-origin',
-    ...body === undefined ? {} : { body: JSON.stringify(body) },
-  })
-  const value: unknown = await response.json().catch(() => undefined)
-  if (!response.ok) {
-    const message = typeof value === 'object' && value !== null && 'error' in value && typeof value.error === 'string'
-      ? value.error
-      : `HTTP ${response.status}`
-    throw new Error(message)
+function commandText(result: DshWebCommandResult | undefined, line: string): string {
+  if (result === undefined) throw new Error(`unknown command: ${line}`)
+  if (result.kind === 'error') throw new Error(result.text ?? `command failed: ${line}`)
+  return result.text ?? ''
+}
+
+function parseConfig(text: string): ImageToolPreferences & ResponseApiPreferences {
+  const rows = new Map(text.split(/\r?\n/u).map(line => line.split(': ', 2) as [string, string]))
+  const enabled = (key: string): boolean => {
+    const value = rows.get(key)
+    if (value !== 'on' && value !== 'off') throw new Error(`OpenAI Codex returned an invalid ${key} setting`)
+    return value === 'on'
   }
-  return value as T
+  return {
+    modifyReadImage: enabled('read-image'),
+    shareImagegenWithOtherModels: enabled('imagegen-other-models'),
+    useWebSocketContextReuse: enabled('websocket-context'),
+    useNativeCompaction: enabled('native-compaction'),
+  }
+}
+
+function parseUsage(text: string): OpenAICodexUsage {
+  const limits = new Map<string, { id: string; name: string; windows: Array<{ remainingPercent: number; windowSeconds: number }> }>()
+  let credits: OpenAICodexUsage['credits']
+  let individualLimit: OpenAICodexUsage['individualLimit']
+  for (const line of text.split(/\r?\n/u)) {
+    const window = /^(.*?) \((\d+)s\): (\d+(?:\.\d+)?)% remaining$/u.exec(line)
+    if (window !== null) {
+      const name = window[1]!
+      const entry = limits.get(name) ?? { id: name, name, windows: [] }
+      entry.windows.push({ windowSeconds: Number(window[2]), remainingPercent: Number(window[3]) })
+      limits.set(name, entry)
+      continue
+    }
+    const individual = /^Individual limit: (\d+(?:\.\d+)?)% remaining \(([^/]+)\/([^\)]+)\)$/u.exec(line)
+    if (individual !== null) {
+      const remaining = individual[2]!
+      const limit = individual[3]!
+      const remainingNumber = Number(remaining)
+      const limitNumber = Number(limit)
+      individualLimit = {
+        remainingPercent: Number(individual[1]), remaining, limit,
+        used: Number.isFinite(remainingNumber) && Number.isFinite(limitNumber)
+          ? String(limitNumber - remainingNumber)
+          : '0',
+      }
+      continue
+    }
+    const credit = /^Credits: (.+)$/u.exec(line)?.[1]
+    if (credit !== undefined) credits = credit === 'unlimited'
+      ? { unlimited: true }
+      : { unlimited: false, ...(credit === 'available' ? {} : { balance: credit }) }
+  }
+  if (limits.size === 0 && credits === undefined && individualLimit === undefined
+    && text !== 'OpenAI Codex usage is currently unavailable.') {
+    throw new Error('OpenAI Codex returned an invalid usage projection')
+  }
+  return {
+    rateLimits: [...limits.values()],
+    ...(credits === undefined ? {} : { credits }),
+    ...(individualLimit === undefined ? {} : { individualLimit }),
+  }
 }
 
 /** OpenAI Codex account status and OAuth actions. */
-export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
-  if (t === undefined) throw new Error('OpenAI Codex settings requires its translation function')
+export function OpenAICodexSettings({ t, runCommand, useSessions }: OpenAICodexSettingsProps) {
+  if (t === undefined || runCommand === undefined || useSessions === undefined) {
+    throw new Error('OpenAI Codex settings requires its standard Web dependencies')
+  }
+  const sessionId = useSessions(state => state.current)
   const [status, setStatus] = useState<AccountStatus>({ status: 'loading' })
   const [busy, setBusy] = useState(false)
   const [imageTools, setImageTools] = useState<ImageToolPreferences | undefined>()
@@ -234,27 +280,50 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   const [responseApiBusy, setResponseApiBusy] = useState(false)
   const [responseApiError, setResponseApiError] = useState<string | undefined>()
 
+  const request = useCallback(async (line: string): Promise<string> => {
+    if (sessionId === undefined) throw new Error(t('noSession'))
+    return commandText(await runCommand(sessionId, line), line)
+  }, [runCommand, sessionId, t])
+
   const refresh = useCallback(async () => {
     try {
-      setStatus(await jsonRequest<AccountStatus>(STATUS_PATH))
+      if (sessionId === undefined) throw new Error(t('noSession'))
+      const account = await runCommand(sessionId, '/codex status')
+      const text = account?.text ?? ''
+      if (text.includes('waiting for approval')) {
+        setStatus(current => current.status === 'signing-in' ? current : { status: 'signing-in' })
+      } else if (account?.kind === 'success' && text.includes('is signed in')) {
+        try {
+          setStatus({ status: 'signed-in', usage: parseUsage(await request('/codex usage')) })
+        } catch (error: unknown) {
+          setStatus({
+            status: 'signed-in', usage: { rateLimits: [] },
+            quotaError: error instanceof Error ? error.message : t('quotaUnavailable'),
+          })
+        }
+      } else if (text.includes('signed out')) {
+        setStatus({ status: 'signed-out' })
+      } else {
+        throw new Error(text || t('requestFailed'))
+      }
     } catch (error: unknown) {
       setStatus({ status: 'error', message: error instanceof Error ? error.message : t('requestFailed') })
     }
-  }, [t])
+  }, [request, runCommand, sessionId, t])
 
   useEffect(() => { void refresh() }, [refresh])
   useEffect(() => {
-    void jsonRequest<ImageToolPreferences>(IMAGE_TOOLS_PATH).then(
-      value => { setImageTools(value); setImageToolsError(undefined) },
+    void request('/codex config').then(
+      value => { setImageTools(parseConfig(value)); setImageToolsError(undefined) },
       () => { setImageToolsError(t('imageToolSettingsFailed')) },
     )
-  }, [t])
+  }, [request, t])
   useEffect(() => {
-    void jsonRequest<ResponseApiPreferences>(RESPONSE_API_PATH).then(
-      value => { setResponseApi(value); setResponseApiError(undefined) },
+    void request('/codex config').then(
+      value => { setResponseApi(parseConfig(value)); setResponseApiError(undefined) },
       () => { setResponseApiError(t('responseApiSettingsFailed')) },
     )
-  }, [t])
+  }, [request, t])
   useEffect(() => {
     const interval = status.status === 'signing-in'
       ? POLL_INTERVAL_MS
@@ -270,12 +339,15 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
     setBusy(true)
     setStatus({ status: 'signing-in' })
     try {
-      const challenge = await jsonRequest<LoginChallenge>(LOGIN_PATH, 'POST')
+      const challenge = await request('/codex login device')
+      const url = challenge.match(/https?:\/\/\S+/u)?.[0]
+      setStatus({ status: 'signing-in', message: challenge })
       if (popup === null) {
         setStatus({ status: 'error', message: t('popupBlocked') })
         return
       }
-      popup.location.replace(challenge.url)
+      if (url === undefined) throw new Error('OpenAI Codex did not return a device authorization URL')
+      popup.location.replace(url)
     } catch (error: unknown) {
       popup?.close()
       setStatus({ status: 'error', message: error instanceof Error ? error.message : t('requestFailed') })
@@ -287,7 +359,7 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   const signOut = async (): Promise<void> => {
     setBusy(true)
     try {
-      await jsonRequest<{ ok: true }>(LOGOUT_PATH, 'POST')
+      await request('/codex logout')
       setStatus({ status: 'signed-out' })
     } catch (error: unknown) {
       setStatus({ status: 'error', message: error instanceof Error ? error.message : t('requestFailed') })
@@ -300,7 +372,9 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
     setImageToolsBusy(true)
     setImageToolsError(undefined)
     try {
-      setImageTools(await jsonRequest<ImageToolPreferences>(IMAGE_TOOLS_PATH, 'POST', patch))
+      const [key, value] = Object.entries(patch)[0] ?? []
+      const setting = key === 'modifyReadImage' ? 'read-image' : 'imagegen-other-models'
+      setImageTools(parseConfig(await request(`/codex set ${setting} ${value === true ? 'on' : 'off'}`)))
     } catch {
       setImageToolsError(t('imageToolSettingsFailed'))
     } finally {
@@ -312,7 +386,9 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
     setResponseApiBusy(true)
     setResponseApiError(undefined)
     try {
-      setResponseApi(await jsonRequest<ResponseApiPreferences>(RESPONSE_API_PATH, 'POST', patch))
+      const [key, value] = Object.entries(patch)[0] ?? []
+      const setting = key === 'useWebSocketContextReuse' ? 'websocket-context' : 'native-compaction'
+      setResponseApi(parseConfig(await request(`/codex set ${setting} ${value === true ? 'on' : 'off'}`)))
     } catch {
       setResponseApiError(t('responseApiSettingsFailed'))
     } finally {
@@ -346,9 +422,10 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
             ? null
             : status.status === 'signed-in'
             ? <button type="button" style={buttonStyle} disabled={busy} onClick={() => { void signOut() }}>{busy ? t('working') : t('logout')}</button>
-            : <button type="button" style={primaryButtonStyle} disabled={busy} onClick={() => { void signIn() }}>{busy ? t('working') : status.status === 'error' ? t('loginAgain') : t('login')}</button>}
+            : <button type="button" style={primaryButtonStyle} disabled={busy || sessionId === undefined} onClick={() => { void signIn() }}>{busy ? t('working') : status.status === 'error' ? t('loginAgain') : t('login')}</button>}
         </div>
         {status.status === 'error' ? <p style={errorStyle}>{status.message}</p> : null}
+        {status.status === 'signing-in' && status.message !== undefined ? <p style={{ ...bodyStyle, whiteSpace: 'pre-wrap' }}>{status.message}</p> : null}
         {status.status === 'signed-in'
           ? <UsageLimits
               usage={status.usage}

@@ -2,7 +2,7 @@
 
 import type { AuthEvent, AuthPrompt } from '@earendil-works/pi-ai'
 import type { CommandHandler, CommandHandlerContext } from '@dsh-std/command'
-import type { OpenExternalClient, PresentationClients } from '@dsh-std/presentation'
+import type { ExternalRedirectClient, PresentationClients } from '@dsh-std/presentation'
 import type { OpenAICodexService } from './service.ts'
 import type { OpenAICodexUsage } from './usage.ts'
 
@@ -18,6 +18,8 @@ const HELP = [
 
 type Result = Awaited<ReturnType<CommandHandler['execute']>>
 type LoginState = { status: 'idle' } | { status: 'signing-in' } | { status: 'error'; message: string }
+
+const OPENAI_CODEX_REDIRECT_URI = 'http://localhost:1455/auth/callback'
 
 function success(text: string): Result { return { kind: 'success', text } }
 function failure(text: string): Result { return { kind: 'error', text } }
@@ -38,6 +40,14 @@ function waitForPromptAbort(prompt: AuthPrompt): Promise<string> {
   })
 }
 
+function redirectUrl(query: Readonly<Record<string, readonly string[]>>): string {
+  const url = new URL(OPENAI_CODEX_REDIRECT_URI)
+  for (const [name, values] of Object.entries(query)) {
+    for (const value of values) url.searchParams.append(name, value)
+  }
+  return url.href
+}
+
 class LoginController {
   private stateValue: LoginState = { status: 'idle' }
   private operation: Promise<void> | undefined
@@ -45,15 +55,25 @@ class LoginController {
   private challenge: Promise<string> | undefined
   private resolveChallenge: ((message: string) => void) | undefined
   private rejectChallenge: ((error: unknown) => void) | undefined
+  private manualCode: Promise<string> | undefined
+  private resolveManualCode: ((value: string) => void) | undefined
 
   constructor(readonly service: OpenAICodexService) {}
   state(): LoginState { return this.stateValue }
 
   async start(method: 'browser' | 'device_code', presentation: PresentationClients | undefined): Promise<string> {
     if ((await this.service.authStatus()).authenticated) return 'OpenAI Codex is already signed in.'
-    if (this.operation === undefined) this.begin(method, presentation?.openExternal)
+    if (this.operation === undefined) this.begin(method, presentation)
     if (this.challenge === undefined) throw new Error('OpenAI Codex sign-in did not create an authorization challenge')
-    return await this.challenge
+    const operation = this.operation
+    const challenge = await this.challenge
+    if (method === 'browser' && operation !== undefined) {
+      // ExternalRedirect is invocation-scoped, so keep the command invocation
+      // alive until the redirect has been handed to pi-ai and token exchange ends.
+      await operation
+      return 'OpenAI Codex sign-in complete.'
+    }
+    return challenge
   }
 
   async logout(): Promise<void> {
@@ -68,7 +88,7 @@ class LoginController {
     await this.operation?.catch(() => undefined)
   }
 
-  private begin(method: 'browser' | 'device_code', openExternal: OpenExternalClient | undefined): void {
+  private begin(method: 'browser' | 'device_code', presentation: PresentationClients | undefined): void {
     const cancellation = new AbortController()
     this.cancellation = cancellation
     this.stateValue = { status: 'signing-in' }
@@ -76,11 +96,20 @@ class LoginController {
       this.resolveChallenge = resolve
       this.rejectChallenge = reject
     })
+    this.manualCode = method === 'browser'
+      ? new Promise<string>(resolve => { this.resolveManualCode = resolve })
+      : undefined
     let notifications = Promise.resolve()
     this.operation = this.service.login({
       signal: cancellation.signal,
-      prompt: prompt => prompt.type === 'select' ? Promise.resolve(method) : waitForPromptAbort(prompt),
-      notify: event => { notifications = notifications.then(() => this.onEvent(event, openExternal)) },
+      prompt: prompt => {
+        if (prompt.type === 'select') return Promise.resolve(method)
+        if (prompt.type === 'manual_code' && this.manualCode !== undefined) {
+          return Promise.race([this.manualCode, waitForPromptAbort(prompt)])
+        }
+        return waitForPromptAbort(prompt)
+      },
+      notify: event => { notifications = notifications.then(() => this.onEvent(event, presentation)) },
     }).then(
       async () => { await notifications; this.stateValue = { status: 'idle' } },
       async (error: unknown) => {
@@ -93,10 +122,12 @@ class LoginController {
       this.cancellation = undefined
       this.resolveChallenge = undefined
       this.rejectChallenge = undefined
+      this.manualCode = undefined
+      this.resolveManualCode = undefined
     })
   }
 
-  private async onEvent(event: AuthEvent, openExternal: OpenExternalClient | undefined): Promise<void> {
+  private async onEvent(event: AuthEvent, presentation: PresentationClients | undefined): Promise<void> {
     if (event.type === 'device_code') {
       this.resolveChallenge?.(`Open ${event.verificationUri}\nEnter code: ${event.userCode}\nUse /codex status after approval.`)
       return
@@ -104,13 +135,37 @@ class LoginController {
     if (event.type !== 'auth_url') return
     try {
       const signal = this.cancellation?.signal
-      const result = await openExternal?.openExternal(
+      const redirect = presentation?.externalRedirect?.receive(
+        { exactRedirectUri: OPENAI_CODEX_REDIRECT_URI },
+        signal === undefined ? undefined : { signal },
+      )
+      let receiverReady = false
+      let callback: Awaited<ReturnType<ExternalRedirectClient['receive']>['result']> | undefined
+      if (redirect !== undefined) {
+        const first = await Promise.race([
+          redirect.ready.then(() => ({ kind: 'ready' as const })),
+          redirect.result.then(result => ({ kind: 'result' as const, result })),
+        ])
+        if (first.kind === 'ready') receiverReady = true
+        else callback = first.result
+      }
+      const result = await presentation?.openExternal?.openExternal(
         { uri: event.url },
         signal === undefined ? undefined : { signal },
       )
       this.resolveChallenge?.(result?.status === 'submitted'
         ? 'Opened the ChatGPT authorization page. Use /codex status after approval.'
         : `Open this ChatGPT authorization page: ${event.url}\nUse /codex status after approval.`)
+      if (redirect === undefined) return
+      callback ??= await redirect.result
+      if (callback.status === 'submitted') {
+        this.resolveManualCode?.(redirectUrl(callback.value.query))
+        return
+      }
+      // If the exact address was already occupied, pi-ai's own local listener is
+      // still the authoritative fallback. Once the presentation-side receiver
+      // announced readiness, however, losing it makes this browser flow terminal.
+      if (receiverReady) throw new Error(`Browser callback receiver ${callback.status}`)
     } catch (error: unknown) {
       this.cancellation?.abort(error)
       this.rejectChallenge?.(error)
@@ -137,11 +192,11 @@ function formatUsage(usage: OpenAICodexUsage): string {
 }
 
 function formatConfig(service: OpenAICodexService): string {
-  const image = service.imagePreferences()
+  const images = service.imagePreferences()
   const responses = service.responsePreferences()
   return [
-    `read-image: ${image.modifyReadImage ? 'on' : 'off'}`,
-    `imagegen-other-models: ${image.shareImagegenWithOtherModels ? 'on' : 'off'}`,
+    `read-image: ${images.modifyReadImage ? 'on' : 'off'}`,
+    `imagegen-other-models: ${images.shareImagegenWithOtherModels ? 'on' : 'off'}`,
     `websocket-context: ${responses.useWebSocketContextReuse ? 'on' : 'off'}`,
     `native-compaction: ${responses.useNativeCompaction ? 'on' : 'off'}`,
   ].join('\n')
@@ -181,8 +236,7 @@ export class OpenAICodexCommand implements CommandHandler {
       }
       if (action === 'login') {
         if (parts.length > 2 || (parts[1] !== undefined && parts[1] !== 'browser' && parts[1] !== 'device')) return failure(HELP)
-        const canOpen = context.presentation?.openExternal !== undefined
-        const method = parts[1] === 'browser' ? 'browser' : parts[1] === 'device' || !canOpen ? 'device_code' : 'browser'
+        const method = parts[1] === 'browser' ? 'browser' : 'device_code'
         return success(await login.start(method, context.presentation))
       }
       if (action === 'logout' && parts.length === 1) { await login.logout(); return success('OpenAI Codex is signed out.') }

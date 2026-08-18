@@ -2,7 +2,7 @@
 
 `dsh-codex` is discovered through its package-root Community v0.15 `dsh-plugin.json`. This experimental branch is installed from a built source checkout, not from the npm registry.
 
-The build environment and target profile must already provide `@dsh-std/sdk`, `@dsh-std/command`, `@dsh-std/model`, and a Host capable of loading the declared facet. How those experimental standard packages are installed is outside this component's installation procedure.
+The build environment and target profile must provide the declared DSH Standard peer packages and a Host capable of loading the facet. How those experimental standard packages are installed is outside this component's installation procedure.
 
 Build the checkout, then link its absolute path into the profile:
 
@@ -19,6 +19,8 @@ Sign in through the standard command exposed by the active client:
 ```text
 /codex login
 ```
+
+This defaults to device-code authentication. `/codex login browser` uses `ExternalRedirect` to reserve the exact `http://localhost:1455/auth/callback` URI on the presentation side, while retaining pi-ai's Runtime-side listener as a local fallback.
 
 The standalone credential command can also be run through the package executable:
 

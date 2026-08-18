@@ -11,6 +11,7 @@ import type {
 import { openaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-codex'
 import type {
   ModelExecutionContext,
+  ModelContentBlock,
   ModelGenerateRequest,
   ModelMessage,
   ModelProviderHandler,
@@ -18,7 +19,41 @@ import type {
 } from '@dsh-std/model'
 import { OpenAICodexCredentialStore, OPENAI_CODEX_PROVIDER } from './store.ts'
 import { OpenAICodexResponseRuntime } from './responses.ts'
-import type { ResponseApiPreferences } from './tool-policy.ts'
+import type { ResponseApiPreferences } from './preferences.ts'
+
+/** Provider idle ceiling preserved from the former DSH-specific adapter. */
+export const OPENAI_CODEX_STREAM_IDLE_TIMEOUT_MS = 300_000
+
+async function* withIdleTimeout<T>(
+  source: AsyncIterable<T>,
+  controller: AbortController,
+  timeoutMs: number,
+): AsyncIterable<T> {
+  const iterator = source[Symbol.asyncIterator]()
+  try {
+    while (true) {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const timeout = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          const error = new Error(`OpenAI Codex stream was idle for ${timeoutMs}ms`)
+          controller.abort(error)
+          reject(error)
+        }, timeoutMs)
+      })
+      let next: IteratorResult<T>
+      try {
+        next = await Promise.race([iterator.next(), timeout])
+      } finally {
+        if (timer !== undefined) clearTimeout(timer)
+      }
+      if (next.done) return
+      yield next.value
+    }
+  } finally {
+    controller.abort()
+    await iterator.return?.()
+  }
+}
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -97,14 +132,15 @@ function assistantMessage(message: ModelMessage): AssistantMessage {
   }
 }
 
-async function userContent(message: ModelMessage, context: ModelExecutionContext) {
+async function inputContent(content: readonly ModelContentBlock[], context: ModelExecutionContext) {
   const result: Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }> = []
-  for (const block of message.content) {
+  for (const block of content) {
     if (block.type === 'text' && typeof block.text === 'string') result.push({ type: 'text', text: block.text })
     if (block.type === 'image') {
       const image = await context.readImage(block.reference)
       result.push({ type: 'image', data: Buffer.from(image.data).toString('base64'), mimeType: image.mediaType })
     }
+    if (block.type === 'tool-result') result.push(...await inputContent(block.content, context))
   }
   return result
 }
@@ -119,13 +155,11 @@ async function toPiMessages(messages: readonly ModelMessage[], context: ModelExe
     }
     const toolResult = message.content.find(block => block.type === 'tool-result')
     if (toolResult !== undefined && typeof toolResult.toolCallId === 'string') {
-      const nested = toolResult.content
-      const text = nested.flatMap(block => block.type === 'text' ? [block.text] : []).join('')
       output.push({ role: 'toolResult', toolCallId: toolResult.toolCallId,
         toolName: typeof toolResult.name === 'string' ? toolResult.name : 'tool',
-        content: [{ type: 'text', text }], isError: toolResult.isError === true, timestamp: 0 })
+        content: await inputContent(toolResult.content, context), isError: toolResult.isError === true, timestamp: 0 })
     } else {
-      output.push({ role: 'user', content: await userContent(message, context), timestamp: 0 })
+      output.push({ role: 'user', content: await inputContent(message.content, context), timestamp: 0 })
     }
   }
   return output
@@ -144,6 +178,7 @@ export class OpenAICodexModelHandler implements ModelProviderHandler {
   constructor(
     credentials: OpenAICodexCredentialStore,
     private readonly preferences: () => ResponseApiPreferences,
+    private readonly streamIdleTimeoutMs = OPENAI_CODEX_STREAM_IDLE_TIMEOUT_MS,
   ) {
     this.models = createModels({ credentials })
     this.responses = new OpenAICodexResponseRuntime(preferences)
@@ -171,14 +206,17 @@ export class OpenAICodexModelHandler implements ModelProviderHandler {
     const release = request.purpose === 'compaction'
       ? this.responses.enterCompaction(request.sessionId)
       : undefined
+    const idle = new AbortController()
+    const signal = AbortSignal.any([execution.signal, idle.signal])
     try {
-      for await (const event of this.models.streamSimple(model, context, {
-        signal: execution.signal,
+      const events = this.models.streamSimple(model, context, {
+        signal,
         ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
         ...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
         ...(request.reasoningEffort === undefined ? {} : { reasoning: request.reasoningEffort as never }),
         ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
-      })) {
+      })
+      for await (const event of withIdleTimeout(events, idle, this.streamIdleTimeoutMs)) {
         if (event.type === 'text_start') yield { type: 'block-start', index: event.contentIndex, blockType: 'text' }
         else if (event.type === 'text_delta') yield { type: 'text-delta', index: event.contentIndex, text: event.delta }
         else if (event.type === 'text_end') yield { type: 'block-end', index: event.contentIndex, block: { type: 'text', text: event.content } }
@@ -204,6 +242,9 @@ export class OpenAICodexModelHandler implements ModelProviderHandler {
           yield { type: 'finish', reason: { kind: event.reason, failure: { code: 'PROVIDER_ERROR', message: event.error.errorMessage ?? 'OpenAI Codex request failed' } } }
         }
       }
-    } finally { release?.() }
+    } finally {
+      idle.abort()
+      release?.()
+    }
   }
 }

@@ -1,20 +1,17 @@
-/** Shared host service consumed by optional OpenAI Codex front-door adapters. */
+/** Shared provider service consumed by standard command, model, and tool handlers. */
 
 import type { AuthInteraction } from '@earendil-works/pi-ai'
 import { openaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-codex'
 import { loginOpenAICodex, logoutOpenAICodex, openAICodexAuthStatus } from './auth.ts'
 import type { OpenAICodexAuthStatus } from './auth.ts'
 import { OpenAICodexCredentialStore } from './store.ts'
-import { ImageToolPolicy } from './tool-policy.ts'
-import type {
-  ImageToolPreferences,
-  ResponseApiPreferences,
-} from './tool-policy.ts'
+import { ImageToolPolicy } from './preferences.ts'
+import type { ImageToolPreferences, OpenAICodexPreferences, ResponseApiPreferences } from './preferences.ts'
 import { readOpenAICodexRateLimits } from './usage.ts'
 import type { OpenAICodexUsage } from './usage.ts'
 
 /** Initial settings contributed by the bundle configuration. */
-export type OpenAICodexServiceOptions = Partial<ImageToolPreferences & ResponseApiPreferences>
+export type OpenAICodexServiceOptions = Partial<OpenAICodexPreferences>
 
 export interface OpenAICodexModelSummary {
   readonly id: string
@@ -23,15 +20,15 @@ export interface OpenAICodexModelSummary {
 }
 
 /**
- * One provider-owned host service shared by Web routes and terminal adapters.
- * Credentials and live policy stay singletons even when several front doors are mounted.
+ * One provider-owned service shared by the facet's standard handlers.
+ * Credentials and live policy stay singletons for one facet activation.
  */
 export class OpenAICodexService {
   readonly credentials = new OpenAICodexCredentialStore()
-  readonly policy: ImageToolPolicy
+  readonly preferences: ImageToolPolicy
 
-  constructor(options: OpenAICodexServiceOptions) {
-    this.policy = new ImageToolPolicy(options)
+  constructor(options: OpenAICodexServiceOptions = {}) {
+    this.preferences = new ImageToolPolicy(options)
   }
 
   /** Start the provider-native OAuth lifecycle. */
@@ -62,19 +59,16 @@ export class OpenAICodexService {
     return readOpenAICodexRateLimits(this.credentials)
   }
 
-  imagePreferences(): ImageToolPreferences {
-    return this.policy.snapshot()
-  }
-
-  updateImagePreferences(patch: Partial<ImageToolPreferences>): Promise<ImageToolPreferences> {
-    return this.policy.update(patch)
-  }
-
   responsePreferences(): ResponseApiPreferences {
-    return this.policy.responseApiSnapshot()
+    return this.preferences.responseApiSnapshot()
   }
 
   updateResponsePreferences(patch: Partial<ResponseApiPreferences>): Promise<ResponseApiPreferences> {
-    return this.policy.updateResponseApi(patch)
+    return this.preferences.updateResponseApi(patch)
+  }
+
+  imagePreferences(): ImageToolPreferences { return this.preferences.snapshot() }
+  updateImagePreferences(patch: Partial<ImageToolPreferences>): Promise<ImageToolPreferences> {
+    return this.preferences.update(patch)
   }
 }

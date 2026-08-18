@@ -15,27 +15,36 @@
     "url": "https://github.com/Yan-Zero/dsh-codex/issues"
   },
   "type": "module",
-  "main": "lib/standard.js",
-  "types": "lib/standard.d.ts",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
   "bin": {
     "dsh-openai-codex": "lib/bin.js"
   },
   "scripts": {
     "build": "pnpm run typecheck && tsdown",
-    "test": "vitest run tests/standard-component.spec.ts tests/store.spec.ts tests/response-runtime.spec.ts",
-    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.client.json",
     "check": "pnpm run typecheck && pnpm run test && pnpm run build",
     "prepublishOnly": "pnpm --config.minimum-release-age=0 run check"
   },
   "exports": {
     ".": {
-      "types": "./lib/standard.d.ts",
-      "default": "./lib/standard.js"
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
     },
     "./standard": {
       "types": "./lib/standard.d.ts",
       "default": "./lib/standard.js"
     },
+    "./search": {
+      "types": "./lib/search.d.ts",
+      "default": "./lib/search.js"
+    },
+    "./search-event": {
+      "types": "./lib/search-event.d.ts",
+      "default": "./lib/search-event.js"
+    },
+    "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
   "files": [
@@ -45,17 +54,70 @@
   ],
   "license": "Apache-2.0",
   "peerDependencies": {
+    "@deepseek-ai/dsh-session": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-web": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-locale": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-settings": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-tool": "^0.1.0-rc.6",
+    "@dsh-std/adapter-dsh": "^0.1.0",
     "@dsh-std/command": "^0.1.0",
+    "@dsh-std/manifest": "^0.1.0",
     "@dsh-std/model": "^0.1.0",
     "@dsh-std/presentation": "^0.1.0",
     "@dsh-std/sdk": "^0.1.0",
-    "@earendil-works/pi-ai": "^0.82.1"
+    "@dsh-std/session": "^0.1.0",
+    "@dsh-std/tool": "^0.1.0",
+    "@dsh-std/ui": "^0.1.0",
+    "@earendil-works/pi-ai": "^0.82.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-session": { "optional": true },
+    "@deepseek-ai/dsh-client-locale": { "optional": true },
+    "@deepseek-ai/dsh-client-runtime": { "optional": true },
+    "@deepseek-ai/dsh-client-ui-settings": { "optional": true },
+    "@deepseek-ai/dsh-client-ui-tool": { "optional": true },
+    "@dsh-std/adapter-dsh": { "optional": true },
+    "react": { "optional": true },
+    "react-dom": { "optional": true }
   },
   "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/dsh-attachment": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-brand": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-invariants": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-scope": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-session": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-timeout": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-typert-protocol": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-web": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-locale": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-runtime": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-settings": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-tool": "0.1.0-rc.6",
     "@earendil-works/pi-ai": "0.82.1",
     "@types/node": "^22.20.0",
+    "@types/react": "~18.3.1",
+    "@types/react-dom": "~18.3.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
     "tsdown": "^0.22.2",
     "typescript": "^5.9.3",
     "vitest": "^4.1.8"
+  },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@dsh-std/adapter-dsh",
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-tool"
+      ],
+      "platform": "web"
+    }
   }
 }

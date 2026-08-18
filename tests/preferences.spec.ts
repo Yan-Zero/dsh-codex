@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ImageToolPolicy } from '../src/tool-policy.ts'
+import { ImageToolPolicy } from '../src/preferences.ts'
 
 describe('ImageToolPolicy', () => {
   it('applies independent live toggles without depending on a host settings API', async () => {
@@ -27,7 +27,7 @@ describe('ImageToolPolicy', () => {
     })
   })
 
-  it('notifies the read_image enhancer when its live setting changes', async () => {
+  it('notifies the read_image enhancer only when an image setting changes', async () => {
     const policy = new ImageToolPolicy({
       modifyReadImage: true,
       shareImagegenWithOtherModels: false,
@@ -36,18 +36,22 @@ describe('ImageToolPolicy', () => {
     policy.watchImagePreferences(() => { changes++ })
 
     await policy.update({ modifyReadImage: false })
+    await policy.update({ modifyReadImage: false })
+    await policy.updateResponseApi({ useNativeCompaction: true })
 
     expect(policy.snapshot().modifyReadImage).toBe(false)
     expect(changes).toBe(1)
   })
 
-  it('migrates the retired store:true preference to WebSocket context reuse', () => {
-    const policy = new ImageToolPolicy({ useStatefulResponses: true })
-
-    expect(policy.responseApiSnapshot()).toEqual({
+  it('migrates the retired store:true preference unless the replacement is explicit', () => {
+    expect(new ImageToolPolicy({ useStatefulResponses: true }).responseApiSnapshot()).toEqual({
       useWebSocketContextReuse: true,
       useNativeCompaction: false,
     })
+    expect(new ImageToolPolicy({
+      useStatefulResponses: true,
+      useWebSocketContextReuse: false,
+    }).responseApiSnapshot().useWebSocketContextReuse).toBe(false)
   })
 
   it('keeps Codex imagegen access while applying its toggle to another provider', () => {

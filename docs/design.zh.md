@@ -1,4 +1,4 @@
-# 设计：OpenAI Codex 订阅组合包
+# 设计：可移植的 OpenAI Codex facet
 
 Status: implemented
 
@@ -6,52 +6,52 @@ Status: implemented
 
 ## 范围
 
-`dsh-codex` 是标准 DeepSeek Harness bundle。它在不修改 dsh 源码的前提下提供 ChatGPT OAuth、Codex 模型目录、Codex 独立搜索提供方、浏览器账号设置、可选的 `read_image` URL 扩展与 `imagegen`。当前 dsh profile 继续负责 agent loop、附件、文件系统策略、工具、权限、压缩与 Web 输入框。
+`dsh-codex` 是 Community v0.15 DSH 组件。发布的 Host facet 使用 DSH Standard 资源与 activation handler，贡献 `Command/codex`、`ModelProvider/openai-codex`、`Tool/imagegen`、针对 `read_image` 与按 provider 生效的 `web_search` 执行体的 `ToolOverride`，以及持久化的 Codex 搜索请求事件；显式包子路径提供独立 provider 与对应的 DSH session recorder。
 
-## 认证
+组件不包含 profile patch、私有 HTTP 设置路由或 TUI adapter。普通 DSH 包入口在 Host 侧为空实现；可选浏览器 bundle 则通过 `@dsh-std/adapter-dsh` 发布标准 local-module UI facet，而且只有 DSH Web 的 client-module host 存在时才会加载。Host facet 还按 dsh-tui RFC 0006 声明并发布 `Scene` handler；只有安装了对应私有 surface 的 dsh-tui 才会绑定它，其他 Host 可以忽略未知 extension，而不会加载 TUI service。agent loop、session、附件、工作区策略、工具执行、presentation 与命令界面仍由 Host 负责。
 
-插件把 OAuth 端点、PKCE／device code 行为、account id 提取、token 刷新和 Codex 请求认证交给 dsh 基础 bundle 提供的 pi-ai Codex provider。用户可以从插件的设置页面或 `dsh-openai-codex` 可执行文件启动同一套登录生命周期。Web 认证路由只接受回环地址的同源请求，返回 `no-store` JSON，且绝不暴露 token。账号页面会在不发送模型请求的情况下读取固定的 ChatGPT Codex usage 端点，把服务端用量转换为剩余百分比进度条；只有响应包含 credit 或 workspace limit 数值时才显示精确额度。
+## 认证与命令
 
-凭据以带版本的 JSON 文档存储在 `$DSH_HOME/.openai-codex-auth.json`。文件采用原子写入，跨进程锁覆盖登录、刷新和登出。该存储有意与 `~/.codex/auth.json` 分离；如果两个独立写入的客户端共享会轮换的 refresh token，其中任一方都可能使另一方的凭据失效。
+OAuth 端点、PKCE／device code、account id 提取、token 刷新和 Codex 请求认证均来自 pi-ai 的 OpenAI Codex provider。凭据原子写入 `$DSH_HOME/.openai-codex-auth.json`，与 Codex CLI／Desktop 的凭据相互独立。
 
-## 模型适配器与压缩
+Manifest 包含完整的 `/codex` 命令树，包括 `login`、`set` 和 `on|off` 的取值，因此远端 client 无需认识本包也能提供补全。`/codex login` 默认使用 device code；`/codex login browser` 是显式选择：它要求本次调用的 `ExternalRedirect` client 独占 pi-ai 的精确 URI `http://localhost:1455/auth/callback`，通过可选的 `OpenExternal` 打开授权地址，再把结构化 redirect query 送回 pi-ai 现有的 manual-code prompt。本地部署若该 URI 已被占用，仍由 pi-ai 自己在 Runtime 侧的 listener 接管。两项 presentation 能力均为可选，因此只有 device code 的 client 仍可加载 facet。
 
-bundle 使用公开的 `PiAiAdapter` 以及随附的 `openai-codex` provider 和模型目录。凭据解析器会刷新 OAuth 状态，并把所得 bearer token 作为显式的单次请求凭据传入。它不会发现环境中的 API Key，也不依赖 dsh 的私有适配器辅助函数。
+`/codex set` 修改当前 activation 内模型和工具 handler 的实时偏好。Web 设置 contribution 使用同一条标准命令，因此写操作仍进入 session 的正常命令生命周期；它不会引入 Codex 专属 settings 协议或私有 HTTP API。
 
-因此，普通轮次与 `dsh-compaction-basic` 都经过标准 LLM 服务。消息转换、流式输出、工具调用、图片附件解析、用量、溢出分类、加密推理回放和取消仍由适配器负责。Codex 请求始终使用 `store: false`，所以回放数据及完整的工具调用／结果配对保存在 Harness session 中，不依赖服务端持久化的 response id。
+## 模型提供方
 
-关闭 WebSocket 上下文复用时，插件明确选择 SSE，每个普通轮次都会发送 Harness 完整上下文。开启后选择 pi-ai 的 `websocket-cached` 传输，其行为与官方 Codex 客户端一致：续接状态属于单个会话可复用的连接；只有非输入请求属性一致，且新输入严格延续上一份请求和响应时，才发送 `previous_response_id` 与输入增量。历史失配、连接回退、进程重启、Fork 后的新会话 id 或压缩调用都会发送完整请求。插件不再保存自己的 response continuation。
+`OpenAICodexModelHandler` 基于 pi-ai 直接实现标准 `ModelProvider` 执行约定，不手工注册或注入 Host runtime service。它转换标准消息、工具、图片引用、工具结果、流事件、用量与 replay metadata。
 
-原生压缩模式在 `GenerateOptions.purpose === 'compaction'` 时去掉 `dsh-compaction-basic` 追加的私有摘要指令，按 Codex V2 流程通过普通 `codex/responses` 流发送请求：在历史末尾追加 `compaction_trigger`，并接收唯一的加密 `compaction` 输出 item。近期客户端消息和该输出会以插件标记封装成文本，让现有 compaction 事务继续负责范围校验、事件和表层替换。普通 Codex 请求构建完成后，adapter 会把该标记替换回原生 items；这项还原不依赖开关当前是否开启，因此检查点可以跨重启并在关闭实验后继续使用。V2 请求失败会在 provider 事件对外发出前切换到普通 SSE 摘要请求，并带上完整的 Harness 压缩提示词。
+工具结果中的图片通过请求级 `readImage` 设施解析，并作为提供方图片输入保留。加密推理签名与 response metadata 存入标准消息的 replay state。每次请求都响应取消，并保留旧实现五分钟的流空闲上限。
 
-ChatGPT Codex 路由不会执行普通 Responses 的输出 token 上限。压缩仍使用模型目录中的上下文容量与标准检查点替换，但配置的摘要 token 上限无法在此路由由服务端强制执行。
+Codex 请求使用 `store: false`。可选 WebSocket 上下文复用由 `OpenAICodexResponseRuntime` 管理；复用只属于单个 session，当 transport 或请求前缀不合适时发送完整请求。compaction 不进入这条 continuation 链。
 
-## 图片
+可选原生压缩会发送 `compaction_trigger`，把加密 checkpoint 保存到可移植标记，并在后续普通请求中展开。如果原生压缩在提供方输出对外发出前被拒绝，handler 会回退到普通标准压缩。Codex 路由有意不为 compaction 发送普通 Responses 输出 token 上限，与提供方行为一致。
 
-Codex 模型从 provider 目录继承其声明的输入模态。现有 dsh Web 输入框已经会把粘贴或拖放的图片转换为持久附件，因此浏览器插件只增加账号设置，不替换输入框。
+## 图片与工具
 
-开关启用时，插件会在 agent scope 注册一个定义，覆盖 Harness 现有的 `read_image`。它保留 `file_path`，并在 Schema 中增加与之互斥的 `url` 输入。本地调用委托给原定义，继续沿用其文件系统提供方、沙箱策略、观察事件、校验和远程工作区行为。URL 调用拒绝内嵌凭据，限制重定向次数与下载字节数，响应取消，通过签名识别 PNG、JPEG、WebP 与 GIF，并先经附件服务保存再返回图片块。实际路由的模型必须声明图片输入能力。
+标准 Tool 约定只携带可移植的执行数据：当前模型与模态、图片限制与校验、附件存取、工作区读写、嵌套 deferred content，以及原工具委托。DSH adapter 把这些设施映射到自己的附件、文件系统、沙箱、观察事件与工具 runtime。它们是同进程 activation value，不是新的跨端点协议。
 
-移除独立工具后，早期会话中的 `view_image` 结果仍可读取。Harness 会直接重放持久化的 `tool/result` 消息和附件引用，不要求当前工具注册表仍包含历史名称。模型若再次发起新的 `view_image` 调用，会收到普通的未知工具结果，并可改用 `read_image` 重试。
+`read_image` 是实时 override。工作区路径委托给 Host 原工具。HTTP(S) 输入拒绝内嵌凭据，逐次手工校验重定向，对声明长度和实际流字节实施上限，响应取消，识别 PNG/JPEG/WebP/GIF 签名，遵守部署 media 限制，保存附件并返回图片块。关闭 `modifyReadImage` 会撤销 override，恢复原定义。
 
-`imagegen` 始终调用固定的 ChatGPT Codex `gpt-image-2` 端点，与当前对话模型相互独立。调用方仍须声明图片输入能力，因为工具结果包含供下一轮模型使用的图片块。纯生成不带参考图；编辑可以接收最多五个工作区路径，或最近一至五张会话图片附件。这两种选择器互斥。路径读取使用 `ctx.fs`，会话参考图使用附件存储。base64 data URL 只存在于私有的提供方请求中。
+`imagegen` 始终调用固定的 Codex `gpt-image-2` 端点。它可以接收最多五个工作区路径，或最近一至五张会话图片，但不能同时使用两种来源。引用图由 Host 校验，data URL 只会进入提供方请求。生成 PNG 会保存为附件并写入当前工作区；工作区拒绝写入时会报告错误，但不会丢弃附件。接收结果的模型必须声明图片输入能力。偏好开关可以限制非 Codex provider 调用。
 
-每张生成的 PNG 都会保存为附件并写入当前工作区。`output_path` 用来指定位置；省略时，插件会创建防冲突的 `generated-<时间戳>-<id>.png` 文件名。插件为 `imagegen` 注册了专用工具视图，通过所属会话读取持久附件，在对话中直接显示缩略图并支持查看原图。已发布的 dsh 版本尚未公开二进制写入原语，因此插件包含本地原子写入兼容层；它只处理 `file:` 目标，并在写入前执行当前沙箱策略。非文件执行世界必须提供 `writeBytes`；`dsh-remote-ssh` 已实现该方法，并且只在 AHP 传输内部把字节编码为 base64。远程目标绝不回退到宿主路径。如果沙箱策略或文件系统能力拒绝写入，附件仍然可用，工具结果会报告保存失败。
+二进制工作区发布属于 DSH adapter 职责。adapter 内部实现会应用 write intent 与沙箱策略；本地文件采用同目录临时文件原子发布，远端写入委托给当前文件系统 provider，并发布 observation state。`dsh-codex` 本身不包含文件系统 provider 实现。
 
-实时设置会持久化两个独立开关。`modifyReadImage` 为每个实时 agent 添加或撤销 scoped `read_image` 定义；关闭后立即恢复 Harness 原始定义及其 Schema。`shareImagegenWithOtherModels` 决定其他提供方的视觉模型能否执行 `imagegen`，Codex 视觉模型始终保留访问权。两项默认均为开启。
+## 搜索
 
-## 搜索与会话历史
+`OpenAICodexSearchProvider` 继续实现 `@deepseek-ai/dsh-web` 的现有 provider 接缝。它保留固定的一方端点、可刷新 OAuth、cached/indexed/live 映射、发送前的精确无密请求回调、全阶段取消、诊断脱敏和规范化可引用结果。
 
-bundle 为 dsh 现有的 `web_search` 工具注册提供方。它使用 Codex 独立搜索端点与同一份可刷新 OAuth 凭据，把结构化文本结果转换为规范化的 HTTP(S) 引用，并支持 cached、indexed 和 live 模式。端点固定，profile 配置无法把 bearer token 重定向到其他地址。
+recorder 是必填项，并会在发送前写入 `web/openai-codex-search-llm-request`。Manifest 声明同一个现行事件契约；DSH adapter 会在当前进程余下生命周期内持续识别见过的持久事件名，因此 facet 重载不会让已有记录变得不可读。
 
-每次发送前，提供方都会把已经解析默认值且不含凭据的 `{ endpoint, body }` 精确记录为 `web/openai-codex-search-llm-request`。这个专用事件归插件所有：它通过声明合并加入 `SessionEventMap`，并在插件加载时注册到当前进程的 session 事件词汇。注册会保留到进程结束，避免热重载使已经写入的 session 突然无法读取。
+Host facet 发布按 provider 生效、仅替换执行体的 `web_search` `ToolOverride`。这与 dsh-tui 的实际 composition 一致：通用 Web service／provider 归 Host 所有，通用 Web tool 位于 agent scope。对 `openai-codex` agent，adapter 解析已有工具并只替换其 execution waterfall，不会在同层再注册一个同名工具。原 input/output schema、renderer、presentation metadata、timeout、并发属性与 TUI Web card 仍是权威定义。
 
-插件绝不会写入已停用的通用 `web/search-model-request` 事件。包含 Codex 专用事件的 session 必须在本插件已加载时读取，因为该请求属于模型可见历史，不能标记为可忽略。
+DSH Standard 不为此定义 Codex 或 Web Search 资源。产品 composition 仍可通过显式的 `dsh-codex/search` 与 `dsh-codex/search-event` 子路径接入现有 DSH Web 和 Session 生命周期。
 
-## 组合
+## 发布与测试
 
-`cordis.patch.yml` 提供一条 `llm-openai-codex` 配置项，为新建 agent 选择 `openai-codex` / `gpt-5.6-sol`，并选择对应的搜索提供方。用户 settings 中已经保存的模型仍然优先。shell、文件系统、skills、MCP、subagents、权限、附件、压缩与 `web_search` 工具仍由选定的 dsh profile 提供。
+构建入口为 `src/standard.ts`、`src/bin.ts`、`src/search.ts` 与 `src/search-event.ts`。包根入口只承担 facet，不再机械转导出所有内部 helper；DSH 专属搜索 API 使用显式子路径。`pnpm test` 运行所有保留的测试文件。测试直接驱动标准 handler，覆盖提供方 wire request、response transport 与压缩、认证存储、用量解析、图片工具、搜索、偏好，以及 Manifest／activation 边界。通用 DSH Host 映射在 `@dsh-std/adapter-dsh` 中测试。
 
 ## 后果
 
-用户可以在每个 Harness home 登录一次，无需 OpenAI Platform API Key 即可使用账号有权访问的 Codex 模型、视觉输入、压缩和 Codex 搜索。移除 bundle 不会删除凭据。ChatGPT 套餐资格、模型权限、配额、OAuth 行为和独立搜索协议仍由提供方控制，可能独立于本插件发生变化。
+任何兼容 Host 都能加载该组件，而无需手工 hook 私有 runtime registry。已经公开的 DSH 包仍可复用其正式类型与领域接缝。产品专属 UI 与 registry 集成留在本包之外。ChatGPT 套餐资格、模型权限、额度、OAuth 行为、图片端点和独立搜索端点仍由提供方控制，可能独立变化。

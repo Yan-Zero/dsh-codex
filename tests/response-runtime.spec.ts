@@ -64,7 +64,7 @@ describe('OpenAICodexResponseRuntime transport policy', () => {
     expect(transformed).toEqual({ store: false, input: [] })
   })
 
-  it('keeps Harness compaction calls off the conversation WebSocket chain', () => {
+  it('keeps compaction calls off the conversation WebSocket chain', () => {
     const harness = runtimeHarness(true)
     const leaveCompaction = harness.runtime.enterCompaction('session-compact')
 

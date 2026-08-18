@@ -1,24 +1,23 @@
 /** ChatGPT Codex image generation and reference-image editing. */
 
 import { randomUUID } from 'node:crypto'
-import { basename } from 'node:path'
 import { createModels } from '@earendil-works/pi-ai'
 import type { Models } from '@earendil-works/pi-ai'
 import { openaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-codex'
-import type { Context } from '@deepseek-ai/cordis'
-import { AttachmentId } from '@deepseek-ai/dsh-attachment'
-import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import type { ContentBlock, Message } from '@deepseek-ai/dsh-llm'
-import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { ToolDefinition, ToolExecution } from '@deepseek-ai/dsh-tools'
+import type {
+  ExecutableToolDefinition,
+  ToolExecutionContext,
+  ToolExecutionResult,
+  ToolHandler,
+  ToolImageData,
+  ToolJsonValue,
+} from '@dsh-std/tool'
 import type { OpenAICodexCredentialStore } from './store.ts'
 import { OPENAI_CODEX_PROVIDER } from './store.ts'
 import { OPENAI_CODEX_BASE_URL } from './search.ts'
-import { writeWorkspaceBytes } from './binary-fs.ts'
+import { imageMediaType } from './read-image.ts'
+import type { ImageToolPolicy } from './preferences.ts'
 import { assertImageCapable } from './image-capability.ts'
-import { imageMediaType } from './read-image-enhancement.ts'
-import type { ImageToolPolicy } from './tool-policy.ts'
 
 /** Stable Codex-compatible tool name. */
 export const IMAGEGEN_TOOL_NAME = 'imagegen'
@@ -30,6 +29,7 @@ export const OPENAI_CODEX_IMAGE_GENERATIONS_URL = `${OPENAI_CODEX_BASE_URL}/imag
 export const OPENAI_CODEX_IMAGE_EDITS_URL = `${OPENAI_CODEX_BASE_URL}/images/edits`
 
 const MAX_REFERENCE_IMAGES = 5
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
 function defaultOutputPath(now = new Date(), id = randomUUID()): string {
   const timestamp = now.toISOString().replace(/\.\d{3}Z$/u, 'Z').replaceAll(':', '-')
@@ -46,7 +46,7 @@ interface ImagegenArgs {
 interface ImagegenValue {
   prompt: string
   image: {
-    attachmentId: string
+    attachmentId?: string
     mediaType: 'image/png'
     bytes: number
     width: number
@@ -195,18 +195,13 @@ export class OpenAICodexImageClient {
   }
 }
 
-function attachmentRef(value: ImagegenValue['image']): ImageAttachmentRef {
-  return {
-    attachmentId: AttachmentId(value.attachmentId),
-    mediaType: value.mediaType,
-    bytes: value.bytes,
-    width: value.width,
-    height: value.height,
-    ...value.name === undefined ? {} : { name: value.name },
-  }
+function attachmentId(reference: unknown): string | undefined {
+  return isRecord(reference) && typeof reference['attachmentId'] === 'string'
+    ? reference['attachmentId']
+    : undefined
 }
 
-function contentOf(value: ImagegenValue): ContentBlock[] {
+function contentOf(value: ImagegenValue, reference: unknown): ToolExecutionResult['content'] {
   const file = value.file === undefined
     ? value.writeError === undefined ? '' : `\n<output_error>${value.writeError}</output_error>`
     : `\n<output_path operation="${value.file.operation}">${value.file.path}</output_path>`
@@ -215,186 +210,161 @@ function contentOf(value: ImagegenValue): ContentBlock[] {
       type: 'text',
       text: `<image>${value.image.mediaType}, ${value.image.width}x${value.image.height} px, ${value.image.bytes} bytes</image>${file}`,
     },
-    { type: 'image', attachment: attachmentRef(value.image) },
+    { type: 'image', reference },
   ]
 }
 
-function collectImageRefs(content: readonly ContentBlock[], output: ImageAttachmentRef[]): void {
-  for (const block of content) {
-    if (block.type === 'image') output.push(block.attachment)
-    else if (block.type === 'tool-result') collectImageRefs(block.content, output)
-  }
+function dataUrl(image: ToolImageData): string {
+  return `data:${image.mediaType};base64,${Buffer.from(image.data).toString('base64')}`
 }
 
-function recentImageRefs(messages: readonly Message[], count: number): ImageAttachmentRef[] {
-  const refs: ImageAttachmentRef[] = []
-  for (const message of messages) collectImageRefs(message.content, refs)
-  return refs.slice(-count)
+async function conversationImages(context: ToolExecutionContext, count: number): Promise<string[]> {
+  const images = await context.recentImages(count)
+  return images.map(dataUrl)
 }
 
-async function conversationImages(ctx: Context, exec: ToolExecution, count: number): Promise<string[]> {
-  const session = exec.agent?.session
-  if (session === undefined) throw new Error('conversation image references are unavailable outside an agent session')
-  const refs = recentImageRefs(session.deriveMessages(), count)
-  if (refs.length !== count) {
-    throw new Error(`requested the last ${count} conversation images, but only ${refs.length} were available`)
-  }
-  return Promise.all(refs.map(async ref => {
-    const stored = await ctx.attachments.readImage(ref, exec.signal)
-    return `data:${stored.ref.mediaType};base64,${Buffer.from(stored.data).toString('base64')}`
-  }))
-}
-
-async function workspaceImages(ctx: Context, exec: ToolExecution, paths: readonly string[]): Promise<string[]> {
-  const cwd = exec.agent?.session.header.cwd
-  const maxBytes = Math.min(ctx.attachments.imageLimits.maxImageBytes, ctx.attachments.imageLimits.maxMessageImageBytes)
+async function workspaceImages(context: ToolExecutionContext, paths: readonly string[]): Promise<string[]> {
+  const maxBytes = context.imageLimits === undefined
+    ? MAX_IMAGE_BYTES
+    : Math.min(context.imageLimits.maxImageBytes, context.imageLimits.maxMessageImageBytes)
   const images: string[] = []
   for (const path of paths) {
     if (path.trim().length === 0) throw new Error('referenced_image_paths must not contain an empty path')
-    const target = await ctx.fs.resolve(path, { ...cwd === undefined ? {} : { cwd }, signal: exec.signal })
-    const info = await ctx.fs.stat(target, exec.signal)
-    if (info === undefined) throw new Error(`referenced image does not exist: ${path}`)
-    if (info.type !== 'file') throw new Error(`referenced image is not a regular file: ${path}`)
-    const data = await ctx.fs.readBytes(target, exec.signal, maxBytes)
-    const mediaType = imageMediaType(data)
+    const file = await context.readWorkspaceFile(path, maxBytes)
+    const mediaType = imageMediaType(file.data)
     if (mediaType === undefined) throw new Error(`referenced image is not PNG, JPEG, WebP, or GIF: ${path}`)
-    await ctx.attachments.validateImage({ data, mediaType, name: basename(target.displayPath) })
-    ctx.emit('fs/observed', target, { kind: 'present', version: info.version }, exec)
-    images.push(`data:${mediaType};base64,${Buffer.from(data).toString('base64')}`)
+    await context.validateImage({ data: file.data, mediaType, name: file.name ?? file.path })
+    images.push(`data:${mediaType};base64,${Buffer.from(file.data).toString('base64')}`)
   }
   return images
 }
 
-function parseArgs(args: ImagegenArgs): Required<Pick<ImagegenArgs, 'prompt'>> & Omit<ImagegenArgs, 'prompt'> {
-  const prompt = args.prompt.trim()
-  if (prompt.length === 0) throw new Error('imagegen prompt must not be empty')
-  const paths = args.referenced_image_paths ?? []
+function parseArgs(raw: Readonly<Record<string, ToolJsonValue>>): ImagegenArgs {
+  const prompt = raw['prompt']
+  if (typeof prompt !== 'string' || prompt.trim().length === 0) throw new Error('imagegen prompt must not be empty')
+  const rawPaths = raw['referenced_image_paths']
+  if (rawPaths !== undefined && (!Array.isArray(rawPaths) || rawPaths.some(path => typeof path !== 'string'))) {
+    throw new Error('referenced_image_paths must be an array of strings')
+  }
+  const paths = rawPaths as string[] | undefined ?? []
   if (paths.length > MAX_REFERENCE_IMAGES) {
     throw new Error(`referenced_image_paths must contain at most ${MAX_REFERENCE_IMAGES} paths`)
   }
-  const count = args.num_last_images_to_include
-  if (count !== undefined && (!Number.isInteger(count) || count < 1 || count > MAX_REFERENCE_IMAGES)) {
+  const count = raw['num_last_images_to_include']
+  if (count !== undefined && (typeof count !== 'number' || !Number.isInteger(count) || count < 1 || count > MAX_REFERENCE_IMAGES)) {
     throw new Error(`num_last_images_to_include must be an integer between 1 and ${MAX_REFERENCE_IMAGES}`)
   }
   if (paths.length > 0 && count !== undefined) {
     throw new Error('provide only one of referenced_image_paths or num_last_images_to_include')
   }
-  if (args.output_path !== undefined && args.output_path.trim().length === 0) {
+  const outputPath = raw['output_path']
+  if (outputPath !== undefined && (typeof outputPath !== 'string' || outputPath.trim().length === 0)) {
     throw new Error('output_path must not be empty')
   }
   return {
-    prompt,
+    prompt: prompt.trim(),
     ...paths.length === 0 ? {} : { referenced_image_paths: paths },
     ...count === undefined ? {} : { num_last_images_to_include: count },
-    ...args.output_path === undefined ? {} : { output_path: args.output_path },
+    ...outputPath === undefined ? {} : { output_path: outputPath },
+  }
+}
+
+function imagegenDefinition(
+  policy: ImageToolPolicy,
+  client: Pick<OpenAICodexImageClient, 'generate'>,
+): ExecutableToolDefinition {
+  return {
+    name: IMAGEGEN_TOOL_NAME,
+    description: 'Generate or edit an image with gpt-image-2. Omit both reference fields for a new image. Use referenced_image_paths for workspace files, or num_last_images_to_include for attached, viewed, or previously generated conversation images. Never provide both. Multiple images keep chronological/path-array order; identify them as Image 1, Image 2, and so on in the prompt. The generated PNG is always saved in the active local or Remote SSH workspace; output_path chooses its location, otherwise a unique generated-<timestamp>-<id>.png name is used.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['prompt'],
+      properties: {
+        prompt: { type: 'string', minLength: 1, description: 'Complete generation or edit instruction. For multiple references, name each input by its Image N order.' },
+        referenced_image_paths: { type: 'array', maxItems: 5, items: { type: 'string', minLength: 1 }, description: 'Up to five local or active-workspace image paths, in Image 1..N order.' },
+        num_last_images_to_include: { type: 'integer', minimum: 1, maximum: 5, description: 'Use the most recent 1–5 conversation images, preserving chronological order.' },
+        output_path: { type: 'string', minLength: 1, description: 'Optional active-workspace path for the generated PNG. Omit it to save under a unique generated-<timestamp>-<id>.png name. Existing files remain subject to filesystem write-intent policy.' },
+      },
+    },
+    output: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['prompt', 'image'],
+      properties: {
+        prompt: { type: 'string' },
+        image: {
+          type: 'object',
+          required: ['mediaType', 'bytes', 'width', 'height'],
+          additionalProperties: false,
+          properties: {
+            attachmentId: { type: 'string' },
+            mediaType: { type: 'string', enum: ['image/png'] },
+            bytes: { type: 'integer' },
+            width: { type: 'integer' },
+            height: { type: 'integer' },
+            name: { type: 'string' },
+          },
+        },
+        file: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['path', 'operation'],
+          properties: {
+            path: { type: 'string' },
+            operation: { type: 'string', enum: ['create', 'update'] },
+          },
+        },
+        writeError: { type: 'string' },
+      },
+    },
+    isConcurrencySafe: args => args['output_path'] === undefined,
+    async execute(rawArgs, context) {
+      const args = parseArgs(rawArgs)
+      policy.assertAllowed(context.model?.provider, 'imagegen')
+      assertImageCapable(context, 'generate an image')
+      const images = args.referenced_image_paths !== undefined
+        ? await workspaceImages(context, args.referenced_image_paths)
+        : args.num_last_images_to_include !== undefined
+          ? await conversationImages(context, args.num_last_images_to_include)
+          : []
+      const data = await client.generate(args.prompt, images, context.signal)
+      const mediaType = imageMediaType(data)
+      if (mediaType !== 'image/png') throw new Error('OpenAI Codex image response was not a PNG')
+      const stored = await context.saveImage({ data, mediaType, name: 'generated.png' })
+      const id = attachmentId(stored.reference)
+      const value: ImagegenValue = {
+        prompt: args.prompt,
+        image: {
+          ...(id === undefined ? {} : { attachmentId: id }),
+          mediaType,
+          bytes: stored.bytes,
+          width: stored.width,
+          height: stored.height,
+          ...stored.name === undefined ? {} : { name: stored.name },
+        },
+      }
+      const outputPath = args.output_path ?? defaultOutputPath()
+      try {
+        const outcome = await context.writeWorkspaceFile(outputPath, data)
+        value.file = { path: outcome.path, operation: outcome.operation }
+      } catch (error: unknown) {
+        throwIfAborted(context.signal)
+        const detail = (error instanceof Error ? error.message : String(error)).slice(0, 1000)
+        value.writeError = `generated image was not written to ${JSON.stringify(outputPath)}: ${detail}`
+      }
+      const content = contentOf(value, stored.reference)
+      context.deferContent?.(content)
+      return { data: value as unknown as ToolJsonValue, content }
+    },
   }
 }
 
 /** Build the plugin-owned Codex image generation and editing tool. */
 export function imagegenTool(
-  ctx: Context,
   credentials: OpenAICodexCredentialStore,
   policy: ImageToolPolicy,
-): ToolDefinition {
-  const client = new OpenAICodexImageClient(credentials)
-  return defineTool({
-    name: IMAGEGEN_TOOL_NAME,
-    description: 'Generate or edit an image with gpt-image-2. Omit both reference fields for a new image. Use referenced_image_paths for workspace files, or num_last_images_to_include for attached, viewed, or previously generated conversation images. Never provide both. Multiple images keep chronological/path-array order; identify them as Image 1, Image 2, and so on in the prompt. The generated PNG is always saved in the active local or Remote SSH workspace; output_path chooses its location, otherwise a unique generated-<timestamp>-<id>.png name is used.',
-    parameters: {
-      prompt: { type: 'string', required: true, description: 'Complete generation or edit instruction. For multiple references, name each input by its Image N order.' },
-      referenced_image_paths: { type: 'array', items: { type: 'string' }, description: 'Up to five local or active-workspace image paths, in Image 1..N order.' },
-      num_last_images_to_include: { type: 'integer', description: 'Use the most recent 1–5 conversation images, preserving chronological order.' },
-      output_path: { type: 'string', description: 'Optional active-workspace path for the generated PNG. Omit it to save under a unique generated-<timestamp>-<id>.png name. Existing files remain subject to filesystem write-intent policy.' },
-    },
-    output: {
-      schema: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          prompt: { type: 'string', required: true },
-          image: {
-            type: 'object',
-            required: true,
-            additionalProperties: false,
-            properties: {
-              attachmentId: { type: 'string', required: true },
-              mediaType: { type: 'string', required: true, enum: ['image/png'] },
-              bytes: { type: 'integer', required: true },
-              width: { type: 'integer', required: true },
-              height: { type: 'integer', required: true },
-              name: { type: 'string' },
-            },
-          },
-          file: {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              path: { type: 'string', required: true },
-              operation: { type: 'string', required: true, enum: ['create', 'update'] },
-            },
-          },
-          writeError: { type: 'string' },
-        },
-      },
-      render: (_args, value) => contentOf(value),
-    },
-    isConcurrencySafe: args => args.output_path === undefined,
-    async execute(rawArgs, exec) {
-      const args = parseArgs(rawArgs)
-      const configured = exec.agent?.session.requestHeader()?.config
-      policy.assertAllowed(configured?.provider ?? exec.agent?.options.provider, 'imagegen')
-      await assertImageCapable(ctx, exec, 'generate an image')
-      const images = args.referenced_image_paths !== undefined
-        ? await workspaceImages(ctx, exec, args.referenced_image_paths)
-        : args.num_last_images_to_include !== undefined
-          ? await conversationImages(ctx, exec, args.num_last_images_to_include)
-          : []
-      const data = await client.generate(args.prompt, images, exec.signal)
-      const mediaType = imageMediaType(data)
-      if (mediaType !== 'image/png') throw new Error('OpenAI Codex image response was not a PNG')
-      const ref = await ctx.attachments.saveImage({ data, mediaType, name: 'generated.png' })
-      const value: ImagegenValue = {
-        prompt: args.prompt,
-        image: {
-          attachmentId: ref.attachmentId,
-          mediaType,
-          bytes: ref.bytes,
-          width: ref.width,
-          height: ref.height,
-          ...ref.name === undefined ? {} : { name: ref.name },
-        },
-      }
-      const outputPath = args.output_path ?? defaultOutputPath()
-      try {
-        const cwd = exec.agent?.session.header.cwd
-        const target = await ctx.fs.resolve(outputPath, { ...cwd === undefined ? {} : { cwd }, signal: exec.signal })
-        const intent = await ctx.waterfall('fs/write-intent', target, exec, () => undefined)
-        const outcome = await writeWorkspaceBytes(ctx, exec, target, data, intent)
-        ctx.emit('fs/observed', target, { kind: 'present', version: outcome.version }, exec)
-        value.file = { path: target.displayPath, operation: outcome.operation }
-      } catch (error: unknown) {
-        throwIfAborted(exec.signal)
-        const detail = (error instanceof Error ? error.message : String(error)).slice(0, 1000)
-        value.writeError = `generated image was not written to ${JSON.stringify(outputPath)}: ${detail}`
-      }
-      if (exec.parent !== undefined) {
-        exec.deferContext(createUserMessage({
-          content: contentOf(value),
-          source: { kind: 'plugin', plugin: 'dsh-openai-codex' },
-        }))
-      }
-      return value
-    },
-    presentCall: args => ({
-      card: 'generic',
-      title: args.output_path === undefined ? 'Generate image' : `Generate image ${args.output_path}`,
-      kind: args.output_path === undefined ? 'execute' : 'edit',
-      ...args.output_path === undefined ? {} : { locations: [{ path: args.output_path }] },
-    }),
-    presentResult: (args, result) => ({
-      card: 'generic',
-      title: args.output_path === undefined ? 'Generated image' : `Generated image ${args.output_path}`,
-      content: result.content,
-    }),
-  })
+  client: Pick<OpenAICodexImageClient, 'generate'> = new OpenAICodexImageClient(credentials),
+): ToolHandler {
+  return { resolve: () => imagegenDefinition(policy, client) }
 }

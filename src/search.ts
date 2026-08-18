@@ -16,7 +16,7 @@ import type {
 import type { OpenAICodexCredentialStore } from './store.ts'
 import { OPENAI_CODEX_PROVIDER } from './store.ts'
 
-/** Stable dsh web-provider id selected by the bundle patch. */
+/** Stable identifier for product adapters that register this provider. */
 export const OPENAI_CODEX_SEARCH_PROVIDER = OPENAI_CODEX_PROVIDER
 
 /** Trusted first-party Codex base; OAuth credentials never cross to a configured origin. */
@@ -85,7 +85,7 @@ export interface OpenAICodexSearchProviderOptions {
   /** Resolve the request identity, normally the initiating session id. */
   readonly resolveRequestId: () => string
   /** Record the exact secret-free request before dispatch. */
-  readonly recordRequest?: (request: OpenAICodexSearchRequestRecord) => void
+  readonly recordRequest: (request: OpenAICodexSearchRequestRecord) => void
 }
 
 /** Convert the configured mode to the official endpoint field. */
@@ -277,7 +277,7 @@ export class OpenAICodexSearchProvider implements WebSearchProvider {
       },
       max_output_tokens: this.options.maxOutputTokens,
     }
-    this.options.recordRequest?.({ endpoint: OPENAI_CODEX_SEARCH_URL, body })
+    this.options.recordRequest({ endpoint: OPENAI_CODEX_SEARCH_URL, body })
     throwIfSearchAborted(signal)
 
     let response: Response

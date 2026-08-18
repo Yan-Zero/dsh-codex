@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { OAuthCredential } from '@earendil-works/pi-ai'
-import { OpenAICodexWebAuth } from '../src/auth-routes.ts'
 import {
   OPENAI_CODEX_USAGE_URL,
   parseOpenAICodexUsage,
@@ -127,15 +126,4 @@ describe('OpenAI Codex usage', () => {
     })
   })
 
-  it('keeps a signed-in account usable when quota metadata is unavailable', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => response({ error: 'unavailable' }, 503)))
-    const status = await new OpenAICodexWebAuth(await authenticatedStore()).status()
-
-    expect(status).toEqual({
-      status: 'signed-in',
-      usage: { rateLimits: [] },
-      quotaError: 'OpenAI Codex usage request failed with HTTP 503',
-    })
-    expect(status).not.toHaveProperty('expiresAt')
-  })
 })

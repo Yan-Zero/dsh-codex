@@ -12,24 +12,24 @@ export interface ResponseApiPreferences {
   useNativeCompaction: boolean
 }
 
-interface OpenAICodexPreferences extends ImageToolPreferences, ResponseApiPreferences {
+export interface OpenAICodexPreferences extends ImageToolPreferences, ResponseApiPreferences {
   /** Migration-only key written by the unreleased store:true experiment. */
   useStatefulResponses: boolean
 }
 
 /** Defaults keep generic vision-model interoperability enabled. */
-export const DEFAULT_IMAGE_TOOL_PREFERENCES: ImageToolPreferences = {
+export const DEFAULT_IMAGE_TOOL_PREFERENCES: ImageToolPreferences = Object.freeze({
   modifyReadImage: true,
   shareImagegenWithOtherModels: true,
-}
+})
 
-/** Conservative defaults preserve the established stateless Harness behavior. */
-export const DEFAULT_RESPONSE_API_PREFERENCES: ResponseApiPreferences = {
+/** Conservative defaults preserve the established stateless behavior. */
+export const DEFAULT_RESPONSE_API_PREFERENCES: ResponseApiPreferences = Object.freeze({
   useWebSocketContextReuse: false,
   useNativeCompaction: false,
-}
+})
 
-/** Live policy shared by the host tools, Codex adapter, and settings HTTP surface. */
+/** Live policy shared by the standard tools and Codex model handler. */
 export class ImageToolPolicy {
   private current: OpenAICodexPreferences
   private readonly imageWatchers = new Set<() => void>()
@@ -46,7 +46,7 @@ export class ImageToolPolicy {
     }
   }
 
-  /** Return a detached settings projection for the browser. */
+  /** Return a detached image-tool settings projection. */
   snapshot(): ImageToolPreferences {
     return {
       modifyReadImage: this.current.modifyReadImage,
@@ -54,13 +54,13 @@ export class ImageToolPolicy {
     }
   }
 
-  /** Observe live changes that add or remove the scoped `read_image` enhancement. */
+  /** Observe live changes that add or remove the scoped read_image enhancement. */
   watchImagePreferences(listener: () => void): () => void {
     this.imageWatchers.add(listener)
     return () => { this.imageWatchers.delete(listener) }
   }
 
-  /** Apply a partial preference update. Durable storage is supplied by a standard settings implementation. */
+  /** Apply a partial image preference update. */
   async update(patch: Partial<ImageToolPreferences>): Promise<ImageToolPreferences> {
     this.replace({ ...this.current, ...patch })
     return this.snapshot()
@@ -76,9 +76,10 @@ export class ImageToolPolicy {
 
   /** Apply a partial Responses API preference update. */
   async updateResponseApi(patch: Partial<ResponseApiPreferences>): Promise<ResponseApiPreferences> {
-    this.replace({ ...this.current,
+    this.replace({
+      ...this.current,
       ...patch,
-      ...patch.useWebSocketContextReuse === undefined ? {} : { useStatefulResponses: false },
+      ...(patch.useWebSocketContextReuse === undefined ? {} : { useStatefulResponses: false }),
     })
     return this.responseApiSnapshot()
   }
@@ -98,8 +99,6 @@ export class ImageToolPolicy {
     const imageChanged = next.modifyReadImage !== this.current.modifyReadImage
       || next.shareImagegenWithOtherModels !== this.current.shareImagegenWithOtherModels
     this.current = next
-    if (imageChanged) {
-      for (const listener of this.imageWatchers) listener()
-    }
+    if (imageChanged) for (const listener of this.imageWatchers) listener()
   }
 }

@@ -17,7 +17,7 @@ import {
   convertResponsesMessages,
   convertResponsesTools,
 } from '@earendil-works/pi-ai/api/openai-responses-shared'
-import type { ResponseApiPreferences } from './tool-policy.ts'
+import type { ResponseApiPreferences } from './preferences.ts'
 
 /** Responses endpoint used by the official Codex client, including V2 compaction. */
 export const OPENAI_CODEX_RESPONSES_URL = 'https://chatgpt.com/backend-api/codex/responses'
@@ -117,7 +117,7 @@ function markerOutput(text: string): readonly unknown[] | undefined {
   return parsed
 }
 
-/** Replace a framed Harness checkpoint with the native items it durably carries. */
+/** Replace a framed standard checkpoint with the native items it durably carries. */
 export function expandNativeCompactionMarkers(input: readonly unknown[]): unknown[] {
   const expanded: unknown[] = []
   for (const item of input) {
@@ -321,13 +321,13 @@ function retainedCompactionInput(input: readonly unknown[]): unknown[] {
   ))
 }
 
-/** Mutable request policy shared by the Harness adapter and its pi-ai provider. */
+/** Mutable request policy shared by the standard model handler and its pi-ai provider. */
 export class OpenAICodexResponseRuntime {
   private readonly compactionCalls = new Map<string, number>()
 
   constructor(private readonly preferences: () => ResponseApiPreferences) {}
 
-  /** Mark one Harness stream call as compaction until its iterator closes. */
+  /** Mark one standard stream call as compaction until its iterator closes. */
   enterCompaction(sessionId: string | undefined): () => void {
     const key = sessionKey(sessionId)
     this.compactionCalls.set(key, (this.compactionCalls.get(key) ?? 0) + 1)

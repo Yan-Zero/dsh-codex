@@ -20,7 +20,13 @@
         "apiVersion": "presentation.dsh/v1alpha1",
         "kind": "OpenExternal",
         "optional": true,
-        "fallback": "use device-code authentication"
+        "fallback": "show the browser-login URL or use device-code authentication"
+      },
+      {
+        "apiVersion": "presentation.dsh/v1alpha1",
+        "kind": "ExternalRedirect",
+        "optional": true,
+        "fallback": "use the agent-local callback listener or device-code authentication"
       }
     ]
   },
@@ -32,13 +38,125 @@
     }
   ],
   "contributes": {
-    "commands": [
+    "commands": [],
+    "x-dev.dsh-std.extensions": [
       {
         "id": "ai.openai.codex.command.codex",
-        "title": "Manage the OpenAI Codex account and provider settings"
-      }
-    ],
-    "x-dev.dsh-std.extensions": [
+        "apiVersion": "commands.dsh/v1alpha1",
+        "kind": "Command",
+        "name": "codex",
+        "spec": {
+          "title": "Manage OpenAI Codex",
+          "titles": {
+            "en": "Manage OpenAI Codex",
+            "zh": "管理 OpenAI Codex"
+          },
+          "description": "Manage the OpenAI Codex account and provider settings.",
+          "children": [
+            {
+              "name": "status",
+              "spec": {
+                "title": "Show sign-in status",
+                "titles": { "en": "Show sign-in status", "zh": "查看登录状态" }
+              }
+            },
+            {
+              "name": "login",
+              "spec": {
+                "title": "Sign in with ChatGPT",
+                "titles": { "en": "Sign in with ChatGPT", "zh": "登录 ChatGPT" },
+                "arguments": [
+                  {
+                    "name": "method",
+                    "title": "Login method",
+                    "titles": { "en": "Login method", "zh": "登录方式" },
+                    "values": [
+                      {
+                        "value": "browser",
+                        "title": "Browser login",
+                        "titles": { "en": "Browser login", "zh": "浏览器登录" }
+                      },
+                      {
+                        "value": "device",
+                        "title": "Device code",
+                        "titles": { "en": "Device code", "zh": "设备码登录" }
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "name": "logout",
+              "spec": {
+                "title": "Sign out",
+                "titles": { "en": "Sign out", "zh": "退出登录" }
+              }
+            },
+            {
+              "name": "usage",
+              "spec": {
+                "title": "Show usage limits",
+                "titles": { "en": "Show usage limits", "zh": "查看用量限制" }
+              }
+            },
+            {
+              "name": "config",
+              "spec": {
+                "title": "Show provider settings",
+                "titles": { "en": "Show provider settings", "zh": "查看提供方设置" }
+              }
+            },
+            {
+              "name": "set",
+              "spec": {
+                "title": "Change a provider setting",
+                "titles": { "en": "Change a provider setting", "zh": "修改提供方设置" },
+                "arguments": [
+                  {
+                    "name": "setting",
+                    "title": "Setting",
+                    "titles": { "en": "Setting", "zh": "设置项" },
+                    "required": true,
+                    "values": [
+                      {
+                        "value": "read-image",
+                        "title": "Allow read_image HTTP(S) input",
+                        "titles": { "en": "Allow read_image HTTP(S) input", "zh": "允许 read_image 读取 HTTP(S) 图片" }
+                      },
+                      {
+                        "value": "imagegen-other-models",
+                        "title": "Allow imagegen for other models",
+                        "titles": { "en": "Allow imagegen for other models", "zh": "允许其他模型使用 imagegen" }
+                      },
+                      {
+                        "value": "websocket-context",
+                        "title": "Reuse WebSocket response context",
+                        "titles": { "en": "Reuse WebSocket response context", "zh": "复用 WebSocket 响应上下文" }
+                      },
+                      {
+                        "value": "native-compaction",
+                        "title": "Use native Responses compaction",
+                        "titles": { "en": "Use native Responses compaction", "zh": "使用 Responses 原生压缩" }
+                      }
+                    ]
+                  },
+                  {
+                    "name": "value",
+                    "title": "Value",
+                    "titles": { "en": "Value", "zh": "值" },
+                    "required": true,
+                    "values": [
+                      { "value": "on", "title": "On", "titles": { "en": "On", "zh": "开启" } },
+                      { "value": "off", "title": "Off", "titles": { "en": "Off", "zh": "关闭" } }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
       {
         "id": "ai.openai.codex.model-provider.openai-codex",
         "apiVersion": "models.dsh/v1alpha1",
@@ -54,6 +172,72 @@
             "authenticate": { "name": "codex", "path": ["login"] },
             "signout": { "name": "codex", "path": ["logout"] },
             "configure": { "name": "codex", "path": ["config"] }
+          }
+        }
+      },
+      {
+        "id": "ai.openai.codex.tool.imagegen",
+        "apiVersion": "tools.dsh/v1alpha1",
+        "kind": "Tool",
+        "name": "imagegen",
+        "spec": {
+          "title": "Generate or edit an image",
+          "titles": { "en": "Generate or edit an image", "zh": "生成或编辑图片" },
+          "description": "Generate or edit an image with the OpenAI Codex image endpoint."
+        }
+      },
+      {
+        "id": "ai.openai.codex.tool-override.read-image",
+        "apiVersion": "tools.dsh/v1alpha1",
+        "kind": "ToolOverride",
+        "name": "openai-codex-read-image",
+        "spec": {
+          "target": "read_image",
+          "description": "Accept HTTP(S) image sources before delegating workspace paths to the original tool."
+        }
+      },
+      {
+        "id": "ai.openai.codex.tool-override.web-search",
+        "apiVersion": "tools.dsh/v1alpha1",
+        "kind": "ToolOverride",
+        "name": "openai-codex-web-search",
+        "spec": {
+          "target": "web_search",
+          "providers": ["openai-codex"],
+          "executionOnly": true,
+          "description": "Use the OpenAI Codex standalone search endpoint for Codex agent scopes."
+        }
+      },
+      {
+        "id": "ai.openai.codex.session-event.search-model-request",
+        "apiVersion": "session.dsh/v1alpha1",
+        "kind": "SessionEvent",
+        "name": "web/openai-codex-search-llm-request",
+        "spec": {
+          "description": "Secret-free OpenAI Codex search request recorded before provider dispatch.",
+          "replay": "required",
+          "payloadSchema": {
+            "type": "object",
+            "required": ["endpoint", "body"],
+            "properties": {
+              "endpoint": { "type": "string" },
+              "body": { "type": "object" }
+            }
+          }
+        }
+      }
+    ],
+    "x-dsh-tui": [
+      {
+        "id": "ai.openai.codex.tui.scene.openai-codex",
+        "apiVersion": "x-ccch1mneyyy.tui/v1alpha1",
+        "kind": "Scene",
+        "name": "openai_codex",
+        "spec": {
+          "title": "OpenAI Codex",
+          "titles": {
+            "en": "OpenAI Codex",
+            "zh": "OpenAI Codex"
           }
         }
       }
