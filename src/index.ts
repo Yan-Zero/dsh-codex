@@ -14,7 +14,7 @@ import type {} from '@deepseek-ai/dsh-web'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-fs'
-import { createOpenAICodexAdapter } from './adapter.ts'
+import { createOpenAICodexAdapter, openAICodexModelCatalog } from './adapter.ts'
 import { registerOpenAICodexAuthRoutes } from './auth-routes.ts'
 import { installReadImageEnhancement } from './read-image-enhancement.ts'
 import { imagegenTool } from './imagegen.ts'
@@ -123,6 +123,8 @@ export const inject = ['llm', 'web']
 
 /** Composite model and standalone-search configuration. */
 export interface Config {
+  /** Model ids advertised by the provider; omitted to advertise the full catalog. */
+  models?: string[] | undefined
   /** Model used for auxiliary standalone searches. */
   searchModel?: string
   /** Cached, indexed, or live web access. */
@@ -142,6 +144,7 @@ export interface Config {
 }
 
 export const Config: z<Config> = z.object({
+  models: z.union([z.const(undefined), z.array(z.string())]),
   searchModel: z.string().default(DEFAULT_OPENAI_CODEX_SEARCH_MODEL),
   searchMode: z.union(['cached', 'indexed', 'live'] as const).default(DEFAULT_OPENAI_CODEX_SEARCH_MODE),
   searchContextSize: z.union(['low', 'medium', 'high'] as const).default(DEFAULT_OPENAI_CODEX_SEARCH_CONTEXT_SIZE),
@@ -161,6 +164,8 @@ export const Config: z<Config> = z.object({
 export function apply(ctx: Context, config: Config): void {
   installOpenAICodexSearchEvent()
   const service = new OpenAICodexService({
+    ...config.models === undefined ? {} : { models: config.models },
+    modelCatalog: openAICodexModelCatalog(),
     modifyReadImage: config.modifyReadImage ?? true,
     shareImagegenWithOtherModels: config.shareImagegenWithOtherModels ?? true,
     useWebSocketContextReuse: config.useWebSocketContextReuse ?? false,
@@ -179,6 +184,7 @@ export function apply(ctx: Context, config: Config): void {
       () => ctx.get('attachments'),
       () => imageTools.responseApiSnapshot(),
       fastMode,
+      () => imageTools.modelCatalogSnapshot().models,
     ),
   )
   ctx.web.registerSearchProvider(new OpenAICodexSearchProvider({
