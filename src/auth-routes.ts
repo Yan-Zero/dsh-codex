@@ -56,9 +56,19 @@ interface LoginChallenge {
   url: string
 }
 
-/** Testable timing boundary; production uses the exported 30-second ceiling. */
+/**
+ * Maximum time one browser-login operation may stay pending. The OAuth
+ * callback listener can otherwise wait forever (closed popup, callback lost
+ * to another listener, or sign-in completed through a different front door),
+ * which pins the public status at `signing-in` even when a valid credential
+ * is already stored.
+ */
+export const OPENAI_CODEX_SIGN_IN_TIMEOUT_MS = 10 * 60 * 1000
+
+/** Testable timing boundaries for the authorization URL and complete callback flow. */
 export interface OpenAICodexWebAuthOptions {
   challengeTimeoutMs?: number
+  signInTimeoutMs?: number
 }
 
 /** Redact provider diagnostics before they cross to the browser. */
@@ -88,14 +98,19 @@ export class OpenAICodexWebAuth {
   private challengeWaiters: Array<{ resolve(value: LoginChallenge): void; reject(error: unknown): void }> = []
   private challengeTimer: ReturnType<typeof setTimeout> | undefined
   private readonly challengeTimeoutMs: number
+  private readonly signInTimeoutMs: number
 
   constructor(
     private readonly store: OpenAICodexCredentialStore,
     options: OpenAICodexWebAuthOptions = {},
   ) {
     this.challengeTimeoutMs = options.challengeTimeoutMs ?? OPENAI_CODEX_AUTH_URL_TIMEOUT_MS
+    this.signInTimeoutMs = options.signInTimeoutMs ?? OPENAI_CODEX_SIGN_IN_TIMEOUT_MS
     if (!Number.isFinite(this.challengeTimeoutMs) || this.challengeTimeoutMs <= 0) {
       throw new TypeError('OpenAI Codex auth URL timeout must be a positive finite number')
+    }
+    if (!Number.isFinite(this.signInTimeoutMs) || this.signInTimeoutMs <= 0) {
+      throw new TypeError('OpenAI Codex sign-in timeout must be a positive finite number')
     }
   }
 
@@ -139,6 +154,10 @@ export class OpenAICodexWebAuth {
       this.cancelSignIn(new Error(`OpenAI Codex did not provide an authorization URL within ${String(this.challengeTimeoutMs)}ms`))
     }, this.challengeTimeoutMs)
     this.challengeTimer.unref()
+    const signInTimer = setTimeout(() => {
+      this.cancelSignIn(new Error('OpenAI Codex sign-in timed out waiting for the browser callback'))
+    }, this.signInTimeoutMs)
+    signInTimer.unref()
     this.operation = loginOpenAICodex({
       signal: cancellation.signal,
       prompt: prompt => prompt.type === 'select'
@@ -155,12 +174,22 @@ export class OpenAICodexWebAuth {
         }
         this.state = await this.readStoredStatus()
       },
-      (error: unknown) => {
+      async (error: unknown) => {
         this.rejectChallenge(error)
+        // A failed or abandoned browser flow must not mask a valid stored
+        // credential: sign-in may have completed through another front door.
+        try {
+          const stored = await this.readStoredStatus()
+          if (stored.status === 'signed-in') {
+            this.state = stored
+            return
+          }
+        } catch { /* fall through to the original error */ }
         this.state = { status: 'error', message: safeMessage(error) }
       },
     ).finally(() => {
       this.clearChallengeTimer()
+      clearTimeout(signInTimer)
       this.operation = undefined
       this.cancellation = undefined
     })
