@@ -11,6 +11,7 @@ import ToolRuntime, { defineTool } from '@deepseek-ai/dsh-tools'
 import WebRuntime from '@deepseek-ai/dsh-web'
 import * as OpenAICodex from '../src/index.ts'
 import { enhancedReadImageTool } from '../src/read-image-enhancement.ts'
+import type { PublicHttpRuntime } from '../src/public-http.ts'
 
 const PNG_1X1 = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC', 'base64')
 const signal = new AbortController().signal
@@ -84,7 +85,7 @@ function baseReadImage(context: Context) {
   })
 }
 
-async function setup(): Promise<Context> {
+async function setup(publicHttpRuntime?: PublicHttpRuntime): Promise<Context> {
   const context = new Context()
   ctx = context
   await context.plugin(SystemPrompt)
@@ -94,7 +95,7 @@ async function setup(): Promise<Context> {
   await context.plugin(LlmRuntime)
   await context.plugin(WebRuntime)
   await context.plugin(OpenAICodex)
-  context.tools.register(enhancedReadImageTool(context, baseReadImage(context)))
+  context.tools.register(enhancedReadImageTool(context, baseReadImage(context), publicHttpRuntime))
   return context
 }
 
@@ -149,18 +150,18 @@ describe('read_image enhancement', () => {
   })
 
   it('downloads an HTTP image and checks the received bytes', async () => {
-    const context = await setup()
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(PNG_1X1, {
-      status: 200,
-      headers: { 'content-type': 'application/octet-stream' },
-    })))
+    const get = vi.fn(async () => ({ status: 200, data: new Uint8Array(PNG_1X1) }))
+    const context = await setup({
+      resolve: async () => [{ address: '93.184.216.34', family: 4 }],
+      get,
+    })
 
     const result = await readImage(context, { url: 'https://images.example/pixel' })
 
     expect(result.isError).toBe(false)
     expect(result.content.some(block => block.type === 'image')).toBe(true)
     expect(delegatedPaths).toEqual([])
-    expect(fetch).toHaveBeenCalledOnce()
+    expect(get).toHaveBeenCalledOnce()
   })
 
   it('requires exactly one input source', async () => {

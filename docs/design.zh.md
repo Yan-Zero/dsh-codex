@@ -10,13 +10,13 @@ Status: implemented
 
 ## 认证
 
-插件把 OAuth 端点、PKCE／device code 行为、account id 提取、token 刷新和 Codex 请求认证交给 dsh 基础 bundle 提供的 pi-ai Codex provider。用户可以从插件的设置页面或 `dsh-openai-codex` 可执行文件启动同一套登录生命周期。Web 认证路由只接受回环地址的同源请求，返回 `no-store` JSON，且绝不暴露 token。账号页面会在不发送模型请求的情况下读取固定的 ChatGPT Codex usage 端点，把服务端用量转换为剩余百分比进度条；只有响应包含 credit 或 workspace limit 数值时才显示精确额度。
+插件把 OAuth 端点、PKCE／device code 行为、account id 提取、token 刷新和 Codex 请求认证交给 dsh 基础 bundle 提供的 pi-ai Codex provider。用户可以从插件的设置页面或 `dsh-openai-codex` 可执行文件启动同一套登录生命周期。Web 认证路由默认信任回环地址上的同源请求；远端页面只有在设备所有者把完整 origin 加入独立 allowlist 后才可访问。路由返回 `no-store` JSON，且绝不暴露 token。账号页面会在不发送模型请求的情况下读取固定的 ChatGPT Codex usage 端点，把服务端用量转换为剩余百分比进度条；只有响应包含 credit 或 workspace limit 数值时才显示精确额度。
 
 凭据以带版本的 JSON 文档存储在 `$DSH_HOME/.openai-codex-auth.json`。文件采用原子写入，跨进程锁覆盖登录、刷新和登出。该存储有意与 `~/.codex/auth.json` 分离；如果两个独立写入的客户端共享会轮换的 refresh token，其中任一方都可能使另一方的凭据失效。
 
 ## 模型适配器与压缩
 
-bundle 使用公开的 `PiAiAdapter` 以及随附的 `openai-codex` provider 和模型目录。凭据解析器会刷新 OAuth 状态，并把所得 bearer token 作为显式的单次请求凭据传入。它不会发现环境中的 API Key，也不依赖 dsh 的私有适配器辅助函数。
+bundle 使用公开的 `PiAiAdapter` 以及随附的 `openai-codex` provider 和模型目录。凭据解析器会刷新 OAuth 状态，并把所得 bearer token 作为显式的单次请求凭据传入。它不会发现环境中的 API Key，也不依赖 dsh 的私有适配器辅助函数。按会话维护的 Fast Mode registry 只会为 Web 输入框中已开启开关的会话加入 `service_tier: priority`。升级到 rc.7 后，adapter 还会在读取历史时把旧版 pi-ai replay envelope 提升为当前 response／block 结构，从而保留已有会话的原生 reasoning 与 tool 元数据。
 
 因此，普通轮次与 `dsh-compaction-basic` 都经过标准 LLM 服务。消息转换、流式输出、工具调用、图片附件解析、用量、溢出分类、加密推理回放和取消仍由适配器负责。Codex 请求始终使用 `store: false`，所以回放数据及完整的工具调用／结果配对保存在 Harness session 中，不依赖服务端持久化的 response id。
 
@@ -30,7 +30,7 @@ ChatGPT Codex 路由不会执行普通 Responses 的输出 token 上限。压缩
 
 Codex 模型从 provider 目录继承其声明的输入模态。现有 dsh Web 输入框已经会把粘贴或拖放的图片转换为持久附件，因此浏览器插件只增加账号设置，不替换输入框。
 
-开关启用时，插件会在 agent scope 注册一个定义，覆盖 Harness 现有的 `read_image`。它保留 `file_path`，并在 Schema 中增加与之互斥的 `url` 输入。本地调用委托给原定义，继续沿用其文件系统提供方、沙箱策略、观察事件、校验和远程工作区行为。URL 调用拒绝内嵌凭据，限制重定向次数与下载字节数，响应取消，通过签名识别 PNG、JPEG、WebP 与 GIF，并先经附件服务保存再返回图片块。实际路由的模型必须声明图片输入能力。
+开关启用时，插件会在 agent scope 注册一个定义，覆盖 Harness 现有的 `read_image`。它保留 `file_path`，并在 Schema 中增加与之互斥的 `url` 输入。本地调用委托给原定义，继续沿用其文件系统提供方、沙箱策略、观察事件、校验和远程工作区行为。URL 调用拒绝内嵌凭据，以及所有本地、私网、文档、组播或其他特殊网络地址；每次重定向都会重新校验 DNS，并把该跳连接固定到已经接受的地址。下载继续限制重定向次数与字节数，响应取消，通过签名识别 PNG、JPEG、WebP 与 GIF，并先经附件服务保存再返回图片块。实际路由的模型必须声明图片输入能力。
 
 移除独立工具后，早期会话中的 `view_image` 结果仍可读取。Harness 会直接重放持久化的 `tool/result` 消息和附件引用，不要求当前工具注册表仍包含历史名称。模型若再次发起新的 `view_image` 调用，会收到普通的未知工具结果，并可改用 `read_image` 重试。
 

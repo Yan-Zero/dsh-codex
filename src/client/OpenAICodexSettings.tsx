@@ -19,7 +19,9 @@ type AccountStatus =
   | { status: 'loading' }
   | { status: 'signed-out' }
   | { status: 'signing-in' }
+  | { status: 'reauth-required'; message: string }
   | { status: 'signed-in'; usage: OpenAICodexUsage; quotaError?: string }
+  | { status: 'remote-web-origin-not-trusted' }
   | { status: 'error'; message: string }
 
 interface LoginChallenge {
@@ -52,6 +54,7 @@ const progressTrackStyle: CSSProperties = { height: 8, overflow: 'hidden', borde
 const toggleRowStyle: CSSProperties = { ...rowStyle, flexWrap: 'nowrap', alignItems: 'flex-start' }
 const toggleCopyStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 3 }
 const toggleTrackStyle: CSSProperties = { position: 'relative', width: 40, height: 22, flex: '0 0 auto', marginTop: 1, padding: 0, border: 0, borderRadius: 999, cursor: 'pointer', transition: 'background 120ms ease' }
+const commandStyle: CSSProperties = { margin: 0, padding: '10px 12px', overflowX: 'auto', borderRadius: 8, background: 'var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.06))', color: 'var(--dsw-alias-label-primary)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 13, lineHeight: '20px', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }
 
 function PreferenceToggle({
   checked,
@@ -113,6 +116,14 @@ function formatPercent(percent: number): string {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(percent)
 }
 
+/** Format a provider-declared Unix-second reset in the user's local timezone. */
+export function formatOpenAICodexResetAt(resetAt: number | undefined): string | undefined {
+  if (resetAt === undefined || !Number.isSafeInteger(resetAt) || resetAt <= 0) return undefined
+  const date = new Date(resetAt * 1_000)
+  if (!Number.isFinite(date.getTime())) return undefined
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+}
+
 function QuotaBar({
   label,
   percent,
@@ -164,6 +175,9 @@ function UsageLimits({ usage, quotaError, t }: {
               key={window.windowSeconds}
               label={windowLabel(window.windowSeconds, t)}
               percent={window.remainingPercent}
+              detail={t('resetAt', {
+                time: formatOpenAICodexResetAt(window.resetAt) ?? t('resetUnavailable'),
+              })}
               t={t}
             />
           ))}
@@ -197,12 +211,19 @@ function UsageLimits({ usage, quotaError, t }: {
 function dotStyle(status: AccountStatus['status']): CSSProperties {
   const color = status === 'signed-in'
     ? 'var(--dsw-alias-state-success-primary, #22a06b)'
-    : status === 'error'
+    : status === 'error' || status === 'reauth-required' || status === 'remote-web-origin-not-trusted'
       ? 'var(--dsw-alias-state-error-primary, #d92d20)'
       : status === 'signing-in' || status === 'loading'
         ? 'var(--dsw-alias-brand-primary, #1677ff)'
         : 'var(--dsw-alias-label-dimmed, #9aa0a6)'
   return { width: 9, height: 9, borderRadius: '50%', flex: '0 0 auto', background: color }
+}
+
+class AccountRequestError extends Error {
+  constructor(readonly code: string) {
+    super(code)
+    this.name = 'AccountRequestError'
+  }
 }
 
 async function jsonRequest<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
@@ -217,7 +238,7 @@ async function jsonRequest<T>(path: string, method = 'GET', body?: unknown): Pro
     const message = typeof value === 'object' && value !== null && 'error' in value && typeof value.error === 'string'
       ? value.error
       : `HTTP ${response.status}`
-    throw new Error(message)
+    throw new AccountRequestError(message)
   }
   return value as T
 }
@@ -227,18 +248,23 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   if (t === undefined) throw new Error('OpenAI Codex settings requires its translation function')
   const [status, setStatus] = useState<AccountStatus>({ status: 'loading' })
   const [busy, setBusy] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const [copyFailed, setCopyFailed] = useState(false)
   const [imageTools, setImageTools] = useState<ImageToolPreferences | undefined>()
   const [imageToolsBusy, setImageToolsBusy] = useState(false)
   const [imageToolsError, setImageToolsError] = useState<string | undefined>()
   const [responseApi, setResponseApi] = useState<ResponseApiPreferences | undefined>()
   const [responseApiBusy, setResponseApiBusy] = useState(false)
   const [responseApiError, setResponseApiError] = useState<string | undefined>()
+  const trustedOriginCommand = `dsh plugin --profile web exec dsh-openai-codex trust-origin ${window.location.origin}`
 
   const refresh = useCallback(async () => {
     try {
       setStatus(await jsonRequest<AccountStatus>(STATUS_PATH))
     } catch (error: unknown) {
-      setStatus({ status: 'error', message: error instanceof Error ? error.message : t('requestFailed') })
+      setStatus(error instanceof AccountRequestError && error.code === 'remote-web-origin-not-trusted'
+        ? { status: 'remote-web-origin-not-trusted' }
+        : { status: 'error', message: error instanceof Error ? error.message : t('requestFailed') })
     }
   }, [t])
 
@@ -278,7 +304,9 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
       popup.location.replace(challenge.url)
     } catch (error: unknown) {
       popup?.close()
-      setStatus({ status: 'error', message: error instanceof Error ? error.message : t('requestFailed') })
+      setStatus(error instanceof AccountRequestError && error.code === 'remote-web-origin-not-trusted'
+        ? { status: 'remote-web-origin-not-trusted' }
+        : { status: 'error', message: error instanceof Error ? error.message : t('requestFailed') })
     } finally {
       setBusy(false)
     }
@@ -320,12 +348,27 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
     }
   }
 
+  const copyTrustedOriginCommand = async (): Promise<void> => {
+    setCopyFailed(false)
+    try {
+      if (navigator.clipboard?.writeText === undefined) throw new Error('clipboard unavailable')
+      await navigator.clipboard.writeText(trustedOriginCommand)
+      setCopied(true)
+    } catch {
+      setCopyFailed(true)
+    }
+  }
+
   const label = status.status === 'signed-in'
     ? t('signedIn')
     : status.status === 'loading'
       ? t('loadingAccount')
       : status.status === 'signing-in'
       ? t('signingIn')
+      : status.status === 'reauth-required'
+        ? t('reauthRequired')
+      : status.status === 'remote-web-origin-not-trusted'
+        ? t('remoteOriginTitle')
       : status.status === 'error'
         ? t('requestFailed')
         : t('signedOut')
@@ -342,13 +385,26 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
             <span aria-hidden="true" style={dotStyle(status.status)} />
             <span>{label}</span>
           </div>
-          {status.status === 'loading'
+          {status.status === 'loading' || status.status === 'remote-web-origin-not-trusted'
             ? null
             : status.status === 'signed-in'
             ? <button type="button" style={buttonStyle} disabled={busy} onClick={() => { void signOut() }}>{busy ? t('working') : t('logout')}</button>
-            : <button type="button" style={primaryButtonStyle} disabled={busy} onClick={() => { void signIn() }}>{busy ? t('working') : status.status === 'error' ? t('loginAgain') : t('login')}</button>}
+            : <button type="button" style={primaryButtonStyle} disabled={busy} onClick={() => { void signIn() }}>{busy ? t('working') : status.status === 'error' || status.status === 'reauth-required' ? t('loginAgain') : t('login')}</button>}
         </div>
-        {status.status === 'error' ? <p style={errorStyle}>{status.message}</p> : null}
+        {status.status === 'error' || status.status === 'reauth-required' ? <p style={errorStyle}>{status.message}</p> : null}
+        {status.status === 'remote-web-origin-not-trusted' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <p style={errorStyle}>{t('remoteOriginDescription')}</p>
+            <p style={bodyStyle}>{t('remoteOriginCommandHelp')}</p>
+            <code style={commandStyle}>{trustedOriginCommand}</code>
+            <div style={rowStyle}>
+              <button type="button" style={buttonStyle} onClick={() => { void copyTrustedOriginCommand() }}>
+                {copied ? t('remoteOriginCopied') : t('remoteOriginCopy')}
+              </button>
+              {copyFailed ? <span style={errorStyle}>{t('remoteOriginCopyFailed')}</span> : null}
+            </div>
+          </div>
+        ) : null}
         {status.status === 'signed-in'
           ? <UsageLimits
               usage={status.usage}

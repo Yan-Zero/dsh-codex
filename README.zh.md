@@ -13,6 +13,7 @@
 - 为 Harness 现有 `read_image` 工具增加可选的 HTTP(S) URL 输入
 - 由 `gpt-image-2` 执行的 `imagegen` 工具，支持工作区／会话参考图和自动工作区输出
 - 复用 dsh Web 输入框的粘贴和拖放图片能力
+- 在 Web 输入框提供按会话生效的 Fast Mode 开关与紧凑的每周额度指示器
 
 ChatGPT 订阅认证与按量计费的 OpenAI API 是不同产品。本插件只使用 ChatGPT Codex 后端，不会把订阅转换成通用 OpenAI API 凭据。
 
@@ -29,12 +30,15 @@ dsh web
 
 打开 **设置 → OpenAI Codex → 使用 ChatGPT 登录**。插件会打开 OpenAI 授权页面，并通过 localhost 回调完成登录。账号页面会显示实时 Codex 额度进度条与精确剩余百分比；只有账号接口提供信用余额或工作区限额时，才会一并显示精确数值。
 
+回环地址上的 Web 页面会自动受信任。若 dsh 运行在另一台机器上，账号页面会显示需要在 dsh 主机执行的精确 origin 授权命令，例如 `dsh plugin --profile web exec dsh-openai-codex trust-origin http://host:port`。allowlist 按完整 origin 匹配，与 OAuth 凭据分开保存，并可通过 `trusted-origins` 和 `untrust-origin` 查看或撤销。
+
 终端和无界面环境仍可使用 CLI：
 
 ```sh
 dsh plugin --profile web exec dsh-openai-codex login
 dsh plugin --profile web exec dsh-openai-codex login --device-code
 dsh plugin --profile web exec dsh-openai-codex status
+dsh plugin --profile web exec dsh-openai-codex doctor --json
 dsh plugin --profile web exec dsh-openai-codex logout
 ```
 
@@ -64,7 +68,9 @@ bundle 会为新建 agent 选择 `openai-codex` / `gpt-5.6-sol`，并选择 Code
 
 设置页提供独立的 **增强 read_image** 与 **允许其他模型使用生图** 开关，默认均为开启。关闭第一项会撤销插件的 agent-scope 覆盖，恢复 Harness 原本只接受本地路径的 `read_image` Schema。关闭第二项后，Codex 视觉模型仍可使用 `imagegen`，其他模型提供方的调用会在执行入口被拒绝。
 
-`read_image` 在返回实际图片块之前，会先验证图片并把字节持久化为 dsh 附件。本地路径原样委托给 Harness，继续沿用当前文件系统和沙箱行为；URL 扩展会限制重定向次数与下载字节数，也不允许嵌入凭据。
+`read_image` 在返回实际图片块之前，会先验证图片并把字节持久化为 dsh 附件。本地路径原样委托给 Harness，继续沿用当前文件系统和沙箱行为；URL 扩展会限制重定向次数与下载字节数，拒绝内嵌凭据和本地／私网／特殊网络目标，并在每一跳把连接固定到已经验证的公网地址。
+
+对符合条件的 Codex GPT 会话，Web 输入框还会显示仅对当前会话生效的 Fast Mode 开关。开启后只为该会话加入提供方的 priority service tier，不会修改已保存的模型设置；旁边的额度条显示对应的每周额度和提供方声明的重置时间。
 
 ## 搜索
 
@@ -110,6 +116,7 @@ dsh 登录与 Codex CLI／Desktop 相互独立：
 
 ## 兼容性说明
 
+- 本分支面向 DSH `0.1.0-rc.7` 插件表层与 `@earendil-works/pi-ai` `0.82.1`。adapter 会在读取历史时迁移旧版 pi-ai replay envelope，因此升级到 rc.7 后，已有 reasoning／tool 元数据仍可继续使用。
 - 插件只使用已发布的 dsh 插件表层，不要求修改版 Harness checkout。单独安装时即可生成附件并保存本地输出。
 - ChatGPT 套餐资格、模型权限、配额及后端行为由 OpenAI 控制，可能发生变化。
 - Codex 端点不执行普通 Responses 的 `max_output_tokens` 字段。压缩可以工作，但该路由无法在服务端落实配置的摘要上限。
