@@ -330,6 +330,45 @@ describe('OpenAI Codex Web OAuth boundary', () => {
     await auth.dispose()
   })
 
+  it('times out the complete browser callback flow after providing the auth URL', async () => {
+    let interaction: AuthInteraction | undefined
+    mocked.login.mockImplementation((next: AuthInteraction) => {
+      interaction = next
+      return abortableLogin(next)
+    })
+    const auth = new OpenAICodexWebAuth(store, {
+      challengeTimeoutMs: 1_000,
+      signInTimeoutMs: 5,
+    })
+    const challenge = auth.signIn()
+    if (interaction === undefined) throw new Error('login interaction was not captured')
+    interaction.notify({ type: 'auth_url', url: 'https://auth.openai.com/authorize' })
+
+    await expect(challenge).resolves.toEqual({ url: 'https://auth.openai.com/authorize' })
+    await vi.waitFor(() => { expect(interaction?.signal?.aborted).toBe(true) })
+    await auth.dispose()
+    await expect(auth.status()).resolves.toEqual({
+      status: 'error',
+      message: 'OpenAI Codex sign-in timed out waiting for the browser callback',
+    })
+  })
+
+  it('restores a valid stored credential after a failed browser flow', async () => {
+    mocked.login.mockRejectedValue(new Error('browser callback failed'))
+    mocked.status.mockResolvedValue({ authenticated: true })
+    mocked.usage.mockResolvedValue({ rateLimits: [] })
+    const auth = new OpenAICodexWebAuth(store)
+
+    await expect(auth.signIn()).rejects.toThrow(/browser callback failed/u)
+    await auth.dispose()
+
+    await expect(auth.status()).resolves.toEqual({
+      status: 'signed-in',
+      usage: { rateLimits: [] },
+    })
+    expect(mocked.status).toHaveBeenCalled()
+  })
+
   it('reports reauth-required without logging out or starting OAuth', async () => {
     mocked.status.mockResolvedValue({ authenticated: true })
     mocked.usage.mockRejectedValue(new OpenAICodexReauthRequiredError())

@@ -55,6 +55,18 @@ function migrateReplayHistory(options: GenerateOptions): GenerateOptions {
 }
 
 /**
+ * Codex traffic rides on chatgpt.com, which is frequently reached through a
+ * local proxy tunnel that blips for tens of seconds at a time. The dsh
+ * default stops after 2 retries and caps scheduled delays at 10 seconds, so
+ * this provider retries longer and backs off further to ride out such a blip.
+ */
+export const OPENAI_CODEX_RETRY_POLICY = resolveRetryPolicy({
+  mode: 'normal',
+  maxRetries: 5,
+  backoff: { initialDelayMs: 1_000, maxDelayMs: 30_000, jitterRatio: 0.2 },
+}, 'dsh-openai-codex retryPolicy')
+
+/**
  * Give the generic dsh adapter a request-scoped bearer-token entry without
  * changing the provider's user-facing OAuth flow. The resolver accepts only
  * the explicit override supplied by this plugin; it never discovers an API
@@ -149,7 +161,7 @@ export function createOpenAICodexAdapter(
     provider: OPENAI_CODEX_PROVIDER,
     displayName: 'OpenAI Codex',
     streamIdleTimeoutMs: OPENAI_CODEX_STREAM_IDLE_TIMEOUT_MS,
-    retryPolicy: resolveRetryPolicy(undefined, 'dsh-openai-codex retryPolicy'),
+    retryPolicy: OPENAI_CODEX_RETRY_POLICY,
     configuredMaxTokens: new Map(),
     piProvider: responses.wrap(requestProvider(provider, fastMode)),
   }]])
