@@ -3,8 +3,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
 import type { OpenAICodexUsage } from '../usage.ts'
-import type { ImageToolPreferences } from '../tool-policy.ts'
-import type { ResponseApiPreferences } from '../tool-policy.ts'
+import type {
+  ImageToolPreferences,
+  ModelCatalogSettings,
+  ResponseApiPreferences,
+} from '../tool-policy.ts'
 import type { OpenAICodexSettingsKey } from './locales.ts'
 
 const STATUS_PATH = '/plugins/dsh-openai-codex/auth/status'
@@ -12,6 +15,7 @@ const LOGIN_PATH = '/plugins/dsh-openai-codex/auth/login'
 const LOGOUT_PATH = '/plugins/dsh-openai-codex/auth/logout'
 const IMAGE_TOOLS_PATH = '/plugins/dsh-openai-codex/image-tools'
 const RESPONSE_API_PATH = '/plugins/dsh-openai-codex/response-api'
+const MODEL_CATALOG_PATH = '/plugins/dsh-openai-codex/models'
 const POLL_INTERVAL_MS = 1_000
 const USAGE_POLL_INTERVAL_MS = 60_000
 
@@ -54,6 +58,9 @@ const progressTrackStyle: CSSProperties = { height: 8, overflow: 'hidden', borde
 const toggleRowStyle: CSSProperties = { ...rowStyle, flexWrap: 'nowrap', alignItems: 'flex-start' }
 const toggleCopyStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 3 }
 const toggleTrackStyle: CSSProperties = { position: 'relative', width: 40, height: 22, flex: '0 0 auto', marginTop: 1, padding: 0, border: 0, borderRadius: 999, cursor: 'pointer', transition: 'background 120ms ease' }
+const modelListStyle: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 10 }
+const modelRowStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 9, minHeight: 30, fontSize: 14, color: 'var(--dsw-alias-label-primary)', cursor: 'pointer' }
+const modelIdStyle: CSSProperties = { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }
 const commandStyle: CSSProperties = { margin: 0, padding: '10px 12px', overflowX: 'auto', borderRadius: 8, background: 'var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.06))', color: 'var(--dsw-alias-label-primary)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 13, lineHeight: '20px', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }
 
 function PreferenceToggle({
@@ -256,6 +263,9 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   const [responseApi, setResponseApi] = useState<ResponseApiPreferences | undefined>()
   const [responseApiBusy, setResponseApiBusy] = useState(false)
   const [responseApiError, setResponseApiError] = useState<string | undefined>()
+  const [modelCatalog, setModelCatalog] = useState<ModelCatalogSettings | undefined>()
+  const [modelCatalogBusy, setModelCatalogBusy] = useState(false)
+  const [modelCatalogError, setModelCatalogError] = useState<string | undefined>()
   const trustedOriginCommand = `dsh plugin --profile web exec dsh-openai-codex trust-origin ${window.location.origin}`
 
   const refresh = useCallback(async () => {
@@ -279,6 +289,12 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
     void jsonRequest<ResponseApiPreferences>(RESPONSE_API_PATH).then(
       value => { setResponseApi(value); setResponseApiError(undefined) },
       () => { setResponseApiError(t('responseApiSettingsFailed')) },
+    )
+  }, [t])
+  useEffect(() => {
+    void jsonRequest<ModelCatalogSettings>(MODEL_CATALOG_PATH).then(
+      value => { setModelCatalog(value); setModelCatalogError(undefined) },
+      () => { setModelCatalogError(t('modelCatalogSettingsFailed')) },
     )
   }, [t])
   useEffect(() => {
@@ -348,6 +364,25 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
     }
   }
 
+  const updateVisibleModel = async (modelId: string, checked: boolean): Promise<void> => {
+    if (modelCatalog === undefined) return
+    const selected = new Set(modelCatalog.models)
+    if (checked) selected.add(modelId)
+    else selected.delete(modelId)
+    const models = modelCatalog.availableModels
+      .filter(model => selected.has(model.id))
+      .map(model => model.id)
+    setModelCatalogBusy(true)
+    setModelCatalogError(undefined)
+    try {
+      setModelCatalog(await jsonRequest<ModelCatalogSettings>(MODEL_CATALOG_PATH, 'POST', { models }))
+    } catch {
+      setModelCatalogError(t('modelCatalogSettingsFailed'))
+    } finally {
+      setModelCatalogBusy(false)
+    }
+  }
+
   const copyTrustedOriginCommand = async (): Promise<void> => {
     setCopyFailed(false)
     try {
@@ -412,6 +447,29 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
               t={t}
             />
           : null}
+      </div>
+      <div style={cardStyle}>
+        <div>
+          <h3 style={quotaTitleStyle}>{t('modelCatalog')}</h3>
+          <p style={{ ...bodyStyle, marginTop: 5 }}>{t('modelCatalogIntro')}</p>
+        </div>
+        <div style={modelListStyle} role="group" aria-label={t('modelCatalog')}>
+          {modelCatalog?.availableModels.map(model => (
+            <label key={model.id} style={{ ...modelRowStyle, opacity: modelCatalogBusy ? 0.55 : 1 }}>
+              <input
+                type="checkbox"
+                checked={modelCatalog.models.includes(model.id)}
+                disabled={modelCatalogBusy}
+                onChange={event => { void updateVisibleModel(model.id, event.currentTarget.checked) }}
+              />
+              <span>
+                <span>{model.name}</span>
+                {model.name === model.id ? null : <span style={modelIdStyle}> ({model.id})</span>}
+              </span>
+            </label>
+          ))}
+        </div>
+        {modelCatalogError === undefined ? null : <p style={errorStyle}>{modelCatalogError}</p>}
       </div>
       <div style={cardStyle}>
         <div>

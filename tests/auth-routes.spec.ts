@@ -10,11 +10,13 @@ import {
   OPENAI_CODEX_AUTH_LOGOUT_PATH,
   OpenAICodexWebAuth,
   OPENAI_CODEX_AUTH_STATUS_PATH,
+  OPENAI_CODEX_MODEL_CATALOG_SETTINGS_PATH,
   REMOTE_WEB_ORIGIN_NOT_TRUSTED,
   registerOpenAICodexAuthRoutes,
   trustedRequestDecision,
 } from '../src/auth-routes.ts'
 import type { OpenAICodexCredentialStore } from '../src/store.ts'
+import type { ImageToolPolicy } from '../src/tool-policy.ts'
 import { OpenAICodexTrustedOriginsStore } from '../src/trusted-origins.ts'
 import {
   OPENAI_CODEX_REAUTH_REQUIRED_MESSAGE,
@@ -69,7 +71,10 @@ interface CapturedRoute {
   handler(req: IncomingMessage, res: ServerResponse): Promise<void> | void
 }
 
-function captureRoutes(trustedOrigins: OpenAICodexTrustedOriginsStore = emptyTrustedOrigins): CapturedRoute[] {
+function captureRoutes(
+  trustedOrigins: OpenAICodexTrustedOriginsStore = emptyTrustedOrigins,
+  preferences?: ImageToolPolicy,
+): CapturedRoute[] {
   const routes: CapturedRoute[] = []
   const ctx = {
     webServer: {
@@ -82,7 +87,7 @@ function captureRoutes(trustedOrigins: OpenAICodexTrustedOriginsStore = emptyTru
       return factory()
     },
   } as unknown as Context
-  registerOpenAICodexAuthRoutes(ctx, store, trustedOrigins)
+  registerOpenAICodexAuthRoutes(ctx, store, trustedOrigins, undefined, preferences)
   return routes
 }
 
@@ -92,9 +97,11 @@ function request(options: {
   host?: string
   origin?: string
   fetchSite?: string
+  body?: string
 }): IncomingMessage {
   return {
     method: options.method ?? 'GET',
+    ...options.body === undefined ? {} : { body: options.body },
     socket: { remoteAddress: options.remoteAddress ?? '127.0.0.1' },
     headers: {
       host: options.host ?? '127.0.0.1:3081',
@@ -132,6 +139,38 @@ afterEach(async () => {
 })
 
 describe('OpenAI Codex Web OAuth boundary', () => {
+  it('serves and updates the model discovery subset through the plugin settings route', async () => {
+    const snapshot = {
+      availableModels: [
+        { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna' },
+        { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol' },
+      ],
+      models: ['gpt-5.6-luna', 'gpt-5.6-sol'],
+    }
+    const updateModelCatalog = vi.fn(async ({ models }: { models?: string[] }) => ({ ...snapshot, models: models ?? snapshot.models }))
+    const preferences = {
+      modelCatalogSnapshot: vi.fn(() => snapshot),
+      updateModelCatalog,
+    } as unknown as ImageToolPolicy
+    const route = captureRoutes(emptyTrustedOrigins, preferences)
+      .find(candidate => candidate.path === OPENAI_CODEX_MODEL_CATALOG_SETTINGS_PATH)
+    if (route === undefined) throw new Error('model settings route was not registered')
+
+    const getResponse = response()
+    await route.handler(request({}), getResponse)
+    expect(getResponse.observed.status).toBe(200)
+    expect(JSON.parse(getResponse.observed.body ?? 'null')).toEqual(snapshot)
+
+    const postResponse = response()
+    await route.handler(request({
+      method: 'POST',
+      body: JSON.stringify({ models: ['gpt-5.6-sol'] }),
+    }), postResponse)
+    expect(postResponse.observed.status).toBe(200)
+    expect(updateModelCatalog).toHaveBeenCalledWith({ models: ['gpt-5.6-sol'] })
+    expect(JSON.parse(postResponse.observed.body ?? 'null').models).toEqual(['gpt-5.6-sol'])
+  })
+
   it('returns a stable remote-origin error until the exact effective origin is trusted', async () => {
     root = await mkdtemp(join(tmpdir(), 'dsh-auth-routes-'))
     const origins = new OpenAICodexTrustedOriginsStore(join(root, '.openai-codex-trusted-origins.json'))

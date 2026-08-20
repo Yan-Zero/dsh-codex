@@ -8,6 +8,11 @@ class MemorySettings extends SettingsProvider {
   readonly writable = true
   private stored: Record<string, unknown> = {}
 
+  seed(stored: Record<string, unknown>): void {
+    this.stored = structuredClone(stored)
+    this.publish(this.stored)
+  }
+
   protected load(): Promise<Record<string, unknown>> {
     return Promise.resolve(structuredClone(this.stored))
   }
@@ -93,5 +98,48 @@ describe('ImageToolPolicy', () => {
 
     expect(() => policy.assertAllowed(execution('openai-codex'), 'imagegen')).not.toThrow()
     expect(() => policy.assertAllowed(execution('another-provider'), 'imagegen')).toThrow('disabled for models outside')
+  })
+
+  it('persists a provider-ordered model discovery subset without affecting the full catalog', async () => {
+    const ctx = new Context()
+    context = ctx
+    await ctx.plugin(MemorySettings)
+    const policy = new ImageToolPolicy({ models: ['gpt-5.6-terra', 'gpt-5.6-luna'] }, [
+      { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna' },
+      { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol' },
+      { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra' },
+    ])
+    policy.attach(ctx)
+
+    expect(policy.modelCatalogSnapshot()).toEqual({
+      availableModels: [
+        { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna' },
+        { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol' },
+        { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra' },
+      ],
+      models: ['gpt-5.6-luna', 'gpt-5.6-terra'],
+    })
+
+    await policy.updateModelCatalog({ models: ['gpt-5.6-sol'] })
+    expect(policy.modelCatalogSnapshot().models).toEqual(['gpt-5.6-sol'])
+  })
+
+  it('defaults an older partial settings document to the complete model catalog', async () => {
+    const ctx = new Context()
+    context = ctx
+    await ctx.plugin(MemorySettings)
+    const settings = ctx.settings as MemorySettings
+    settings.seed({
+      'openai-codex': { useNativeCompaction: true },
+    })
+    const policy = new ImageToolPolicy({}, [
+      { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna' },
+      { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol' },
+    ])
+
+    policy.attach(ctx)
+
+    expect(policy.modelCatalogSnapshot().models).toEqual(['gpt-5.6-luna', 'gpt-5.6-sol'])
+    expect(policy.responseApiSnapshot().useNativeCompaction).toBe(true)
   })
 })

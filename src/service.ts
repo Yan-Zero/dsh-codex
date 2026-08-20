@@ -8,6 +8,7 @@ import { OpenAICodexCredentialStore } from './store.ts'
 import { ImageToolPolicy } from './tool-policy.ts'
 import type {
   ImageToolPreferences,
+  ModelCatalogEntry,
   ResponseApiPreferences,
 } from './tool-policy.ts'
 import { readOpenAICodexRateLimits } from './usage.ts'
@@ -21,7 +22,10 @@ declare module '@deepseek-ai/cordis' {
 }
 
 /** Initial settings contributed by the bundle configuration. */
-export interface OpenAICodexServiceOptions extends ImageToolPreferences, ResponseApiPreferences {}
+export interface OpenAICodexServiceOptions extends ImageToolPreferences, ResponseApiPreferences {
+  models?: string[]
+  modelCatalog: readonly ModelCatalogEntry[]
+}
 
 /**
  * One provider-owned host service shared by Web routes and terminal adapters.
@@ -32,7 +36,7 @@ export class OpenAICodexService {
   readonly policy: ImageToolPolicy
 
   constructor(options: OpenAICodexServiceOptions) {
-    this.policy = new ImageToolPolicy(options)
+    this.policy = new ImageToolPolicy(options, options.modelCatalog)
   }
 
   /** Attach the durable settings document when the active profile provides it. */

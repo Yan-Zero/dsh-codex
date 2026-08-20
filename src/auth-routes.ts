@@ -25,7 +25,12 @@ import {
 } from './trusted-origins.ts'
 import { FastModeRegistry, isFastModeSessionId } from './fast-mode.ts'
 import { OPENAI_CODEX_FAST_MODE_PATH } from './fast-mode-paths.ts'
-import type { ImageToolPolicy, ImageToolPreferences, ResponseApiPreferences } from './tool-policy.ts'
+import type {
+  ImageToolPolicy,
+  ImageToolPreferences,
+  ModelCatalogPreferences,
+  ResponseApiPreferences,
+} from './tool-policy.ts'
 
 export {
   OPENAI_CODEX_AUTH_LOGIN_PATH,
@@ -38,6 +43,8 @@ export { OPENAI_CODEX_FAST_MODE_PATH } from './fast-mode-paths.ts'
 export const OPENAI_CODEX_IMAGE_TOOL_SETTINGS_PATH = '/plugins/dsh-openai-codex/image-tools'
 /** Plugin-owned Responses API experiment endpoint consumed by its browser half. */
 export const OPENAI_CODEX_RESPONSE_API_SETTINGS_PATH = '/plugins/dsh-openai-codex/response-api'
+/** Plugin-owned model discovery preference endpoint consumed by its browser half. */
+export const OPENAI_CODEX_MODEL_CATALOG_SETTINGS_PATH = '/plugins/dsh-openai-codex/models'
 
 /** Maximum time a browser request waits for the provider's authorization URL. */
 export const OPENAI_CODEX_AUTH_URL_TIMEOUT_MS = 30_000
@@ -465,6 +472,17 @@ function responseApiPatch(value: Record<string, unknown>): Partial<ResponseApiPr
   return patch
 }
 
+function modelCatalogPatch(value: Record<string, unknown>): Partial<ModelCatalogPreferences> {
+  if (Object.keys(value).some(key => key !== 'models')) {
+    throw new TypeError('request contains an unknown model setting')
+  }
+  const models = value['models']
+  if (!Array.isArray(models) || models.some(model => typeof model !== 'string')) {
+    throw new TypeError('models must be an array of strings')
+  }
+  return { models }
+}
+
 /** Register the plugin-owned OAuth routes when the Web server is composed. */
 export function registerOpenAICodexAuthRoutes(
   ctx: Context,
@@ -572,6 +590,20 @@ export function registerOpenAICodexAuthRoutes(
             if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
             try {
               return json(res, 200, await imageTools.updateResponseApi(responseApiPatch(await readSettingsBody(req))))
+            } catch (error: unknown) {
+              return json(res, 400, { error: safeMessage(error) })
+            }
+          },
+        }),
+        ctx.webServer.register({
+          kind: 'exact',
+          path: OPENAI_CODEX_MODEL_CATALOG_SETTINGS_PATH,
+          handler: async (req, res) => {
+            if (!await authorize(req, res)) return
+            if (req.method === 'GET') return json(res, 200, imageTools.modelCatalogSnapshot())
+            if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
+            try {
+              return json(res, 200, await imageTools.updateModelCatalog(modelCatalogPatch(await readSettingsBody(req))))
             } catch (error: unknown) {
               return json(res, 400, { error: safeMessage(error) })
             }

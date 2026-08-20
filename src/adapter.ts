@@ -11,8 +11,13 @@ import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import type { OpenAICodexCredentialStore } from './store.ts'
 import { OPENAI_CODEX_PROVIDER } from './store.ts'
 import { OpenAICodexResponseRuntime } from './responses.ts'
-import type { ResponseApiPreferences } from './tool-policy.ts'
+import type { ModelCatalogEntry, ResponseApiPreferences } from './tool-policy.ts'
 import type { FastModeRegistry } from './fast-mode.ts'
+
+/** Return a detached copy of the complete pi-ai Codex model catalog. */
+export function openAICodexModelCatalog(): readonly ModelCatalogEntry[] {
+  return openaiCodexProvider().getModels().map(model => ({ id: model.id, name: model.name }))
+}
 
 /** Provider idle ceiling used by the composite route. */
 export const OPENAI_CODEX_STREAM_IDLE_TIMEOUT_MS = 300_000
@@ -127,8 +132,17 @@ class OpenAICodexAdapter extends PiAiAdapter {
   constructor(
     options: ConstructorParameters<typeof PiAiAdapter>[0],
     private readonly responses: OpenAICodexResponseRuntime,
+    private readonly visibleModelIds?: () => readonly string[],
   ) {
     super(options)
+  }
+
+  override async listModels(provider: string) {
+    const models = await super.listModels(provider)
+    const visibleModelIds = this.visibleModelIds?.()
+    if (visibleModelIds === undefined) return models
+    const visible = new Set(visibleModelIds)
+    return models.filter(model => visible.has(model.id))
   }
 
   override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
@@ -154,6 +168,7 @@ export function createOpenAICodexAdapter(
   resolveAttachments: () => AttachmentStore | undefined,
   responsePreferences: () => ResponseApiPreferences,
   fastMode?: FastModeRegistry,
+  visibleModelIds?: () => readonly string[],
 ): PiAiAdapter {
   const provider = openaiCodexProvider()
   const responses = new OpenAICodexResponseRuntime(responsePreferences)
@@ -171,5 +186,5 @@ export function createOpenAICodexAdapter(
     profiles: () => profiles,
     resolveApiKey: async () => (await models.getAuth(OPENAI_CODEX_PROVIDER))?.auth.apiKey,
     resolveAttachments,
-  }, responses)
+  }, responses, visibleModelIds)
 }

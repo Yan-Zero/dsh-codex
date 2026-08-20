@@ -54,6 +54,23 @@ Codex、Claude Code 及其他自动化 agent 应直接遵循 [INSTALL.md](INSTAL
 
 bundle 会为新建 agent 选择 `openai-codex` / `gpt-5.6-sol`，并选择 Codex 搜索提供方。dsh settings 中已经保存的模型仍然优先；模型选择器可以切换到当前账号可用的其他 Codex 模型。
 
+## 模型目录
+
+默认情况下，模型选择器会展示完整的 `openai-codex` 目录。打开 **设置 → OpenAI Codex**，通过模型复选框选择需要显示的条目。该选择实时生效并持久保存；修改后 dsh 会刷新 Web 与 TUI 的模型目录。
+
+也可以在 `llm-openai-codex` 条目上通过 `models` 设置初始子集，并保持提供方原有顺序：
+
+```yaml
+- id: llm-openai-codex
+  config:
+    models:
+      - gpt-5.6-luna
+      - gpt-5.6-sol
+      - gpt-5.6-terra
+```
+
+复选框与 `models` 设置都只控制模型发现。现有会话已经保存或显式指定的隐藏模型仍可解析，因此收窄选择器不会破坏旧记录。省略 `models` 时初始展示完整目录；空列表表示不展示任何模型。
+
 ## 图片
 
 图片功能使用 dsh 的持久附件路径：
