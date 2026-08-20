@@ -19,6 +19,8 @@ import { registerOpenAICodexAuthRoutes } from './auth-routes.ts'
 import { installReadImageEnhancement } from './read-image-enhancement.ts'
 import { imagegenTool } from './imagegen.ts'
 import { ImageToolPolicy } from './tool-policy.ts'
+import { FastModeRegistry } from './fast-mode.ts'
+import { assertNoOpenAICodexProviderConflict } from './doctor.ts'
 import {
   installOpenAICodexSearchEvent,
   recordOpenAICodexSearchRequest,
@@ -38,7 +40,15 @@ export {
   ImageToolPolicy,
 } from './tool-policy.ts'
 export type { ImageToolPreferences, ResponseApiPreferences } from './tool-policy.ts'
-export { OPENAI_CODEX_USAGE_URL, parseOpenAICodexUsage, readOpenAICodexRateLimits } from './usage.ts'
+export {
+  isOpenAICodexReauthRequiredError,
+  OPENAI_CODEX_REAUTH_REQUIRED_CODE,
+  OPENAI_CODEX_REAUTH_REQUIRED_MESSAGE,
+  OPENAI_CODEX_USAGE_URL,
+  OpenAICodexReauthRequiredError,
+  parseOpenAICodexUsage,
+  readOpenAICodexRateLimits,
+} from './usage.ts'
 export type {
   OpenAICodexCredits,
   OpenAICodexIndividualLimit,
@@ -64,6 +74,20 @@ import { OpenAICodexService } from './service.ts'
 
 export { OpenAICodexService } from './service.ts'
 export type { OpenAICodexServiceOptions } from './service.ts'
+
+export {
+  assertNoOpenAICodexProviderConflict,
+  diagnoseOpenAICodex,
+  openAICodexConflictMessage,
+} from './doctor.ts'
+export type { OpenAICodexDiagnosticOptions, OpenAICodexDiagnosticReport } from './doctor.ts'
+export {
+  FastModeRegistry,
+  isFastModeSessionId,
+  OPENAI_CODEX_FAST_MODE_MAX_SESSIONS,
+  OPENAI_CODEX_FAST_MODE_MAX_SESSION_ID_LENGTH,
+} from './fast-mode.ts'
+export { OPENAI_CODEX_FAST_MODE_PATH } from './fast-mode-paths.ts'
 
 export { loginOpenAICodex, logoutOpenAICodex, openAICodexAuthStatus } from './auth.ts'
 export type { OpenAICodexAuthStatus } from './auth.ts'
@@ -144,6 +168,8 @@ export function apply(ctx: Context, config: Config): void {
   })
   const credentials = service.credentials
   const imageTools = service.policy
+  const fastMode = new FastModeRegistry()
+  assertNoOpenAICodexProviderConflict(ctx.llm.listProviders().map(provider => provider.id))
   ctx.provide('openAICodex', service)
   ctx.inject(['settings'], settingsCtx => { service.attachSettings(settingsCtx) })
   ctx.llm.registerAdapter(
@@ -152,6 +178,7 @@ export function apply(ctx: Context, config: Config): void {
       credentials,
       () => ctx.get('attachments'),
       () => imageTools.responseApiSnapshot(),
+      fastMode,
     ),
   )
   ctx.web.registerSearchProvider(new OpenAICodexSearchProvider({
@@ -163,7 +190,13 @@ export function apply(ctx: Context, config: Config): void {
     resolveRequestId: () => String(ctx.get('agents')?.currentInitiator()?.session.id ?? randomUUID()),
     recordRequest: request => { recordOpenAICodexSearchRequest(ctx, request) },
   }))
-  ctx.inject(['webServer'], webCtx => registerOpenAICodexAuthRoutes(webCtx, credentials, imageTools))
+  ctx.inject(['webServer'], webCtx => registerOpenAICodexAuthRoutes(
+    webCtx,
+    credentials,
+    undefined,
+    fastMode,
+    imageTools,
+  ))
   ctx.inject(['tools', 'fs', 'attachments'], toolCtx => {
     toolCtx.tools.register(imagegenTool(toolCtx, credentials, imageTools))
   })

@@ -1,6 +1,5 @@
 /** Optional HTTP(S) input for Harness's existing `read_image` tool. */
 
-import { basename } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
@@ -12,6 +11,8 @@ import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-fs'
 import { assertImageCapable } from './image-capability.ts'
 import type { ImageToolPolicy } from './tool-policy.ts'
+import { fetchPublicHttpResource } from './public-http.ts'
+import type { PublicHttpRuntime } from './public-http.ts'
 
 /** Harness's canonical image-reading tool name. */
 export const READ_IMAGE_TOOL_NAME = 'read_image'
@@ -64,70 +65,12 @@ export function imageMediaType(data: Uint8Array): ImageMediaType | undefined {
   return undefined
 }
 
-async function boundedResponseBytes(response: Response, maxBytes: number, signal: AbortSignal): Promise<Uint8Array> {
-  const declared = Number(response.headers.get('content-length'))
-  if (Number.isFinite(declared) && declared > maxBytes) throw new Error(`remote image exceeds ${maxBytes} bytes`)
-  if (response.body === null) return new Uint8Array()
-  const reader = response.body.getReader()
-  const chunks: Uint8Array[] = []
-  let total = 0
-  try {
-    while (true) {
-      if (signal.aborted) throw signal.reason
-      const result = await reader.read()
-      if (result.done) break
-      total += result.value.byteLength
-      if (total > maxBytes) throw new Error(`remote image exceeds ${maxBytes} bytes`)
-      chunks.push(result.value)
-    }
-  } finally {
-    await reader.cancel().catch(() => undefined)
-  }
-  const data = new Uint8Array(total)
-  let offset = 0
-  for (const chunk of chunks) {
-    data.set(chunk, offset)
-    offset += chunk.byteLength
-  }
-  return data
-}
-
-async function fetchImage(source: string, maxBytes: number, signal: AbortSignal): Promise<{
-  data: Uint8Array
-  display: string
-  name?: string
-}> {
-  let url = new URL(source)
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('read_image URL must use http or https')
-  if (url.username !== '' || url.password !== '') throw new Error('read_image URL must not contain credentials')
-  for (let redirects = 0; ; redirects++) {
-    const response = await fetch(url, {
-      method: 'GET',
-      redirect: 'manual',
-      headers: { accept: 'image/png, image/jpeg, image/webp, image/gif' },
-      signal,
-    })
-    if (response.status >= 300 && response.status < 400) {
-      if (redirects >= 5) throw new Error('remote image exceeded 5 redirects')
-      const location = response.headers.get('location')
-      if (location === null) throw new Error(`remote image redirect ${response.status} has no location`)
-      url = new URL(location, url)
-      if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('remote image redirected outside http(s)')
-      if (url.username !== '' || url.password !== '') throw new Error('remote image redirect contains credentials')
-      continue
-    }
-    if (!response.ok) throw new Error(`remote image request failed with HTTP ${response.status}`)
-    const name = basename(url.pathname) || undefined
-    return {
-      data: await boundedResponseBytes(response, maxBytes, signal),
-      display: url.href,
-      ...name === undefined ? {} : { name },
-    }
-  }
-}
-
 /** Build an agent-scoped `read_image` definition that delegates local paths to Harness. */
-export function enhancedReadImageTool(ctx: Context, original: ToolDefinition): ToolDefinition {
+export function enhancedReadImageTool(
+  ctx: Context,
+  original: ToolDefinition,
+  publicHttpRuntime?: PublicHttpRuntime,
+): ToolDefinition {
   return defineTool({
     name: READ_IMAGE_TOOL_NAME,
     description: 'Read a PNG/JPEG/WebP/GIF image from a workspace file path or an HTTP(S) URL and return the image itself. Requires the current model to accept image input.',
@@ -179,7 +122,7 @@ export function enhancedReadImageTool(ctx: Context, original: ToolDefinition): T
       await assertImageCapable(ctx, exec, `read ${JSON.stringify(url)}`)
       const attachments = ctx.attachments
       const maxBytes = Math.min(attachments.imageLimits.maxImageBytes, attachments.imageLimits.maxMessageImageBytes)
-      const loaded = await fetchImage(url, maxBytes, exec.signal)
+      const loaded = await fetchPublicHttpResource(url, maxBytes, exec.signal, publicHttpRuntime)
       const mediaType = imageMediaType(loaded.data)
       if (mediaType === undefined) throw new Error('read_image supports PNG, JPEG, WebP, and GIF image bytes')
       if (!attachments.imageLimits.mediaTypes.includes(mediaType)) {
@@ -226,7 +169,11 @@ interface ScopedEnhancement {
 }
 
 /** Keep an enhanced `read_image` shadow on every live agent while the setting is enabled. */
-export function installReadImageEnhancement(ctx: Context, policy: ImageToolPolicy): void {
+export function installReadImageEnhancement(
+  ctx: Context,
+  policy: ImageToolPolicy,
+  publicHttpRuntime?: PublicHttpRuntime,
+): void {
   const installed = new Map<Agent, ScopedEnhancement>()
   let syncing = false
 
@@ -247,7 +194,7 @@ export function installReadImageEnhancement(ctx: Context, policy: ImageToolPolic
     if (current?.original === original) return
     if (current !== undefined) remove(agent)
     if (ctx.tools.get(READ_IMAGE_TOOL_NAME, agent) !== original) return
-    const dispose = agent.ctx.tools.register(enhancedReadImageTool(ctx, original))
+    const dispose = agent.ctx.tools.register(enhancedReadImageTool(ctx, original, publicHttpRuntime))
     installed.set(agent, { original, dispose })
   }
 

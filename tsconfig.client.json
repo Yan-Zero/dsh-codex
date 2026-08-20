@@ -5,6 +5,6 @@
     "lib": ["es2024", "dom", "dom.iterable"],
     "types": ["react"]
   },
-  "include": ["src/client"],
+  "include": ["src/client", "tests/**/*.client.spec.tsx"],
   "exclude": []
 }

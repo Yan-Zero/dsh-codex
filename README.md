@@ -13,6 +13,7 @@ Use a ChatGPT subscription in [DeepSeek Harness](https://github.com/deepseek-ai/
 - optional HTTP(S) URL input added to Harness's existing `read_image` tool
 - an `imagegen` tool backed by `gpt-image-2`, with workspace or conversation reference images and automatic workspace output
 - browser image input through dsh's existing paste and drop controls
+- a per-conversation Fast Mode switch and compact weekly quota indicator in the Web composer
 
 ChatGPT subscription authentication and usage-based OpenAI API access are different products. This plugin uses the ChatGPT Codex backend only; it does not turn a subscription into a general-purpose OpenAI API credential.
 
@@ -29,12 +30,15 @@ From a DeepSeek Harness source checkout, use `pnpm dsh plugin --profile web add 
 
 Open **Settings → OpenAI Codex → Sign in with ChatGPT**. The plugin opens OpenAI's authorization page and completes the localhost callback. The account page shows live Codex quota bars and exact remaining percentages; exact credit balances or workspace limits appear only when the account API supplies them.
 
+Loopback Web pages are trusted automatically. If dsh runs on another machine, the account page shows the exact origin command that must be approved on the dsh host, for example `dsh plugin --profile web exec dsh-openai-codex trust-origin http://host:port`. The allowlist is exact-origin, stored separately from OAuth credentials, and can be inspected or revoked with `trusted-origins` and `untrust-origin`.
+
 The CLI remains available for terminal and headless installations:
 
 ```sh
 dsh plugin --profile web exec dsh-openai-codex login
 dsh plugin --profile web exec dsh-openai-codex login --device-code
 dsh plugin --profile web exec dsh-openai-codex status
+dsh plugin --profile web exec dsh-openai-codex doctor --json
 dsh plugin --profile web exec dsh-openai-codex logout
 ```
 
@@ -64,7 +68,9 @@ Image support uses dsh's durable attachment path:
 
 The Settings page has separate **Enhance read_image** and **Image generation for other models** toggles. Both default on. Turning off the first removes the plugin's agent-scoped override and restores Harness's original local-only `read_image` schema. Turning off the second keeps `imagegen` available to Codex vision models and rejects calls from other model providers at execution time.
 
-`read_image` stores validated bytes as a dsh attachment before returning the actual image block. Local paths are delegated unchanged to Harness, including its configured filesystem and sandbox behavior. The URL extension bounds redirects and bytes and rejects credentials embedded in URLs.
+`read_image` stores validated bytes as a dsh attachment before returning the actual image block. Local paths are delegated unchanged to Harness, including its configured filesystem and sandbox behavior. The URL extension bounds redirects and bytes, rejects credentials embedded in URLs, rejects local/private/special network targets, and pins each validated public address across the corresponding HTTP hop.
+
+For an eligible Codex GPT conversation, the Web composer also exposes a session-local Fast Mode switch. Enabling it adds the provider's priority service tier only to that conversation; it does not change saved model settings. A neighboring quota bar shows the applicable weekly limit and provider-declared reset time.
 
 ## Search
 
@@ -110,6 +116,7 @@ Keeping the stores separate prevents two clients from racing the same rotating r
 
 ## Compatibility notes
 
+- This branch targets the DSH `0.1.0-rc.7` plugin surfaces and `@earendil-works/pi-ai` `0.82.1`. The adapter migrates the earlier pi-ai replay envelope while reading history so existing reasoning/tool metadata remains usable after the rc.7 upgrade.
 - The plugin runs on released dsh plugin surfaces and does not require a modified Harness checkout. It can generate attachments and save local output when installed alone.
 - ChatGPT plan eligibility, model access, quotas, and backend behavior are controlled by OpenAI and may change.
 - The Codex endpoint does not enforce the ordinary Responses `max_output_tokens` field. Compaction works, but its configured summary cap cannot be imposed server-side on this route.

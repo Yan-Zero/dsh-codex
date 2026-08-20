@@ -1,6 +1,10 @@
+import { readFileSync } from 'node:fs'
 import type { UserConfig } from 'tsdown'
 
 const PLUGIN_ID = 'dsh-codex'
+const PACKAGE_VERSION = (JSON.parse(
+  readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
+) as { version: string }).version
 const CLIENT_EXTERNALS = [
   'react',
   'react/jsx-runtime',
@@ -8,6 +12,10 @@ const CLIENT_EXTERNALS = [
   'react-dom/client',
   '@deepseek-ai/cordis',
   '@deepseek-ai/dsh-client-runtime/client',
+  '@deepseek-ai/dsh-client-ui-conversation/client',
+  '@deepseek-ai/dsh-client-ui-model-selection/client',
+  '@deepseek-ai/dsh-client-ui-settings/client',
+  '@deepseek-ai/dsh-client-ui-tool/client',
 ] as const
 
 export default [
@@ -25,6 +33,9 @@ export default [
     fixedExtension: false,
     dts: true,
     clean: true,
+    define: {
+      __CODEX_CONNECT_VERSION__: JSON.stringify(PACKAGE_VERSION),
+    },
     deps: {
       neverBundle: [
         '@earendil-works/pi-ai',
@@ -39,6 +50,7 @@ export default [
         '@deepseek-ai/dsh-llm',
         '@deepseek-ai/dsh-llm-pi-ai',
         '@deepseek-ai/dsh-session',
+        '@deepseek-ai/dsh-settings',
         '@deepseek-ai/dsh-tools',
         '@deepseek-ai/dsh-web',
       ],
@@ -54,6 +66,7 @@ export default [
     deps: { neverBundle: [...CLIENT_EXTERNALS] },
     define: {
       'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production'),
+      __CODEX_CONNECT_VERSION__: JSON.stringify(PACKAGE_VERSION),
     },
     outputOptions: {
       entryFileNames: 'client.js',
