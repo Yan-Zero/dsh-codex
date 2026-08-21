@@ -22,6 +22,21 @@ export function openAICodexModelCatalog(): readonly ModelCatalogEntry[] {
 /** Provider idle ceiling used by the composite route. */
 export const OPENAI_CODEX_STREAM_IDLE_TIMEOUT_MS = 300_000
 
+/**
+ * Image request budgets for the composite profile, mirroring the
+ * dsh-llm-pi-ai defaults. `ResolvedPiAiProviderProfile` gained these required
+ * fields after the dsh `0.1.0-rc.7` this package pins: newer hosts hand them
+ * to attachment policy validation, so an image-bearing request fails with
+ * `Image request maxPixels must be a positive integer` when they are absent,
+ * while older hosts ignore them. The spread keeps the profile literal free
+ * of excess-property errors against the pinned rc.7 types.
+ */
+const OPENAI_CODEX_IMAGE_REQUEST_BUDGETS = {
+  maxRequestImageBytes: 20 * 1024 * 1024,
+  requestImagePixelBudget: 2048 * 2048,
+  requestImageMaxBytes: 1024 * 1024,
+}
+
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -178,6 +193,7 @@ export function createOpenAICodexAdapter(
     streamIdleTimeoutMs: OPENAI_CODEX_STREAM_IDLE_TIMEOUT_MS,
     retryPolicy: OPENAI_CODEX_RETRY_POLICY,
     configuredMaxTokens: new Map(),
+    ...OPENAI_CODEX_IMAGE_REQUEST_BUDGETS,
     piProvider: responses.wrap(requestProvider(provider, fastMode)),
   }]])
   const models: MutableModels = createModels({ credentials })
