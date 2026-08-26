@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
 import type { OpenAICodexUsage } from '../usage.ts'
 import type {
+  ContextWindowPreferences,
   ImageToolPreferences,
   ModelCatalogSettings,
   ResponseApiPreferences,
@@ -16,6 +17,7 @@ const LOGOUT_PATH = '/plugins/dsh-openai-codex/auth/logout'
 const IMAGE_TOOLS_PATH = '/plugins/dsh-openai-codex/image-tools'
 const RESPONSE_API_PATH = '/plugins/dsh-openai-codex/response-api'
 const MODEL_CATALOG_PATH = '/plugins/dsh-openai-codex/models'
+const CONTEXT_WINDOW_PATH = '/plugins/dsh-openai-codex/context-window'
 const POLL_INTERVAL_MS = 1_000
 const USAGE_POLL_INTERVAL_MS = 60_000
 
@@ -61,6 +63,7 @@ const toggleTrackStyle: CSSProperties = { position: 'relative', width: 40, heigh
 const modelListStyle: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 10 }
 const modelRowStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 9, minHeight: 30, fontSize: 14, color: 'var(--dsw-alias-label-primary)', cursor: 'pointer' }
 const modelIdStyle: CSSProperties = { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }
+const numberInputStyle: CSSProperties = { boxSizing: 'border-box', width: 180, minHeight: 36, padding: '7px 10px', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 8, background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)', font: 'inherit', fontSize: 14 }
 const commandStyle: CSSProperties = { margin: 0, padding: '10px 12px', overflowX: 'auto', borderRadius: 8, background: 'var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.06))', color: 'var(--dsw-alias-label-primary)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 13, lineHeight: '20px', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }
 
 function PreferenceToggle({
@@ -121,6 +124,25 @@ function windowLabel(seconds: number, t: OpenAICodexSettingsInjected['t']): stri
 
 function formatPercent(percent: number): string {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(percent)
+}
+
+function contextWindowDraft(contextWindow: number | null): string {
+  return contextWindow === null ? '' : String(contextWindow / 1_000)
+}
+
+function contextWindowTokens(draft: string): number | null | undefined {
+  const trimmed = draft.trim()
+  if (trimmed.length === 0) return null
+  const match = /^(\d+)(?:\.(\d{1,3}))?$/u.exec(trimmed)
+  if (match === null) return undefined
+  const tokens = Number(match[1]) * 1_000 + Number((match[2] ?? '').padEnd(3, '0'))
+  return Number.isSafeInteger(tokens) && tokens > 0 ? tokens : undefined
+}
+
+function providerContextWindows(settings: ModelCatalogSettings | undefined): string | undefined {
+  if (settings === undefined) return undefined
+  const windows = [...new Set(settings.availableModels.map(model => model.contextWindow))].sort((left, right) => left - right)
+  return windows.map(tokens => `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 }).format(tokens / 1_000)}K`).join(' / ')
 }
 
 /** Format a provider-declared Unix-second reset in the user's local timezone. */
@@ -266,6 +288,10 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   const [modelCatalog, setModelCatalog] = useState<ModelCatalogSettings | undefined>()
   const [modelCatalogBusy, setModelCatalogBusy] = useState(false)
   const [modelCatalogError, setModelCatalogError] = useState<string | undefined>()
+  const [contextWindow, setContextWindow] = useState<ContextWindowPreferences | undefined>()
+  const [contextWindowDraftValue, setContextWindowDraftValue] = useState('')
+  const [contextWindowBusy, setContextWindowBusy] = useState(false)
+  const [contextWindowError, setContextWindowError] = useState<string | undefined>()
   const trustedOriginCommand = `dsh plugin --profile web exec dsh-openai-codex trust-origin ${window.location.origin}`
 
   const refresh = useCallback(async () => {
@@ -295,6 +321,16 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
     void jsonRequest<ModelCatalogSettings>(MODEL_CATALOG_PATH).then(
       value => { setModelCatalog(value); setModelCatalogError(undefined) },
       () => { setModelCatalogError(t('modelCatalogSettingsFailed')) },
+    )
+  }, [t])
+  useEffect(() => {
+    void jsonRequest<ContextWindowPreferences>(CONTEXT_WINDOW_PATH).then(
+      value => {
+        setContextWindow(value)
+        setContextWindowDraftValue(contextWindowDraft(value.contextWindow))
+        setContextWindowError(undefined)
+      },
+      () => { setContextWindowError(t('contextWindowSettingsFailed')) },
     )
   }, [t])
   useEffect(() => {
@@ -380,6 +416,25 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
       setModelCatalogError(t('modelCatalogSettingsFailed'))
     } finally {
       setModelCatalogBusy(false)
+    }
+  }
+
+  const updateContextWindow = async (): Promise<void> => {
+    const parsed = contextWindowTokens(contextWindowDraftValue)
+    if (parsed === undefined) {
+      setContextWindowError(t('contextWindowInvalid'))
+      return
+    }
+    setContextWindowBusy(true)
+    setContextWindowError(undefined)
+    try {
+      const saved = await jsonRequest<ContextWindowPreferences>(CONTEXT_WINDOW_PATH, 'POST', { contextWindow: parsed })
+      setContextWindow(saved)
+      setContextWindowDraftValue(contextWindowDraft(saved.contextWindow))
+    } catch {
+      setContextWindowError(t('contextWindowSettingsFailed'))
+    } finally {
+      setContextWindowBusy(false)
     }
   }
 
@@ -470,6 +525,40 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
           ))}
         </div>
         {modelCatalogError === undefined ? null : <p style={errorStyle}>{modelCatalogError}</p>}
+      </div>
+      <div style={cardStyle}>
+        <div>
+          <h3 style={quotaTitleStyle}>{t('contextWindow')}</h3>
+          <p style={{ ...bodyStyle, marginTop: 5 }}>{t('contextWindowIntro')}</p>
+        </div>
+        <div style={{ ...rowStyle, justifyContent: 'flex-start' }}>
+          <label htmlFor="openai-codex-context-window" style={statusStyle}>{t('contextWindowInput')}</label>
+          <input
+            id="openai-codex-context-window"
+            type="number"
+            inputMode="decimal"
+            min="0.001"
+            step="0.001"
+            placeholder={t('contextWindowPlaceholder')}
+            value={contextWindowDraftValue}
+            disabled={contextWindow === undefined || contextWindowBusy}
+            style={numberInputStyle}
+            onChange={event => { setContextWindowDraftValue(event.currentTarget.value) }}
+          />
+          <button
+            type="button"
+            style={primaryButtonStyle}
+            disabled={contextWindow === undefined || contextWindowBusy}
+            onClick={() => { void updateContextWindow() }}
+          >
+            {contextWindowBusy ? t('working') : t('contextWindowSave')}
+          </button>
+        </div>
+        {providerContextWindows(modelCatalog) === undefined ? null : (
+          <p style={bodyStyle}>{t('contextWindowDefaults', { values: providerContextWindows(modelCatalog) })}</p>
+        )}
+        <p style={bodyStyle}>{t('contextWindowHint')}</p>
+        {contextWindowError === undefined ? null : <p style={errorStyle}>{contextWindowError}</p>}
       </div>
       <div style={cardStyle}>
         <div>

@@ -17,10 +17,17 @@ export interface ResponseApiPreferences {
   useNativeCompaction: boolean
 }
 
+/** Client-side capacity override applied to every OpenAI Codex model. */
+export interface ContextWindowPreferences {
+  /** Tokens advertised to dsh, or null to keep each provider catalog default. */
+  contextWindow: number | null
+}
+
 /** One selectable model from the complete provider catalog. */
 export interface ModelCatalogEntry {
   id: string
   name: string
+  contextWindow: number
 }
 
 /** Live subset advertised through dsh model discovery. */
@@ -33,7 +40,7 @@ export interface ModelCatalogSettings extends ModelCatalogPreferences {
   availableModels: ModelCatalogEntry[]
 }
 
-interface OpenAICodexPreferences extends ImageToolPreferences, ResponseApiPreferences, ModelCatalogPreferences {
+interface OpenAICodexPreferences extends ImageToolPreferences, ResponseApiPreferences, ModelCatalogPreferences, ContextWindowPreferences {
   /** Migration-only key written by the unreleased store:true experiment. */
   useStatefulResponses: boolean
 }
@@ -50,6 +57,11 @@ export const DEFAULT_RESPONSE_API_PREFERENCES: ResponseApiPreferences = {
   useNativeCompaction: false,
 }
 
+/** Keep provider-declared capacities until the owner opts into an override. */
+export const DEFAULT_CONTEXT_WINDOW_PREFERENCES: ContextWindowPreferences = {
+  contextWindow: null,
+}
+
 const NAMESPACE = settingsNamespace('openai-codex')
 
 function preferenceSchema(defaultModels: readonly string[]): z<OpenAICodexPreferences> {
@@ -59,6 +71,7 @@ function preferenceSchema(defaultModels: readonly string[]): z<OpenAICodexPrefer
     useWebSocketContextReuse: z.boolean().default(false),
     useStatefulResponses: z.boolean().default(false),
     useNativeCompaction: z.boolean().default(false),
+    contextWindow: z.union([z.const(null), z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER)]).default(null),
     models: z.array(z.string()).default([...defaultModels]),
   })
 }
@@ -78,6 +91,7 @@ export class ImageToolPolicy {
     this.current = {
       ...DEFAULT_IMAGE_TOOL_PREFERENCES,
       ...DEFAULT_RESPONSE_API_PREFERENCES,
+      ...DEFAULT_CONTEXT_WINDOW_PREFERENCES,
       useStatefulResponses: false,
       ...base,
       models: this.normalizeModels(base.models ?? this.modelCatalog.map(model => model.id)),
@@ -138,6 +152,19 @@ export class ImageToolPolicy {
     })
     this.replace(this.scope.get())
     return this.responseApiSnapshot()
+  }
+
+  /** Return the live client-side context capacity override. */
+  contextWindowSnapshot(): ContextWindowPreferences {
+    return { contextWindow: this.current.contextWindow }
+  }
+
+  /** Persist a context capacity override or restore provider defaults with null. */
+  async updateContextWindow(patch: Partial<ContextWindowPreferences>): Promise<ContextWindowPreferences> {
+    if (this.scope === undefined) throw new Error('OpenAI Codex settings service is unavailable')
+    await this.scope.update(patch)
+    this.replace(this.scope.get())
+    return this.contextWindowSnapshot()
   }
 
   /** Return available models and the live discovery subset for the browser. */

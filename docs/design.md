@@ -6,7 +6,7 @@ English | [中文](design.zh.md)
 
 ## Scope
 
-`dsh-codex` is a standard DeepSeek Harness bundle. It adds ChatGPT OAuth, the Codex model catalog, a Codex standalone-search provider, browser account settings, an optional `read_image` URL extension, and `imagegen` without modifying dsh source code. The active dsh profile continues to own the agent loop, attachments, filesystem policy, tools, permissions, compaction, and Web composer.
+`dsh-codex` is a standard DeepSeek Harness bundle. It adds ChatGPT OAuth, the Codex model catalog with a client-side context-window override, a Codex standalone-search provider, browser account settings, an optional `read_image` URL extension, and `imagegen` without modifying dsh source code. The active dsh profile continues to own the agent loop, attachments, filesystem policy, tools, permissions, compaction, and Web composer.
 
 ## Authentication
 
@@ -19,6 +19,8 @@ Credentials are stored as a versioned JSON document at `$DSH_HOME/.openai-codex-
 The bundle constructs the public `PiAiAdapter` with the installed `openai-codex` provider and model catalog. Its credential resolver refreshes OAuth state and supplies the resulting bearer token as an explicit request credential. It does not discover ambient API keys or require a private dsh adapter helper. A per-session Fast Mode registry adds `service_tier: priority` only to requests for sessions whose Web composer toggle is enabled. On rc.7, the adapter also lifts the previous pi-ai replay envelope into the current response/block form while reading history, preserving native reasoning and tool metadata from existing sessions.
 
 Normal turns and `dsh-compaction-basic` therefore use the standard LLM service. Message conversion, streaming, tool calls, image attachment resolution, usage, overflow classification, encrypted reasoning replay, and cancellation remain adapter behavior. Codex requests always use `store: false`, so replay data and complete tool-call/result pairs stay in the Harness session rather than relying on server-persisted response ids.
+
+The Settings document can hold one optional context-window capacity, analogous to Codex CLI's global `model_context_window`. The adapter wraps provider model discovery and replaces each descriptor's `contextWindow` for the next resolution without changing Responses payloads. This makes the same resolved capacity flow into the Web token meter, overflow detection, output-token clamping, and `dsh-compaction-basic` threshold. Null preserves each provider default. Because this is client-side policy rather than backend capability negotiation, the UI warns that a larger override cannot make the model accept more input.
 
 With WebSocket context reuse disabled, the plugin explicitly selects SSE and each ordinary turn sends the complete Harness context. Enabling it selects pi-ai's `websocket-cached` transport, which mirrors the official Codex client: continuation state belongs to one session's reusable connection, and `previous_response_id` plus an input delta is sent only when non-input request properties match and the new input exactly extends the previous request and response. A mismatch, connection fallback, process restart, Fork session id, or compaction call uses a full request. The plugin stores no response continuation of its own.
 

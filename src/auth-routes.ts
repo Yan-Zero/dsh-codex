@@ -26,6 +26,7 @@ import {
 import { FastModeRegistry, isFastModeSessionId } from './fast-mode.ts'
 import { OPENAI_CODEX_FAST_MODE_PATH } from './fast-mode-paths.ts'
 import type {
+  ContextWindowPreferences,
   ImageToolPolicy,
   ImageToolPreferences,
   ModelCatalogPreferences,
@@ -45,6 +46,8 @@ export const OPENAI_CODEX_IMAGE_TOOL_SETTINGS_PATH = '/plugins/dsh-openai-codex/
 export const OPENAI_CODEX_RESPONSE_API_SETTINGS_PATH = '/plugins/dsh-openai-codex/response-api'
 /** Plugin-owned model discovery preference endpoint consumed by its browser half. */
 export const OPENAI_CODEX_MODEL_CATALOG_SETTINGS_PATH = '/plugins/dsh-openai-codex/models'
+/** Plugin-owned client-side context capacity endpoint consumed by its browser half. */
+export const OPENAI_CODEX_CONTEXT_WINDOW_SETTINGS_PATH = '/plugins/dsh-openai-codex/context-window'
 
 /** Maximum time a browser request waits for the provider's authorization URL. */
 export const OPENAI_CODEX_AUTH_URL_TIMEOUT_MS = 30_000
@@ -472,6 +475,17 @@ function responseApiPatch(value: Record<string, unknown>): Partial<ResponseApiPr
   return patch
 }
 
+function contextWindowPatch(value: Record<string, unknown>): Partial<ContextWindowPreferences> {
+  if (Object.keys(value).some(key => key !== 'contextWindow')) {
+    throw new TypeError('request contains an unknown context-window setting')
+  }
+  const contextWindow = value['contextWindow']
+  if (contextWindow !== null && (typeof contextWindow !== 'number' || !Number.isSafeInteger(contextWindow) || contextWindow <= 0)) {
+    throw new TypeError('contextWindow must be a positive safe integer or null')
+  }
+  return { contextWindow: contextWindow as number | null }
+}
+
 function modelCatalogPatch(value: Record<string, unknown>): Partial<ModelCatalogPreferences> {
   if (Object.keys(value).some(key => key !== 'models')) {
     throw new TypeError('request contains an unknown model setting')
@@ -590,6 +604,20 @@ export function registerOpenAICodexAuthRoutes(
             if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
             try {
               return json(res, 200, await imageTools.updateResponseApi(responseApiPatch(await readSettingsBody(req))))
+            } catch (error: unknown) {
+              return json(res, 400, { error: safeMessage(error) })
+            }
+          },
+        }),
+        ctx.webServer.register({
+          kind: 'exact',
+          path: OPENAI_CODEX_CONTEXT_WINDOW_SETTINGS_PATH,
+          handler: async (req, res) => {
+            if (!await authorize(req, res)) return
+            if (req.method === 'GET') return json(res, 200, imageTools.contextWindowSnapshot())
+            if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
+            try {
+              return json(res, 200, await imageTools.updateContextWindow(contextWindowPatch(await readSettingsBody(req))))
             } catch (error: unknown) {
               return json(res, 400, { error: safeMessage(error) })
             }

@@ -35,11 +35,12 @@ export {
   OpenAICodexImageClient,
 } from './imagegen.ts'
 export {
+  DEFAULT_CONTEXT_WINDOW_PREFERENCES,
   DEFAULT_IMAGE_TOOL_PREFERENCES,
   DEFAULT_RESPONSE_API_PREFERENCES,
   ImageToolPolicy,
 } from './tool-policy.ts'
-export type { ImageToolPreferences, ResponseApiPreferences } from './tool-policy.ts'
+export type { ContextWindowPreferences, ImageToolPreferences, ResponseApiPreferences } from './tool-policy.ts'
 export {
   isOpenAICodexReauthRequiredError,
   OPENAI_CODEX_REAUTH_REQUIRED_CODE,
@@ -125,6 +126,8 @@ export const inject = ['llm', 'web']
 export interface Config {
   /** Model ids advertised by the provider; omitted to advertise the full catalog. */
   models?: string[] | undefined
+  /** Client-side model context capacity in tokens; omitted to keep provider defaults. */
+  contextWindow?: number | undefined
   /** Model used for auxiliary standalone searches. */
   searchModel?: string
   /** Cached, indexed, or live web access. */
@@ -145,6 +148,7 @@ export interface Config {
 
 export const Config: z<Config> = z.object({
   models: z.union([z.const(undefined), z.array(z.string())]),
+  contextWindow: z.union([z.const(undefined), z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER)]),
   searchModel: z.string().default(DEFAULT_OPENAI_CODEX_SEARCH_MODEL),
   searchMode: z.union(['cached', 'indexed', 'live'] as const).default(DEFAULT_OPENAI_CODEX_SEARCH_MODE),
   searchContextSize: z.union(['low', 'medium', 'high'] as const).default(DEFAULT_OPENAI_CODEX_SEARCH_CONTEXT_SIZE),
@@ -165,6 +169,7 @@ export function apply(ctx: Context, config: Config): void {
   installOpenAICodexSearchEvent()
   const service = new OpenAICodexService({
     ...config.models === undefined ? {} : { models: config.models },
+    contextWindow: config.contextWindow ?? null,
     modelCatalog: openAICodexModelCatalog(),
     modifyReadImage: config.modifyReadImage ?? true,
     shareImagegenWithOtherModels: config.shareImagegenWithOtherModels ?? true,
@@ -185,6 +190,7 @@ export function apply(ctx: Context, config: Config): void {
       () => imageTools.responseApiSnapshot(),
       fastMode,
       () => imageTools.modelCatalogSnapshot().models,
+      () => imageTools.contextWindowSnapshot().contextWindow,
     ),
   )
   ctx.web.registerSearchProvider(new OpenAICodexSearchProvider({

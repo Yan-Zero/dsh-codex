@@ -10,6 +10,7 @@ import {
   OPENAI_CODEX_AUTH_LOGOUT_PATH,
   OpenAICodexWebAuth,
   OPENAI_CODEX_AUTH_STATUS_PATH,
+  OPENAI_CODEX_CONTEXT_WINDOW_SETTINGS_PATH,
   OPENAI_CODEX_MODEL_CATALOG_SETTINGS_PATH,
   REMOTE_WEB_ORIGIN_NOT_TRUSTED,
   registerOpenAICodexAuthRoutes,
@@ -142,8 +143,8 @@ describe('OpenAI Codex Web OAuth boundary', () => {
   it('serves and updates the model discovery subset through the plugin settings route', async () => {
     const snapshot = {
       availableModels: [
-        { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna' },
-        { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol' },
+        { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', contextWindow: 272_000 },
+        { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', contextWindow: 272_000 },
       ],
       models: ['gpt-5.6-luna', 'gpt-5.6-sol'],
     }
@@ -169,6 +170,40 @@ describe('OpenAI Codex Web OAuth boundary', () => {
     expect(postResponse.observed.status).toBe(200)
     expect(updateModelCatalog).toHaveBeenCalledWith({ models: ['gpt-5.6-sol'] })
     expect(JSON.parse(postResponse.observed.body ?? 'null').models).toEqual(['gpt-5.6-sol'])
+  })
+
+  it('serves, updates, resets, and validates the context-window override', async () => {
+    let contextWindow: number | null = null
+    const preferences = {
+      contextWindowSnapshot: vi.fn(() => ({ contextWindow })),
+      updateContextWindow: vi.fn(async (patch: { contextWindow?: number | null }) => {
+        if (patch.contextWindow !== undefined) contextWindow = patch.contextWindow
+        return { contextWindow }
+      }),
+    } as unknown as ImageToolPolicy
+    const route = captureRoutes(emptyTrustedOrigins, preferences)
+      .find(candidate => candidate.path === OPENAI_CODEX_CONTEXT_WINDOW_SETTINGS_PATH)
+    if (route === undefined) throw new Error('context-window settings route was not registered')
+
+    const getResponse = response()
+    await route.handler(request({}), getResponse)
+    expect(JSON.parse(getResponse.observed.body ?? 'null')).toEqual({ contextWindow: null })
+
+    const updateResponse = response()
+    await route.handler(request({ method: 'POST', body: JSON.stringify({ contextWindow: 512_000 }) }), updateResponse)
+    expect(updateResponse.observed.status).toBe(200)
+    expect(contextWindow).toBe(512_000)
+
+    const resetResponse = response()
+    await route.handler(request({ method: 'POST', body: JSON.stringify({ contextWindow: null }) }), resetResponse)
+    expect(resetResponse.observed.status).toBe(200)
+    expect(contextWindow).toBeNull()
+
+    for (const value of [0, 1.5, '272000']) {
+      const invalidResponse = response()
+      await route.handler(request({ method: 'POST', body: JSON.stringify({ contextWindow: value }) }), invalidResponse)
+      expect(invalidResponse.observed.status).toBe(400)
+    }
   })
 
   it('returns a stable remote-origin error until the exact effective origin is trusted', async () => {

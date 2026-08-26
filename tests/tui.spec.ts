@@ -32,6 +32,7 @@ function fakeService(): OpenAICodexService {
       return { ...imagePreferences }
     }),
     responsePreferences: vi.fn(() => ({ ...responsePreferences })),
+    contextWindowPreferences: vi.fn(() => ({ contextWindow: null })),
     updateResponsePreferences: vi.fn(async patch => {
       responsePreferences = { ...responsePreferences, ...patch }
       return { ...responsePreferences }

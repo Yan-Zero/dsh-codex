@@ -46,9 +46,11 @@ describe('ImageToolPolicy', () => {
       useWebSocketContextReuse: false,
       useNativeCompaction: false,
     })
+    expect(policy.contextWindowSnapshot()).toEqual({ contextWindow: null })
 
     await policy.update({ shareImagegenWithOtherModels: false })
     await policy.updateResponseApi({ useNativeCompaction: true })
+    await policy.updateContextWindow({ contextWindow: 512_000 })
 
     expect(policy.snapshot()).toEqual({
       modifyReadImage: true,
@@ -58,6 +60,7 @@ describe('ImageToolPolicy', () => {
       useWebSocketContextReuse: false,
       useNativeCompaction: true,
     })
+    expect(policy.contextWindowSnapshot()).toEqual({ contextWindow: 512_000 })
   })
 
   it('notifies the read_image enhancer when its live setting changes', async () => {
@@ -105,17 +108,17 @@ describe('ImageToolPolicy', () => {
     context = ctx
     await ctx.plugin(MemorySettings)
     const policy = new ImageToolPolicy({ models: ['gpt-5.6-terra', 'gpt-5.6-luna'] }, [
-      { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna' },
-      { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol' },
-      { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra' },
+      { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', contextWindow: 272_000 },
+      { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', contextWindow: 272_000 },
+      { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', contextWindow: 272_000 },
     ])
     policy.attach(ctx)
 
     expect(policy.modelCatalogSnapshot()).toEqual({
       availableModels: [
-        { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna' },
-        { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol' },
-        { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra' },
+        { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', contextWindow: 272_000 },
+        { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', contextWindow: 272_000 },
+        { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', contextWindow: 272_000 },
       ],
       models: ['gpt-5.6-luna', 'gpt-5.6-terra'],
     })
@@ -133,13 +136,14 @@ describe('ImageToolPolicy', () => {
       'openai-codex': { useNativeCompaction: true },
     })
     const policy = new ImageToolPolicy({}, [
-      { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna' },
-      { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol' },
+      { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', contextWindow: 272_000 },
+      { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', contextWindow: 272_000 },
     ])
 
     policy.attach(ctx)
 
     expect(policy.modelCatalogSnapshot().models).toEqual(['gpt-5.6-luna', 'gpt-5.6-sol'])
     expect(policy.responseApiSnapshot().useNativeCompaction).toBe(true)
+    expect(policy.contextWindowSnapshot()).toEqual({ contextWindow: null })
   })
 })

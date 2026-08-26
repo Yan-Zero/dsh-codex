@@ -3,14 +3,17 @@ import type { OpenAICodexCredentialStore } from '../src/store.ts'
 import { OPENAI_CODEX_PROVIDER } from '../src/store.ts'
 import {
   createOpenAICodexAdapter,
+  openAICodexModelCatalog,
   OPENAI_CODEX_RETRY_POLICY,
 } from '../src/adapter.ts'
 import { Config } from '../src/index.ts'
 
 describe('OpenAI Codex adapter policy', () => {
-  it('distinguishes an omitted model list from an explicitly empty list', () => {
+  it('validates optional catalog and context-window configuration', () => {
     expect(Config({}).models).toBeUndefined()
-    expect(Config({ models: [] }).models).toEqual([])
+    expect(Config({}).contextWindow).toBeUndefined()
+    expect(Config({ models: [], contextWindow: 512_000 })).toMatchObject({ models: [], contextWindow: 512_000 })
+    expect(() => Config({ contextWindow: 0 })).toThrow()
   })
 
   it('registers the extended bounded retry policy on the provider route', () => {
@@ -46,6 +49,49 @@ describe('OpenAI Codex adapter policy', () => {
     await expect(adapter.resolveModel(OPENAI_CODEX_PROVIDER, 'gpt-5.4')).resolves.toMatchObject({
       provider: OPENAI_CODEX_PROVIDER,
       id: 'gpt-5.4',
+    })
+  })
+
+  it('rotates snapshot-consistent profiles when the client-side capacity changes', async () => {
+    let contextWindow: number | null = null
+    const adapter = createOpenAICodexAdapter(
+      {} as OpenAICodexCredentialStore,
+      () => undefined,
+      () => ({ useWebSocketContextReuse: false, useNativeCompaction: false }),
+      undefined,
+      undefined,
+      () => contextWindow,
+    )
+
+    const profileLoader = (adapter as unknown as {
+      config: { profiles(): Map<string, { piProvider: { getModels(): readonly { id: string; contextWindow: number }[] } }> }
+    }).config.profiles
+    const firstProfiles = profileLoader()
+    await expect(adapter.resolveModel(OPENAI_CODEX_PROVIDER, 'gpt-5.6-sol')).resolves.toMatchObject({
+      context: { contextWindow: 272_000 },
+    })
+
+    contextWindow = 512_000
+    const secondProfiles = profileLoader()
+    expect(secondProfiles).not.toBe(firstProfiles)
+    expect(profileLoader()).toBe(secondProfiles)
+    expect(firstProfiles.get(OPENAI_CODEX_PROVIDER)?.piProvider.getModels().find(model => model.id === 'gpt-5.6-sol')).toMatchObject({
+      contextWindow: 272_000,
+    })
+    expect(secondProfiles.get(OPENAI_CODEX_PROVIDER)?.piProvider.getModels().find(model => model.id === 'gpt-5.6-sol')).toMatchObject({
+      contextWindow: 512_000,
+    })
+    await expect(adapter.resolveModel(OPENAI_CODEX_PROVIDER, 'gpt-5.6-sol')).resolves.toMatchObject({
+      context: { contextWindow: 512_000 },
+    })
+    await expect(adapter.resolveModel(OPENAI_CODEX_PROVIDER, 'gpt-5.3-codex-spark')).resolves.toMatchObject({
+      context: { contextWindow: 512_000 },
+    })
+  })
+
+  it('projects provider context capacities into the settings catalog', () => {
+    expect(openAICodexModelCatalog().find(model => model.id === 'gpt-5.6-sol')).toMatchObject({
+      contextWindow: 272_000,
     })
   })
 

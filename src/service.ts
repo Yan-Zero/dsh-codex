@@ -7,6 +7,7 @@ import type { OpenAICodexAuthStatus } from './auth.ts'
 import { OpenAICodexCredentialStore } from './store.ts'
 import { ImageToolPolicy } from './tool-policy.ts'
 import type {
+  ContextWindowPreferences,
   ImageToolPreferences,
   ModelCatalogEntry,
   ResponseApiPreferences,
@@ -22,7 +23,7 @@ declare module '@deepseek-ai/cordis' {
 }
 
 /** Initial settings contributed by the bundle configuration. */
-export interface OpenAICodexServiceOptions extends ImageToolPreferences, ResponseApiPreferences {
+export interface OpenAICodexServiceOptions extends ImageToolPreferences, ResponseApiPreferences, ContextWindowPreferences {
   models?: string[]
   modelCatalog: readonly ModelCatalogEntry[]
 }
@@ -78,6 +79,14 @@ export class OpenAICodexService {
 
   updateResponsePreferences(patch: Partial<ResponseApiPreferences>): Promise<ResponseApiPreferences> {
     return this.policy.updateResponseApi(patch)
+  }
+
+  contextWindowPreferences(): ContextWindowPreferences {
+    return this.policy.contextWindowSnapshot()
+  }
+
+  updateContextWindowPreferences(patch: Partial<ContextWindowPreferences>): Promise<ContextWindowPreferences> {
+    return this.policy.updateContextWindow(patch)
   }
 }
 

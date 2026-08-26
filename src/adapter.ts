@@ -16,7 +16,11 @@ import type { FastModeRegistry } from './fast-mode.ts'
 
 /** Return a detached copy of the complete pi-ai Codex model catalog. */
 export function openAICodexModelCatalog(): readonly ModelCatalogEntry[] {
-  return openaiCodexProvider().getModels().map(model => ({ id: model.id, name: model.name }))
+  return openaiCodexProvider().getModels().map(model => ({
+    id: model.id,
+    name: model.name,
+    contextWindow: model.contextWindow,
+  }))
 }
 
 /** Provider idle ceiling used by the composite route. */
@@ -109,6 +113,21 @@ export function withOpenAICodexFastMode(
   }
 }
 
+/** Override provider model capacities without changing request payload fields. */
+function withOpenAICodexContextWindow(
+  provider: Provider,
+  contextWindow: number | null | undefined,
+): Provider {
+  if (contextWindow === null || contextWindow === undefined) return provider
+  const getModels = provider.getModels
+  return {
+    ...provider,
+    getModels() {
+      return getModels.call(provider).map(model => ({ ...model, contextWindow }))
+    },
+  }
+}
+
 function requestProvider(provider: Provider, fastMode?: FastModeRegistry): Provider {
   return {
     ...withOpenAICodexFastMode(provider, fastMode),
@@ -169,21 +188,32 @@ export function createOpenAICodexAdapter(
   responsePreferences: () => ResponseApiPreferences,
   fastMode?: FastModeRegistry,
   visibleModelIds?: () => readonly string[],
+  contextWindow?: () => number | null | undefined,
 ): PiAiAdapter {
-  const provider = openaiCodexProvider()
+  const provider = requestProvider(openaiCodexProvider(), fastMode)
   const responses = new OpenAICodexResponseRuntime(responsePreferences)
-  const profiles = new Map<string, ResolvedPiAiProviderProfile>([[OPENAI_CODEX_PROVIDER, {
-    provider: OPENAI_CODEX_PROVIDER,
-    displayName: 'OpenAI Codex',
-    streamIdleTimeoutMs: OPENAI_CODEX_STREAM_IDLE_TIMEOUT_MS,
-    retryPolicy: OPENAI_CODEX_RETRY_POLICY,
-    configuredMaxTokens: new Map(),
-    piProvider: responses.wrap(requestProvider(provider, fastMode)),
-  }]])
+  const unset = Symbol('unset context window')
+  let resolvedContextWindow: number | null | undefined | typeof unset = unset
+  let resolvedProfiles: Map<string, ResolvedPiAiProviderProfile> | undefined
+  const profiles = (): Map<string, ResolvedPiAiProviderProfile> => {
+    const nextContextWindow = contextWindow?.()
+    if (resolvedProfiles !== undefined && nextContextWindow === resolvedContextWindow) return resolvedProfiles
+    const configuredProvider = withOpenAICodexContextWindow(provider, nextContextWindow)
+    resolvedContextWindow = nextContextWindow
+    resolvedProfiles = new Map([[OPENAI_CODEX_PROVIDER, {
+      provider: OPENAI_CODEX_PROVIDER,
+      displayName: 'OpenAI Codex',
+      streamIdleTimeoutMs: OPENAI_CODEX_STREAM_IDLE_TIMEOUT_MS,
+      retryPolicy: OPENAI_CODEX_RETRY_POLICY,
+      configuredMaxTokens: new Map(),
+      piProvider: responses.wrap(configuredProvider),
+    }]])
+    return resolvedProfiles
+  }
   const models: MutableModels = createModels({ credentials })
   models.setProvider(provider)
   return new OpenAICodexAdapter({
-    profiles: () => profiles,
+    profiles,
     resolveApiKey: async () => (await models.getAuth(OPENAI_CODEX_PROVIDER))?.auth.apiKey,
     resolveAttachments,
   }, responses, visibleModelIds)
