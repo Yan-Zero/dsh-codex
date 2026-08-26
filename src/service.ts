@@ -4,6 +4,7 @@ import type { AuthInteraction } from '@earendil-works/pi-ai'
 import type { Context } from '@deepseek-ai/cordis'
 import { loginOpenAICodex, logoutOpenAICodex, openAICodexAuthStatus } from './auth.ts'
 import type { OpenAICodexAuthStatus } from './auth.ts'
+import type { OpenAICodexCustomContextPreferences } from './custom-context.ts'
 import { OpenAICodexCredentialStore } from './store.ts'
 import { ImageToolPolicy } from './tool-policy.ts'
 import type {
@@ -22,7 +23,7 @@ declare module '@deepseek-ai/cordis' {
 }
 
 /** Initial settings contributed by the bundle configuration. */
-export interface OpenAICodexServiceOptions extends ImageToolPreferences, ResponseApiPreferences {
+export interface OpenAICodexServiceOptions extends ImageToolPreferences, ResponseApiPreferences, OpenAICodexCustomContextPreferences {
   models?: string[]
   modelCatalog: readonly ModelCatalogEntry[]
 }
@@ -78,6 +79,16 @@ export class OpenAICodexService {
 
   updateResponsePreferences(patch: Partial<ResponseApiPreferences>): Promise<ResponseApiPreferences> {
     return this.policy.updateResponseApi(patch)
+  }
+
+  customContextPreferences(): OpenAICodexCustomContextPreferences {
+    return this.policy.customContextSnapshot()
+  }
+
+  updateCustomContextPreferences(
+    patch: Partial<OpenAICodexCustomContextPreferences>,
+  ): Promise<OpenAICodexCustomContextPreferences> {
+    return this.policy.updateCustomContext(patch)
   }
 }
 

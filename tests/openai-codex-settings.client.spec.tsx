@@ -35,6 +35,7 @@ describe('OpenAI Codex settings model catalog', () => {
       if (path.endsWith('/auth/status')) return json({ status: 'signed-out' })
       if (path.endsWith('/image-tools')) return json({ modifyReadImage: true, shareImagegenWithOtherModels: true })
       if (path.endsWith('/response-api')) return json({ useWebSocketContextReuse: false, useNativeCompaction: false })
+      if (path.endsWith('/custom-context')) return json({ customContext: '', customContextKind: 'application' })
       if (path.endsWith('/models')) {
         if (init?.method === 'POST') selected = (JSON.parse(String(init.body)) as { models: string[] }).models
         return json({ availableModels, models: selected })

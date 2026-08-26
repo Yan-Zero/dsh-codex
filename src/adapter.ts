@@ -11,6 +11,8 @@ import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import type { OpenAICodexCredentialStore } from './store.ts'
 import { OPENAI_CODEX_PROVIDER } from './store.ts'
 import { OpenAICodexResponseRuntime } from './responses.ts'
+import { DEFAULT_OPENAI_CODEX_CUSTOM_CONTEXT } from './custom-context.ts'
+import type { OpenAICodexCustomContextPreferences } from './custom-context.ts'
 import type { ModelCatalogEntry, ResponseApiPreferences } from './tool-policy.ts'
 import type { FastModeRegistry } from './fast-mode.ts'
 
@@ -169,9 +171,13 @@ export function createOpenAICodexAdapter(
   responsePreferences: () => ResponseApiPreferences,
   fastMode?: FastModeRegistry,
   visibleModelIds?: () => readonly string[],
+  customContext?: () => OpenAICodexCustomContextPreferences,
 ): PiAiAdapter {
   const provider = openaiCodexProvider()
-  const responses = new OpenAICodexResponseRuntime(responsePreferences)
+  const responses = new OpenAICodexResponseRuntime(
+    responsePreferences,
+    customContext ?? (() => DEFAULT_OPENAI_CODEX_CUSTOM_CONTEXT),
+  )
   const profiles = new Map<string, ResolvedPiAiProviderProfile>([[OPENAI_CODEX_PROVIDER, {
     provider: OPENAI_CODEX_PROVIDER,
     displayName: 'OpenAI Codex',

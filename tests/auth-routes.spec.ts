@@ -10,11 +10,13 @@ import {
   OPENAI_CODEX_AUTH_LOGOUT_PATH,
   OpenAICodexWebAuth,
   OPENAI_CODEX_AUTH_STATUS_PATH,
+  OPENAI_CODEX_CUSTOM_CONTEXT_SETTINGS_PATH,
   OPENAI_CODEX_MODEL_CATALOG_SETTINGS_PATH,
   REMOTE_WEB_ORIGIN_NOT_TRUSTED,
   registerOpenAICodexAuthRoutes,
   trustedRequestDecision,
 } from '../src/auth-routes.ts'
+import { OPENAI_CODEX_CUSTOM_CONTEXT_MAX_CHARS } from '../src/custom-context.ts'
 import type { OpenAICodexCredentialStore } from '../src/store.ts'
 import type { ImageToolPolicy } from '../src/tool-policy.ts'
 import { OpenAICodexTrustedOriginsStore } from '../src/trusted-origins.ts'
@@ -169,6 +171,69 @@ describe('OpenAI Codex Web OAuth boundary', () => {
     expect(postResponse.observed.status).toBe(200)
     expect(updateModelCatalog).toHaveBeenCalledWith({ models: ['gpt-5.6-sol'] })
     expect(JSON.parse(postResponse.observed.body ?? 'null').models).toEqual(['gpt-5.6-sol'])
+  })
+
+  it('serves, validates, and updates custom context settings', async () => {
+    const snapshot = { customContext: '', customContextKind: 'application' as const }
+    const updateCustomContext = vi.fn(async (patch: {
+      customContext?: string
+      customContextKind?: 'application' | 'untrusted'
+    }) => ({ ...snapshot, ...patch }))
+    const preferences = {
+      customContextSnapshot: vi.fn(() => snapshot),
+      updateCustomContext,
+    } as unknown as ImageToolPolicy
+    const route = captureRoutes(emptyTrustedOrigins, preferences)
+      .find(candidate => candidate.path === OPENAI_CODEX_CUSTOM_CONTEXT_SETTINGS_PATH)
+    if (route === undefined) throw new Error('custom context settings route was not registered')
+
+    const getResponse = response()
+    await route.handler(request({}), getResponse)
+    expect(JSON.parse(getResponse.observed.body ?? 'null')).toEqual(snapshot)
+
+    const postResponse = response()
+    await route.handler(request({
+      method: 'POST',
+      body: JSON.stringify({ customContext: 'Browser state', customContextKind: 'untrusted' }),
+    }), postResponse)
+    expect(postResponse.observed.status).toBe(200)
+    expect(updateCustomContext).toHaveBeenCalledWith({
+      customContext: 'Browser state',
+      customContextKind: 'untrusted',
+    })
+
+    const unicodeContext = '上下文'.repeat(OPENAI_CODEX_CUSTOM_CONTEXT_MAX_CHARS).slice(0, OPENAI_CODEX_CUSTOM_CONTEXT_MAX_CHARS)
+    const unicodeResponse = response()
+    await route.handler(request({
+      method: 'POST',
+      body: JSON.stringify({ customContext: unicodeContext }),
+    }), unicodeResponse)
+    expect(unicodeResponse.observed.status).toBe(200)
+    expect(updateCustomContext).toHaveBeenLastCalledWith({ customContext: unicodeContext })
+
+    const escapedContext = '\0'.repeat(OPENAI_CODEX_CUSTOM_CONTEXT_MAX_CHARS)
+    const escapedResponse = response()
+    await route.handler(request({
+      method: 'POST',
+      body: JSON.stringify({ customContext: escapedContext }),
+    }), escapedResponse)
+    expect(escapedResponse.observed.status).toBe(200)
+    expect(updateCustomContext).toHaveBeenLastCalledWith({ customContext: escapedContext })
+
+    const oversizedResponse = response()
+    await route.handler(request({
+      method: 'POST',
+      body: JSON.stringify({ customContext: '', padding: 'x'.repeat(30_000) }),
+    }), oversizedResponse)
+    expect(oversizedResponse.observed.status).toBe(413)
+
+    const invalidResponse = response()
+    await route.handler(request({
+      method: 'POST',
+      body: JSON.stringify({ customContextKind: 'system' }),
+    }), invalidResponse)
+    expect(invalidResponse.observed.status).toBe(400)
+    expect(updateCustomContext).toHaveBeenCalledTimes(3)
   })
 
   it('returns a stable remote-origin error until the exact effective origin is trusted', async () => {

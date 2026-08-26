@@ -6,7 +6,7 @@ Status: implemented
 
 ## 范围
 
-`dsh-codex` 是标准 DeepSeek Harness bundle。它在不修改 dsh 源码的前提下提供 ChatGPT OAuth、Codex 模型目录、Codex 独立搜索提供方、浏览器账号设置、可选的 `read_image` URL 扩展与 `imagegen`。当前 dsh profile 继续负责 agent loop、附件、文件系统策略、工具、权限、压缩与 Web 输入框。
+`dsh-codex` 是标准 DeepSeek Harness bundle。它在不修改 dsh 源码的前提下提供 ChatGPT OAuth、Codex 模型目录、设置级自定义上下文、Codex 独立搜索提供方、浏览器账号设置、可选的 `read_image` URL 扩展与 `imagegen`。当前 dsh profile 继续负责 agent loop、附件、文件系统策略、工具、权限、压缩与 Web 输入框。
 
 ## 认证
 
@@ -19,6 +19,8 @@ Status: implemented
 bundle 使用公开的 `PiAiAdapter` 以及随附的 `openai-codex` provider 和模型目录。凭据解析器会刷新 OAuth 状态，并把所得 bearer token 作为显式的单次请求凭据传入。它不会发现环境中的 API Key，也不依赖 dsh 的私有适配器辅助函数。按会话维护的 Fast Mode registry 只会为 Web 输入框中已开启开关的会话加入 `service_tier: priority`。升级到 rc.7 后，adapter 还会在读取历史时把旧版 pi-ai replay envelope 提升为当前 response／block 结构，从而保留已有会话的原生 reasoning 与 tool 元数据。
 
 因此，普通轮次与 `dsh-compaction-basic` 都经过标准 LLM 服务。消息转换、流式输出、工具调用、图片附件解析、用量、溢出分类、加密推理回放和取消仍由适配器负责。Codex 请求始终使用 `store: false`，所以回放数据及完整的工具调用／结果配对保存在 Harness session 中，不依赖服务端持久化的 response id。
+
+Codex app-server 提供实验性的 `additionalContext`，但它向下游 Responses 发送的是普通输入消息，而不是 `additional_context` 字段。本插件遵循该 wire 行为：Settings 文档持久化一段有长度上限的内容及 `application`／`untrusted` 信任级别，response runtime 使用固定的 `dsh_custom_context` 来源包装，把它作为 developer 或 user 标准消息加入输入前缀。与上游 renderer 一致，内容不做转义，真正的权限边界是 Responses 角色，包装标签只提供来源提示。空内容不会增加 item。稳定前缀会参与 pi-ai 的完整输入比较，因此上下文不变时仍可使用 WebSocket 增量续接；任一设置变化都会让下一次请求改发完整输入。原生压缩结果不保留这段内容，后续每个普通请求都会重新从实时 Settings 文档派生。
 
 关闭 WebSocket 上下文复用时，插件明确选择 SSE，每个普通轮次都会发送 Harness 完整上下文。开启后选择 pi-ai 的 `websocket-cached` 传输，其行为与官方 Codex 客户端一致：续接状态属于单个会话可复用的连接；只有非输入请求属性一致，且新输入严格延续上一份请求和响应时，才发送 `previous_response_id` 与输入增量。历史失配、连接回退、进程重启、Fork 后的新会话 id 或压缩调用都会发送完整请求。插件不再保存自己的 response continuation。
 

@@ -6,6 +6,7 @@ import { OpenAICodexResponseRuntime } from '../src/responses.ts'
 
 function runtimeHarness(initialReuse: boolean) {
   let reuse = initialReuse
+  let customContext = ''
   const transports: Array<Transport | undefined> = []
   const streamOptions: SimpleStreamOptions[] = []
   const base = openaiCodexProvider()
@@ -17,16 +18,19 @@ function runtimeHarness(initialReuse: boolean) {
       return createAssistantMessageEventStream()
     },
   } satisfies typeof base
-  const runtime = new OpenAICodexResponseRuntime(() => ({
-    useWebSocketContextReuse: reuse,
-    useNativeCompaction: false,
-  }))
+  const runtime = new OpenAICodexResponseRuntime(
+    () => ({
+      useWebSocketContextReuse: reuse,
+      useNativeCompaction: false,
+    }),
+    () => ({ customContext, customContextKind: 'application' }),
+  )
   const wrapped = runtime.wrap(provider)
   const model = base.getModels().find(candidate => candidate.id === 'gpt-5.6-sol')
     ?? base.getModels()[0]
   if (model === undefined) throw new Error('Codex provider has no test model')
-  const call = (sessionId: string): void => {
-    wrapped.streamSimple(model, { messages: [] }, { sessionId })
+  const call = (sessionId: string, options: SimpleStreamOptions = {}): void => {
+    wrapped.streamSimple(model, { messages: [] }, { ...options, sessionId })
   }
   return {
     transports,
@@ -35,6 +39,7 @@ function runtimeHarness(initialReuse: boolean) {
     model,
     call,
     setReuse(value: boolean): void { reuse = value },
+    setCustomContext(value: string): void { customContext = value },
   }
 }
 
@@ -58,6 +63,46 @@ describe('OpenAICodexResponseRuntime transport policy', () => {
   it('preserves the provider-owned store:false payload', async () => {
     const harness = runtimeHarness(true)
     harness.call('session-store-false')
+
+    const transformed = await harness.streamOptions[0]?.onPayload?.({ store: false, input: [] }, harness.model)
+
+    expect(transformed).toEqual({ store: false, input: [] })
+  })
+
+  it('applies live custom context before an ordinary request payload', async () => {
+    const harness = runtimeHarness(true)
+    harness.setCustomContext('Use the workspace formatter.')
+    harness.call('session-custom-context')
+
+    const transformed = await harness.streamOptions[0]?.onPayload?.({ store: false, input: [{ role: 'user' }] }, harness.model)
+
+    expect(transformed).toMatchObject({
+      store: false,
+      input: [
+        { role: 'developer', content: [{ text: '<dsh_custom_context>Use the workspace formatter.</dsh_custom_context>' }] },
+        { role: 'user' },
+      ],
+    })
+  })
+
+  it('keeps the transformed payload when a downstream observer returns undefined', async () => {
+    const harness = runtimeHarness(true)
+    harness.setCustomContext('Keep this context.')
+    harness.call('session-observer', { onPayload: () => undefined })
+
+    const transformed = await harness.streamOptions[0]?.onPayload?.({ store: false, input: [] }, harness.model)
+
+    expect(transformed).toMatchObject({
+      input: [{ role: 'developer', content: [{ text: '<dsh_custom_context>Keep this context.</dsh_custom_context>' }] }],
+    })
+  })
+
+  it('keeps custom context out of Harness compaction requests', async () => {
+    const harness = runtimeHarness(true)
+    harness.setCustomContext('Ordinary-turn context')
+    const leaveCompaction = harness.runtime.enterCompaction('session-compact-context')
+    harness.call('session-compact-context')
+    leaveCompaction()
 
     const transformed = await harness.streamOptions[0]?.onPayload?.({ store: false, input: [] }, harness.model)
 

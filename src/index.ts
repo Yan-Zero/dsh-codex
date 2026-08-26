@@ -18,6 +18,8 @@ import { createOpenAICodexAdapter, openAICodexModelCatalog } from './adapter.ts'
 import { registerOpenAICodexAuthRoutes } from './auth-routes.ts'
 import { installReadImageEnhancement } from './read-image-enhancement.ts'
 import { imagegenTool } from './imagegen.ts'
+import { OPENAI_CODEX_CUSTOM_CONTEXT_MAX_CHARS } from './custom-context.ts'
+import type { OpenAICodexCustomContextKind } from './custom-context.ts'
 import { ImageToolPolicy } from './tool-policy.ts'
 import { FastModeRegistry } from './fast-mode.ts'
 import { assertNoOpenAICodexProviderConflict } from './doctor.ts'
@@ -40,6 +42,16 @@ export {
   ImageToolPolicy,
 } from './tool-policy.ts'
 export type { ImageToolPreferences, ResponseApiPreferences } from './tool-policy.ts'
+export {
+  applyOpenAICodexCustomContext,
+  DEFAULT_OPENAI_CODEX_CUSTOM_CONTEXT,
+  OPENAI_CODEX_CUSTOM_CONTEXT_MAX_CHARS,
+  OPENAI_CODEX_CUSTOM_CONTEXT_SOURCE,
+} from './custom-context.ts'
+export type {
+  OpenAICodexCustomContextKind,
+  OpenAICodexCustomContextPreferences,
+} from './custom-context.ts'
 export {
   isOpenAICodexReauthRequiredError,
   OPENAI_CODEX_REAUTH_REQUIRED_CODE,
@@ -141,6 +153,10 @@ export interface Config {
   useWebSocketContextReuse?: boolean
   /** Use Codex V2 Responses compaction for Harness compaction calls. */
   useNativeCompaction?: boolean
+  /** Settings-owned context prefixed to ordinary Codex Responses input. */
+  customContext?: string
+  /** Whether custom context is trusted application data or untrusted external data. */
+  customContextKind?: OpenAICodexCustomContextKind
 }
 
 export const Config: z<Config> = z.object({
@@ -153,6 +169,8 @@ export const Config: z<Config> = z.object({
   shareImagegenWithOtherModels: z.boolean().default(true),
   useWebSocketContextReuse: z.boolean().default(false),
   useNativeCompaction: z.boolean().default(false),
+  customContext: z.string().max(OPENAI_CODEX_CUSTOM_CONTEXT_MAX_CHARS).default(''),
+  customContextKind: z.union(['application', 'untrusted'] as const).default('application'),
 })
 
 /**
@@ -170,6 +188,8 @@ export function apply(ctx: Context, config: Config): void {
     shareImagegenWithOtherModels: config.shareImagegenWithOtherModels ?? true,
     useWebSocketContextReuse: config.useWebSocketContextReuse ?? false,
     useNativeCompaction: config.useNativeCompaction ?? false,
+    customContext: config.customContext ?? '',
+    customContextKind: config.customContextKind ?? 'application',
   })
   const credentials = service.credentials
   const imageTools = service.policy
@@ -185,6 +205,7 @@ export function apply(ctx: Context, config: Config): void {
       () => imageTools.responseApiSnapshot(),
       fastMode,
       () => imageTools.modelCatalogSnapshot().models,
+      () => imageTools.customContextSnapshot(),
     ),
   )
   ctx.web.registerSearchProvider(new OpenAICodexSearchProvider({

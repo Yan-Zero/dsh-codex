@@ -3,6 +3,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
 import type { OpenAICodexUsage } from '../usage.ts'
+import { OPENAI_CODEX_CUSTOM_CONTEXT_MAX_CHARS } from '../custom-context.ts'
+import type {
+  OpenAICodexCustomContextKind,
+  OpenAICodexCustomContextPreferences,
+} from '../custom-context.ts'
 import type {
   ImageToolPreferences,
   ModelCatalogSettings,
@@ -15,6 +20,7 @@ const LOGIN_PATH = '/plugins/dsh-openai-codex/auth/login'
 const LOGOUT_PATH = '/plugins/dsh-openai-codex/auth/logout'
 const IMAGE_TOOLS_PATH = '/plugins/dsh-openai-codex/image-tools'
 const RESPONSE_API_PATH = '/plugins/dsh-openai-codex/response-api'
+const CUSTOM_CONTEXT_PATH = '/plugins/dsh-openai-codex/custom-context'
 const MODEL_CATALOG_PATH = '/plugins/dsh-openai-codex/models'
 const POLL_INTERVAL_MS = 1_000
 const USAGE_POLL_INTERVAL_MS = 60_000
@@ -62,6 +68,9 @@ const modelListStyle: CSSProperties = { display: 'grid', gridTemplateColumns: 'r
 const modelRowStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 9, minHeight: 30, fontSize: 14, color: 'var(--dsw-alias-label-primary)', cursor: 'pointer' }
 const modelIdStyle: CSSProperties = { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }
 const commandStyle: CSSProperties = { margin: 0, padding: '10px 12px', overflowX: 'auto', borderRadius: 8, background: 'var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.06))', color: 'var(--dsw-alias-label-primary)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 13, lineHeight: '20px', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }
+const fieldStyle: CSSProperties = { boxSizing: 'border-box', width: '100%', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 8, background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)', font: 'inherit', fontSize: 14 }
+const textAreaStyle: CSSProperties = { ...fieldStyle, minHeight: 120, padding: '10px 12px', lineHeight: '21px', resize: 'vertical' }
+const selectStyle: CSSProperties = { ...fieldStyle, width: 'auto', minWidth: 180, minHeight: 34, padding: '5px 10px' }
 
 function PreferenceToggle({
   checked,
@@ -263,6 +272,9 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   const [responseApi, setResponseApi] = useState<ResponseApiPreferences | undefined>()
   const [responseApiBusy, setResponseApiBusy] = useState(false)
   const [responseApiError, setResponseApiError] = useState<string | undefined>()
+  const [customContext, setCustomContext] = useState<OpenAICodexCustomContextPreferences | undefined>()
+  const [customContextBusy, setCustomContextBusy] = useState(false)
+  const [customContextError, setCustomContextError] = useState<string | undefined>()
   const [modelCatalog, setModelCatalog] = useState<ModelCatalogSettings | undefined>()
   const [modelCatalogBusy, setModelCatalogBusy] = useState(false)
   const [modelCatalogError, setModelCatalogError] = useState<string | undefined>()
@@ -289,6 +301,12 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
     void jsonRequest<ResponseApiPreferences>(RESPONSE_API_PATH).then(
       value => { setResponseApi(value); setResponseApiError(undefined) },
       () => { setResponseApiError(t('responseApiSettingsFailed')) },
+    )
+  }, [t])
+  useEffect(() => {
+    void jsonRequest<OpenAICodexCustomContextPreferences>(CUSTOM_CONTEXT_PATH).then(
+      value => { setCustomContext(value); setCustomContextError(undefined) },
+      () => { setCustomContextError(t('customContextSettingsFailed')) },
     )
   }, [t])
   useEffect(() => {
@@ -361,6 +379,19 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
       setResponseApiError(t('responseApiSettingsFailed'))
     } finally {
       setResponseApiBusy(false)
+    }
+  }
+
+  const saveCustomContext = async (): Promise<void> => {
+    if (customContext === undefined) return
+    setCustomContextBusy(true)
+    setCustomContextError(undefined)
+    try {
+      setCustomContext(await jsonRequest<OpenAICodexCustomContextPreferences>(CUSTOM_CONTEXT_PATH, 'POST', customContext))
+    } catch {
+      setCustomContextError(t('customContextSettingsFailed'))
+    } finally {
+      setCustomContextBusy(false)
     }
   }
 
@@ -470,6 +501,69 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
           ))}
         </div>
         {modelCatalogError === undefined ? null : <p style={errorStyle}>{modelCatalogError}</p>}
+      </div>
+      <div style={cardStyle}>
+        <div>
+          <h3 style={quotaTitleStyle}>{t('customContext')}</h3>
+          <p style={{ ...bodyStyle, marginTop: 5 }}>{t('customContextIntro')}</p>
+        </div>
+        <label style={toggleCopyStyle}>
+          <span style={statusStyle}>{t('customContextValue')}</span>
+          <textarea
+            aria-label={t('customContextValue')}
+            value={customContext?.customContext ?? ''}
+            disabled={customContext === undefined || customContextBusy}
+            maxLength={OPENAI_CODEX_CUSTOM_CONTEXT_MAX_CHARS}
+            placeholder={t('customContextPlaceholder')}
+            style={textAreaStyle}
+            onChange={event => {
+              const customContextValue = event.currentTarget.value
+              setCustomContext(current => current === undefined
+                ? current
+                : { ...current, customContext: customContextValue })
+            }}
+          />
+        </label>
+        <div style={rowStyle}>
+          <label style={{ ...toggleCopyStyle, flex: '1 1 240px' }}>
+            <span style={statusStyle}>{t('customContextKind')}</span>
+            <select
+              aria-label={t('customContextKind')}
+              value={customContext?.customContextKind ?? 'application'}
+              disabled={customContext === undefined || customContextBusy}
+              style={selectStyle}
+              onChange={event => {
+                const customContextKind = event.currentTarget.value as OpenAICodexCustomContextKind
+                setCustomContext(current => current === undefined
+                  ? current
+                  : { ...current, customContextKind })
+              }}
+            >
+              <option value="application">{t('customContextApplication')}</option>
+              <option value="untrusted">{t('customContextUntrusted')}</option>
+            </select>
+          </label>
+          <span style={bodyStyle}>{t('customContextLength', {
+            count: customContext?.customContext.length ?? 0,
+            limit: OPENAI_CODEX_CUSTOM_CONTEXT_MAX_CHARS,
+          })}</span>
+        </div>
+        <p style={bodyStyle}>
+          {customContext?.customContextKind === 'untrusted'
+            ? t('customContextUntrustedHint')
+            : t('customContextApplicationHint')}
+        </p>
+        <div style={{ ...rowStyle, justifyContent: 'flex-end' }}>
+          <button
+            type="button"
+            style={primaryButtonStyle}
+            disabled={customContext === undefined || customContextBusy}
+            onClick={() => { void saveCustomContext() }}
+          >
+            {customContextBusy ? t('working') : t('customContextSave')}
+          </button>
+        </div>
+        {customContextError === undefined ? null : <p style={errorStyle}>{customContextError}</p>}
       </div>
       <div style={cardStyle}>
         <div>

@@ -46,9 +46,17 @@ describe('ImageToolPolicy', () => {
       useWebSocketContextReuse: false,
       useNativeCompaction: false,
     })
+    expect(policy.customContextSnapshot()).toEqual({
+      customContext: '',
+      customContextKind: 'application',
+    })
 
     await policy.update({ shareImagegenWithOtherModels: false })
     await policy.updateResponseApi({ useNativeCompaction: true })
+    await policy.updateCustomContext({
+      customContext: 'Prefer focused tests.',
+      customContextKind: 'untrusted',
+    })
 
     expect(policy.snapshot()).toEqual({
       modifyReadImage: true,
@@ -57,6 +65,10 @@ describe('ImageToolPolicy', () => {
     expect(policy.responseApiSnapshot()).toEqual({
       useWebSocketContextReuse: false,
       useNativeCompaction: true,
+    })
+    expect(policy.customContextSnapshot()).toEqual({
+      customContext: 'Prefer focused tests.',
+      customContextKind: 'untrusted',
     })
   })
 
@@ -130,7 +142,11 @@ describe('ImageToolPolicy', () => {
     await ctx.plugin(MemorySettings)
     const settings = ctx.settings as MemorySettings
     settings.seed({
-      'openai-codex': { useNativeCompaction: true },
+      'openai-codex': {
+        useNativeCompaction: true,
+        customContext: 'Persisted context',
+        customContextKind: 'untrusted',
+      },
     })
     const policy = new ImageToolPolicy({}, [
       { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna' },
@@ -141,5 +157,9 @@ describe('ImageToolPolicy', () => {
 
     expect(policy.modelCatalogSnapshot().models).toEqual(['gpt-5.6-luna', 'gpt-5.6-sol'])
     expect(policy.responseApiSnapshot().useNativeCompaction).toBe(true)
+    expect(policy.customContextSnapshot()).toEqual({
+      customContext: 'Persisted context',
+      customContextKind: 'untrusted',
+    })
   })
 })

@@ -8,6 +8,7 @@ Use a ChatGPT subscription in [DeepSeek Harness](https://github.com/deepseek-ai/
 
 - ChatGPT OAuth from the dsh Settings panel or a standalone CLI, with automatic token refresh
 - the Codex GPT catalog, including vision-capable models when the account offers them
+- settings-owned custom context with explicit trusted-application and untrusted-external modes
 - streaming, tool calls, reasoning replay, prompt caching, and dsh compaction through the normal LLM service
 - Codex standalone web search through dsh's existing `web_search` tool
 - optional HTTP(S) URL input added to Harness's existing `read_image` tool
@@ -70,6 +71,24 @@ The same initial subset can be seeded through `models` on the `llm-openai-codex`
 ```
 
 The checkboxes and `models` setting control discovery only. A hidden model already stored in an existing session or supplied explicitly remains resolvable, so narrowing the picker does not invalidate older records. Omit `models` to start with the full catalog; an empty list advertises no models.
+
+## Custom context
+
+Open **Settings → OpenAI Codex → Custom context** to save one context fragment of up to 4,000 characters. An empty value disables the feature. **Application context** is owner-authored trusted data and reaches Codex as a developer message; **External context** is copied, retrieved, or otherwise untrusted data and reaches Codex as a user message. The fixed source identifier prevents settings text from controlling the wrapper name. The fragment is persisted in the local Settings document and sent to OpenAI on every ordinary Codex request; do not store secrets in it.
+
+The feature mirrors Codex app-server additional-context semantics without sending an undocumented top-level field to `codex/responses`. The plugin prefixes a standard Responses input message named `dsh_custom_context` to every ordinary request. Like Codex app-server, fragment text is not XML-escaped; the Responses developer/user role, not the XML-like wrapper, carries its trust level. Keeping the fragment at a stable prefix preserves pi-ai WebSocket input-delta reuse while the value is unchanged; editing, clearing, or changing its trust level makes the next continuation send full context.
+
+The initial value can also be seeded on the `llm-openai-codex` entry:
+
+```yaml
+- id: llm-openai-codex
+  config:
+    customContext: |
+      This workspace uses pnpm. Run focused tests before the full suite.
+    customContextKind: application
+```
+
+`customContextKind` accepts `application` or `untrusted`. The Settings document owns subsequent live edits.
 
 ## Images
 

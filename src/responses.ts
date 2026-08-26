@@ -17,6 +17,8 @@ import {
   convertResponsesMessages,
   convertResponsesTools,
 } from '@earendil-works/pi-ai/api/openai-responses-shared'
+import { applyOpenAICodexCustomContext } from './custom-context.ts'
+import type { OpenAICodexCustomContextPreferences } from './custom-context.ts'
 import type { ResponseApiPreferences } from './tool-policy.ts'
 
 /** Responses endpoint used by the official Codex client, including V2 compaction. */
@@ -325,7 +327,10 @@ function retainedCompactionInput(input: readonly unknown[]): unknown[] {
 export class OpenAICodexResponseRuntime {
   private readonly compactionCalls = new Map<string, number>()
 
-  constructor(private readonly preferences: () => ResponseApiPreferences) {}
+  constructor(
+    private readonly preferences: () => ResponseApiPreferences,
+    private readonly customContext: () => OpenAICodexCustomContextPreferences,
+  ) {}
 
   /** Mark one Harness stream call as compaction until its iterator closes. */
   enterCompaction(sessionId: string | undefined): () => void {
@@ -358,7 +363,14 @@ export class OpenAICodexResponseRuntime {
     if (compaction && preferences.useNativeCompaction) {
       return this.nativeCompactionStream(provider, model, context, options)
     }
-    return this.standardStream(provider, model, context, options, !compaction && preferences.useWebSocketContextReuse)
+    return this.standardStream(
+      provider,
+      model,
+      context,
+      options,
+      !compaction && preferences.useWebSocketContextReuse,
+      !compaction,
+    )
   }
 
   private standardStream(
@@ -367,6 +379,7 @@ export class OpenAICodexResponseRuntime {
     context: PiContext,
     options: SimpleStreamOptions | undefined,
     reuseWebSocketContext: boolean,
+    includeCustomContext: boolean,
   ): AssistantMessageEventStream {
     return provider.streamSimple(model, context, {
       ...options,
@@ -374,10 +387,12 @@ export class OpenAICodexResponseRuntime {
       onPayload: async (payload, payloadModel) => {
         if (!isRecord(payload)) throw new Error('OpenAI Codex generated a non-object Responses payload')
         const input = Array.isArray(payload['input']) ? expandNativeCompactionMarkers(payload['input']) : payload['input']
-        const transformed = { ...payload, input }
-        return options?.onPayload === undefined
-          ? transformed
-          : await options.onPayload(transformed, payloadModel)
+        const expanded = { ...payload, input }
+        const transformed = includeCustomContext
+          ? applyOpenAICodexCustomContext(expanded, this.customContext())
+          : expanded
+        if (options?.onPayload === undefined) return transformed
+        return await options.onPayload(transformed, payloadModel) ?? transformed
       },
     })
   }
@@ -397,7 +412,7 @@ export class OpenAICodexResponseRuntime {
       error => {
         const source = options?.signal?.aborted === true
           ? failedStream(model, error, options.signal)
-          : this.standardStream(provider, model, context, options, false)
+          : this.standardStream(provider, model, context, options, false, false)
         void (async () => { for await (const event of source) target.push(event) })()
       },
     )

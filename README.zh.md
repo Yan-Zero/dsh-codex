@@ -8,6 +8,7 @@
 
 - 在 dsh 设置面板或独立 CLI 中完成 ChatGPT OAuth 登录，并自动刷新 token
 - Codex GPT 模型目录；账号提供视觉模型时自动声明其图片输入能力
+- 支持区分“可信应用”与“不可信外部内容”的设置级自定义上下文
 - 经标准 LLM 服务运行的流式响应、工具调用、推理回放、提示词缓存与 dsh 压缩
 - 通过 dsh 现有 `web_search` 工具使用 Codex 独立联网搜索
 - 为 Harness 现有 `read_image` 工具增加可选的 HTTP(S) URL 输入
@@ -70,6 +71,24 @@ bundle 会为新建 agent 选择 `openai-codex` / `gpt-5.6-sol`，并选择 Code
 ```
 
 复选框与 `models` 设置都只控制模型发现。现有会话已经保存或显式指定的隐藏模型仍可解析，因此收窄选择器不会破坏旧记录。省略 `models` 时初始展示完整目录；空列表表示不展示任何模型。
+
+## 自定义上下文
+
+打开 **设置 → OpenAI Codex → 自定义上下文**，可以保存一段不超过 4,000 字符的上下文；留空即关闭。**应用上下文**用于主人亲自编写并信任的内容，Codex 会将其作为 developer 消息接收；**外部上下文**用于复制、检索或其他不可信来源的内容，Codex 会将其作为 user 消息接收。固定的来源标识避免设置文本控制包装标签名。这段内容会持久化到本机 Settings 文档，并随每次普通 Codex 请求发送给 OpenAI；请勿在其中保存秘密。
+
+该功能复刻 Codex app-server 的 additional-context 语义，但不会向 `codex/responses` 发送未公开的顶层字段。插件会把名为 `dsh_custom_context` 的标准 Responses 输入消息固定放在每次普通请求的开头。与 Codex app-server 一致，内容不会进行 XML 转义；真正承载信任级别的是 Responses 的 developer／user 角色，而不是 XML 风格包装。上下文不变时，稳定前缀仍允许 pi-ai 的 WebSocket 只发送输入增量；编辑、清空或切换信任级别后，下一次续接会自动发送完整上下文。
+
+也可以在 `llm-openai-codex` 条目上设置初始值：
+
+```yaml
+- id: llm-openai-codex
+  config:
+    customContext: |
+      此工作区使用 pnpm；先运行聚焦测试，再运行完整测试。
+    customContextKind: application
+```
+
+`customContextKind` 可选 `application` 或 `untrusted`。此后在设置页中的修改由 Settings 文档持久保存并实时生效。
 
 ## 图片
 

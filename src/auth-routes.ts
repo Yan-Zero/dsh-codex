@@ -25,6 +25,8 @@ import {
 } from './trusted-origins.ts'
 import { FastModeRegistry, isFastModeSessionId } from './fast-mode.ts'
 import { OPENAI_CODEX_FAST_MODE_PATH } from './fast-mode-paths.ts'
+import type { OpenAICodexCustomContextPreferences } from './custom-context.ts'
+import { OPENAI_CODEX_CUSTOM_CONTEXT_MAX_CHARS } from './custom-context.ts'
 import type {
   ImageToolPolicy,
   ImageToolPreferences,
@@ -43,6 +45,8 @@ export { OPENAI_CODEX_FAST_MODE_PATH } from './fast-mode-paths.ts'
 export const OPENAI_CODEX_IMAGE_TOOL_SETTINGS_PATH = '/plugins/dsh-openai-codex/image-tools'
 /** Plugin-owned Responses API experiment endpoint consumed by its browser half. */
 export const OPENAI_CODEX_RESPONSE_API_SETTINGS_PATH = '/plugins/dsh-openai-codex/response-api'
+/** Plugin-owned custom-context preference endpoint consumed by its browser half. */
+export const OPENAI_CODEX_CUSTOM_CONTEXT_SETTINGS_PATH = '/plugins/dsh-openai-codex/custom-context'
 /** Plugin-owned model discovery preference endpoint consumed by its browser half. */
 export const OPENAI_CODEX_MODEL_CATALOG_SETTINGS_PATH = '/plugins/dsh-openai-codex/models'
 
@@ -353,6 +357,8 @@ function json(res: ServerResponse, status: number, value: unknown): void {
 }
 
 export const OPENAI_CODEX_FAST_MODE_BODY_LIMIT = 4_096
+/** Worst-case JSON escaping for every UTF-16 code unit plus the settings envelope. */
+export const OPENAI_CODEX_CUSTOM_CONTEXT_BODY_LIMIT = OPENAI_CODEX_CUSTOM_CONTEXT_MAX_CHARS * 6 + 1_024
 
 function header(req: IncomingMessage, name: string): string | undefined {
   const value = req.headers[name]
@@ -363,17 +369,20 @@ function header(req: IncomingMessage, name: string): string | undefined {
 function contentLength(req: IncomingMessage): number | undefined {
   const raw = header(req, 'content-length')
   if (raw === undefined) return undefined
-  if (!/^\d+$/u.test(raw.trim())) throw new TypeError('Fast Mode request content length is invalid')
+  if (!/^\d+$/u.test(raw.trim())) throw new TypeError('request content length is invalid')
   const value = Number(raw)
-  if (!Number.isSafeInteger(value)) throw new TypeError('Fast Mode request content length is invalid')
+  if (!Number.isSafeInteger(value)) throw new TypeError('request content length is invalid')
   return value
 }
 
 /** Collect one small JSON body without exposing or logging its contents. */
-async function readFastModeBody(req: IncomingMessage): Promise<unknown> {
+async function readJsonBody(
+  req: IncomingMessage,
+  limit = OPENAI_CODEX_FAST_MODE_BODY_LIMIT,
+): Promise<unknown> {
   const declared = contentLength(req)
-  if (declared !== undefined && (!Number.isFinite(declared) || declared > OPENAI_CODEX_FAST_MODE_BODY_LIMIT)) {
-    throw new RangeError('Fast Mode request body is too large')
+  if (declared !== undefined && (!Number.isFinite(declared) || declared > limit)) {
+    throw new RangeError('request body is too large')
   }
   const chunks: Uint8Array[] = []
   let total = 0
@@ -382,34 +391,34 @@ async function readFastModeBody(req: IncomingMessage): Promise<unknown> {
     for await (const chunk of iterable) {
       const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : new Uint8Array(chunk)
       total += bytes.byteLength
-      if (total > OPENAI_CODEX_FAST_MODE_BODY_LIMIT) throw new RangeError('Fast Mode request body is too large')
+      if (total > limit) throw new RangeError('request body is too large')
       chunks.push(bytes)
     }
   } else {
     const body = (req as IncomingMessage & { body?: unknown }).body
     if (typeof body === 'string') {
       const bytes = Buffer.from(body)
-      if (bytes.byteLength > OPENAI_CODEX_FAST_MODE_BODY_LIMIT) throw new RangeError('Fast Mode request body is too large')
+      if (bytes.byteLength > limit) throw new RangeError('request body is too large')
       chunks.push(bytes)
     } else if (body instanceof Uint8Array) {
-      if (body.byteLength > OPENAI_CODEX_FAST_MODE_BODY_LIMIT) throw new RangeError('Fast Mode request body is too large')
+      if (body.byteLength > limit) throw new RangeError('request body is too large')
       chunks.push(new Uint8Array(body))
     } else if (body !== undefined) {
-      throw new TypeError('Fast Mode request body is invalid')
+      throw new TypeError('request body is invalid')
     }
   }
   const bytes = Buffer.concat(chunks.map(chunk => Buffer.from(chunk)))
-  if (bytes.byteLength === 0) throw new TypeError('Fast Mode request body is invalid')
+  if (bytes.byteLength === 0) throw new TypeError('request body is invalid')
   let text: string
   try {
     text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
   } catch {
-    throw new TypeError('Fast Mode request body is invalid')
+    throw new TypeError('request body is invalid')
   }
   try {
     return JSON.parse(text) as unknown
   } catch {
-    throw new TypeError('Fast Mode request body is invalid')
+    throw new TypeError('request body is invalid')
   }
 }
 
@@ -436,8 +445,11 @@ function fastModeBody(value: unknown): { sessionId: string; enabled: boolean } |
     : undefined
 }
 
-async function readSettingsBody(req: IncomingMessage): Promise<Record<string, unknown>> {
-  const value = await readFastModeBody(req)
+async function readSettingsBody(
+  req: IncomingMessage,
+  limit = OPENAI_CODEX_FAST_MODE_BODY_LIMIT,
+): Promise<Record<string, unknown>> {
+  const value = await readJsonBody(req, limit)
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new TypeError('request body must be an object')
   }
@@ -468,6 +480,30 @@ function responseApiPatch(value: Record<string, unknown>): Partial<ResponseApiPr
     if (value[key] === undefined) continue
     if (typeof value[key] !== 'boolean') throw new TypeError(`${key} must be a boolean`)
     patch[key] = value[key]
+  }
+  return patch
+}
+
+function customContextPatch(value: Record<string, unknown>): Partial<OpenAICodexCustomContextPreferences> {
+  const allowed = new Set<keyof OpenAICodexCustomContextPreferences>(['customContext', 'customContextKind'])
+  if (Object.keys(value).some(key => !allowed.has(key as keyof OpenAICodexCustomContextPreferences))) {
+    throw new TypeError('request contains an unknown custom-context setting')
+  }
+  const patch: Partial<OpenAICodexCustomContextPreferences> = {}
+  const customContext = value['customContext']
+  if (customContext !== undefined) {
+    if (typeof customContext !== 'string') throw new TypeError('customContext must be a string')
+    if (customContext.length > OPENAI_CODEX_CUSTOM_CONTEXT_MAX_CHARS) {
+      throw new TypeError(`customContext must not exceed ${OPENAI_CODEX_CUSTOM_CONTEXT_MAX_CHARS} characters`)
+    }
+    patch.customContext = customContext
+  }
+  const customContextKind = value['customContextKind']
+  if (customContextKind !== undefined) {
+    if (customContextKind !== 'application' && customContextKind !== 'untrusted') {
+      throw new TypeError('customContextKind must be application or untrusted')
+    }
+    patch.customContextKind = customContextKind
   }
   return patch
 }
@@ -557,7 +593,7 @@ export function registerOpenAICodexAuthRoutes(
             return json(res, 415, { error: 'unsupported content type' })
           }
           try {
-            const body = fastModeBody(await readFastModeBody(req))
+            const body = fastModeBody(await readJsonBody(req))
             if (body === undefined) return json(res, 400, { error: 'invalid input' })
             fastMode.set(body.sessionId, body.enabled)
             return json(res, 200, { enabled: fastMode.isEnabled(body.sessionId) })
@@ -592,6 +628,22 @@ export function registerOpenAICodexAuthRoutes(
               return json(res, 200, await imageTools.updateResponseApi(responseApiPatch(await readSettingsBody(req))))
             } catch (error: unknown) {
               return json(res, 400, { error: safeMessage(error) })
+            }
+          },
+        }),
+        ctx.webServer.register({
+          kind: 'exact',
+          path: OPENAI_CODEX_CUSTOM_CONTEXT_SETTINGS_PATH,
+          handler: async (req, res) => {
+            if (!await authorize(req, res)) return
+            if (req.method === 'GET') return json(res, 200, imageTools.customContextSnapshot())
+            if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
+            try {
+              return json(res, 200, await imageTools.updateCustomContext(customContextPatch(
+                await readSettingsBody(req, OPENAI_CODEX_CUSTOM_CONTEXT_BODY_LIMIT),
+              )))
+            } catch (error: unknown) {
+              return json(res, error instanceof RangeError ? 413 : 400, { error: safeMessage(error) })
             }
           },
         }),

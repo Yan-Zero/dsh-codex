@@ -244,11 +244,15 @@ function formatUsage(usage: OpenAICodexUsage): string {
 function formatConfig(service: OpenAICodexService): string {
   const image = service.imagePreferences()
   const responses = service.responsePreferences()
+  const customContext = service.customContextPreferences()
   return [
     `read-image: ${image.modifyReadImage ? 'on' : 'off'}`,
     `imagegen-other-models: ${image.shareImagegenWithOtherModels ? 'on' : 'off'}`,
     `websocket-context: ${responses.useWebSocketContextReuse ? 'on' : 'off'}`,
     `native-compaction: ${responses.useNativeCompaction ? 'on' : 'off'}`,
+    `custom-context: ${customContext.customContext.trim().length === 0
+      ? 'off'
+      : `${customContext.customContextKind} (${customContext.customContext.length} chars)`}`,
   ].join('\n')
 }
 

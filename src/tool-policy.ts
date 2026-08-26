@@ -3,6 +3,11 @@ import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import type { SettingsScope } from '@deepseek-ai/dsh-settings'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import z from '@deepseek-ai/schemastery'
+import {
+  DEFAULT_OPENAI_CODEX_CUSTOM_CONTEXT,
+  OPENAI_CODEX_CUSTOM_CONTEXT_MAX_CHARS,
+} from './custom-context.ts'
+import type { OpenAICodexCustomContextPreferences } from './custom-context.ts'
 import { OPENAI_CODEX_PROVIDER } from './store.ts'
 
 /** User-controlled image-tool integration. */
@@ -33,7 +38,7 @@ export interface ModelCatalogSettings extends ModelCatalogPreferences {
   availableModels: ModelCatalogEntry[]
 }
 
-interface OpenAICodexPreferences extends ImageToolPreferences, ResponseApiPreferences, ModelCatalogPreferences {
+interface OpenAICodexPreferences extends ImageToolPreferences, ResponseApiPreferences, ModelCatalogPreferences, OpenAICodexCustomContextPreferences {
   /** Migration-only key written by the unreleased store:true experiment. */
   useStatefulResponses: boolean
 }
@@ -60,6 +65,8 @@ function preferenceSchema(defaultModels: readonly string[]): z<OpenAICodexPrefer
     useStatefulResponses: z.boolean().default(false),
     useNativeCompaction: z.boolean().default(false),
     models: z.array(z.string()).default([...defaultModels]),
+    customContext: z.string().max(OPENAI_CODEX_CUSTOM_CONTEXT_MAX_CHARS).default(''),
+    customContextKind: z.union(['application', 'untrusted'] as const).default('application'),
   })
 }
 
@@ -78,6 +85,7 @@ export class ImageToolPolicy {
     this.current = {
       ...DEFAULT_IMAGE_TOOL_PREFERENCES,
       ...DEFAULT_RESPONSE_API_PREFERENCES,
+      ...DEFAULT_OPENAI_CODEX_CUSTOM_CONTEXT,
       useStatefulResponses: false,
       ...base,
       models: this.normalizeModels(base.models ?? this.modelCatalog.map(model => model.id)),
@@ -138,6 +146,24 @@ export class ImageToolPolicy {
     })
     this.replace(this.scope.get())
     return this.responseApiSnapshot()
+  }
+
+  /** Return the current settings-owned Codex context fragment. */
+  customContextSnapshot(): OpenAICodexCustomContextPreferences {
+    return {
+      customContext: this.current.customContext,
+      customContextKind: this.current.customContextKind,
+    }
+  }
+
+  /** Persist custom context text and trust-level changes. */
+  async updateCustomContext(
+    patch: Partial<OpenAICodexCustomContextPreferences>,
+  ): Promise<OpenAICodexCustomContextPreferences> {
+    if (this.scope === undefined) throw new Error('OpenAI Codex settings service is unavailable')
+    await this.scope.update(patch)
+    this.replace(this.scope.get())
+    return this.customContextSnapshot()
   }
 
   /** Return available models and the live discovery subset for the browser. */

@@ -5,12 +5,20 @@ import {
   createOpenAICodexAdapter,
   OPENAI_CODEX_RETRY_POLICY,
 } from '../src/adapter.ts'
-import { Config } from '../src/index.ts'
+import { Config, OPENAI_CODEX_CUSTOM_CONTEXT_MAX_CHARS } from '../src/index.ts'
 
 describe('OpenAI Codex adapter policy', () => {
-  it('distinguishes an omitted model list from an explicitly empty list', () => {
-    expect(Config({}).models).toBeUndefined()
+  it('resolves optional catalog and bounded custom-context configuration', () => {
+    const config = Config({})
+    expect(config.models).toBeUndefined()
+    expect(config).toMatchObject({
+      customContext: '',
+      customContextKind: 'application',
+    })
     expect(Config({ models: [] }).models).toEqual([])
+    expect(() => Config({
+      customContext: 'x'.repeat(OPENAI_CODEX_CUSTOM_CONTEXT_MAX_CHARS + 1),
+    })).toThrow()
   })
 
   it('registers the extended bounded retry policy on the provider route', () => {
