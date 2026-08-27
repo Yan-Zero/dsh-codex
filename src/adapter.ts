@@ -22,6 +22,17 @@ export function openAICodexModelCatalog(): readonly ModelCatalogEntry[] {
 /** Provider idle ceiling used by the composite route. */
 export const OPENAI_CODEX_STREAM_IDLE_TIMEOUT_MS = 300_000
 
+/**
+ * Request-image limits required by current dsh-llm-pi-ai profiles.
+ * Keep these aligned with the adapter defaults: individual images are
+ * normalized to 2048² and 1 MiB, while the complete request may carry 20 MiB.
+ */
+export const OPENAI_CODEX_MAX_REQUEST_IMAGE_BYTES = 20 * 1024 * 1024
+export const OPENAI_CODEX_REQUEST_IMAGE_POLICY = Object.freeze({
+  maxPixels: 2048 * 2048,
+  maxBytes: 1024 * 1024,
+})
+
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -172,14 +183,25 @@ export function createOpenAICodexAdapter(
 ): PiAiAdapter {
   const provider = openaiCodexProvider()
   const responses = new OpenAICodexResponseRuntime(responsePreferences)
-  const profiles = new Map<string, ResolvedPiAiProviderProfile>([[OPENAI_CODEX_PROVIDER, {
+  // rc.7 accepts these fields structurally but does not declare them yet;
+  // newer Harness releases require them. The intersection keeps one build
+  // compatible with both sides of that public-profile evolution.
+  const profile: ResolvedPiAiProviderProfile & {
+    maxRequestImageBytes: number
+    requestImagePixelBudget: number
+    requestImageMaxBytes: number
+  } = {
     provider: OPENAI_CODEX_PROVIDER,
     displayName: 'OpenAI Codex',
     streamIdleTimeoutMs: OPENAI_CODEX_STREAM_IDLE_TIMEOUT_MS,
+    maxRequestImageBytes: OPENAI_CODEX_MAX_REQUEST_IMAGE_BYTES,
+    requestImagePixelBudget: OPENAI_CODEX_REQUEST_IMAGE_POLICY.maxPixels,
+    requestImageMaxBytes: OPENAI_CODEX_REQUEST_IMAGE_POLICY.maxBytes,
     retryPolicy: OPENAI_CODEX_RETRY_POLICY,
     configuredMaxTokens: new Map(),
     piProvider: responses.wrap(requestProvider(provider, fastMode)),
-  }]])
+  }
+  const profiles = new Map<string, ResolvedPiAiProviderProfile>([[OPENAI_CODEX_PROVIDER, profile]])
   const models: MutableModels = createModels({ credentials })
   models.setProvider(provider)
   return new OpenAICodexAdapter({
