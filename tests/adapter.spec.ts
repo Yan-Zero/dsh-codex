@@ -34,6 +34,34 @@ describe('OpenAI Codex adapter policy', () => {
     })
   })
 
+  it('supplies complete positive-integer image request budgets to the provider profile', () => {
+    const adapter = createOpenAICodexAdapter(
+      {} as OpenAICodexCredentialStore,
+      () => undefined,
+      () => ({ useWebSocketContextReuse: false, useNativeCompaction: false }),
+    )
+    const profile = (adapter as unknown as {
+      config: {
+        profiles(): Map<string, {
+          maxRequestImageBytes: number
+          requestImagePixelBudget: number
+          requestImageMaxBytes: number
+        }>
+      }
+    }).config.profiles().get(OPENAI_CODEX_PROVIDER)
+
+    expect(profile).toMatchObject({
+      maxRequestImageBytes: 20 * 1024 * 1024,
+      requestImagePixelBudget: 2048 * 2048,
+      requestImageMaxBytes: 1024 * 1024,
+    })
+    expect([
+      profile?.maxRequestImageBytes,
+      profile?.requestImagePixelBudget,
+      profile?.requestImageMaxBytes,
+    ].every(value => Number.isSafeInteger(value) && (value ?? 0) > 0)).toBe(true)
+  })
+
   it('advertises only configured models while keeping hidden models resolvable', async () => {
     const adapter = createOpenAICodexAdapter(
       {} as OpenAICodexCredentialStore,
