@@ -22,6 +22,17 @@ export function openAICodexModelCatalog(): readonly ModelCatalogEntry[] {
 /** Provider idle ceiling used by the composite route. */
 export const OPENAI_CODEX_STREAM_IDLE_TIMEOUT_MS = 300_000
 
+/**
+ * Image-policy fields added to resolved pi-ai profiles after the oldest DSH
+ * version this plugin still compiles against. Keeping the compatibility shape
+ * local lets one build serve both that baseline and current runtimes.
+ */
+type ImageCompatibleResolvedPiAiProviderProfile = ResolvedPiAiProviderProfile & {
+  maxRequestImageBytes: number
+  requestImagePixelBudget: number
+  requestImageMaxBytes: number
+}
+
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -172,14 +183,18 @@ export function createOpenAICodexAdapter(
 ): PiAiAdapter {
   const provider = openaiCodexProvider()
   const responses = new OpenAICodexResponseRuntime(responsePreferences)
-  const profiles = new Map<string, ResolvedPiAiProviderProfile>([[OPENAI_CODEX_PROVIDER, {
+  const profile: ImageCompatibleResolvedPiAiProviderProfile = {
     provider: OPENAI_CODEX_PROVIDER,
     displayName: 'OpenAI Codex',
     streamIdleTimeoutMs: OPENAI_CODEX_STREAM_IDLE_TIMEOUT_MS,
+    maxRequestImageBytes: 20 * 1024 * 1024,
+    requestImagePixelBudget: 4 * 1024 * 1024,
+    requestImageMaxBytes: 1024 * 1024,
     retryPolicy: OPENAI_CODEX_RETRY_POLICY,
     configuredMaxTokens: new Map(),
     piProvider: responses.wrap(requestProvider(provider, fastMode)),
-  }]])
+  }
+  const profiles = new Map<string, ResolvedPiAiProviderProfile>([[OPENAI_CODEX_PROVIDER, profile]])
   const models: MutableModels = createModels({ credentials })
   models.setProvider(provider)
   return new OpenAICodexAdapter({

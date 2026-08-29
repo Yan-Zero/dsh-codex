@@ -13,6 +13,23 @@ describe('OpenAI Codex adapter policy', () => {
     expect(Config({ models: [] }).models).toEqual([])
   })
 
+  it('supplies the complete request-image policy required by current DSH runtimes', () => {
+    const adapter = createOpenAICodexAdapter(
+      {} as OpenAICodexCredentialStore,
+      () => undefined,
+      () => ({ useWebSocketContextReuse: false, useNativeCompaction: false }),
+    )
+    const profile = (adapter as unknown as {
+      config: { profiles: () => Map<string, Record<string, unknown>> }
+    }).config.profiles().get(OPENAI_CODEX_PROVIDER)
+
+    expect(profile).toMatchObject({
+      maxRequestImageBytes: 20 * 1024 * 1024,
+      requestImagePixelBudget: 4 * 1024 * 1024,
+      requestImageMaxBytes: 1024 * 1024,
+    })
+  })
+
   it('registers the extended bounded retry policy on the provider route', () => {
     const adapter = createOpenAICodexAdapter(
       {} as OpenAICodexCredentialStore,
