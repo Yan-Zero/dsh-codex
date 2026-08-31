@@ -76,6 +76,14 @@ export interface OpenAICodexIndividualLimit {
   readonly remainingPercent: number
 }
 
+/** Backend-owned model fallback instructions returned when a selected model is blocked. */
+export interface OpenAICodexRateLimitUpsell {
+  /** Model whose current allowance is exhausted. */
+  readonly blockedModelSlug?: string
+  /** Ordered replacement models selected by the backend. */
+  readonly fallbackModelSlugs: readonly string[]
+}
+
 /** Secret-free quota projection returned to the browser. */
 export interface OpenAICodexUsage {
   /** Rolling Codex rate-limit buckets. */
@@ -84,6 +92,8 @@ export interface OpenAICodexUsage {
   readonly credits?: OpenAICodexCredits
   /** Exact workspace member limit when supported for this account. */
   readonly individualLimit?: OpenAICodexIndividualLimit
+  /** Optional backend-owned fallback instructions for exhausted models. */
+  readonly rateLimitUpsell?: OpenAICodexRateLimitUpsell
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -179,6 +189,35 @@ function parseIndividualLimit(value: unknown): OpenAICodexIndividualLimit | unde
   }
 }
 
+function boundedSlug(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'string' || value.trim().length === 0 || value.length > 256
+    || value.split('').some(character => character.charCodeAt(0) < 0x20)) {
+    throw new Error(`OpenAI Codex returned an invalid ${field}`)
+  }
+  return value
+}
+
+/** Preserve only the backend fields needed for automatic model recovery. */
+function parseRateLimitUpsell(value: unknown): OpenAICodexRateLimitUpsell | undefined {
+  if (value === undefined || value === null) return undefined
+  if (!isRecord(value)) return undefined
+  const fallbackModelSlugs = value['fallback_model_slugs']
+  if (!Array.isArray(fallbackModelSlugs) || fallbackModelSlugs.length > 16) return undefined
+  try {
+    const blockedModelSlug = boundedSlug(value['blocked_model_slug'], 'blocked model slug')
+    const fallback = fallbackModelSlugs.map(slug => boundedSlug(slug, 'fallback model slug'))
+    if (fallback.some(slug => slug === undefined)) return undefined
+    return {
+      ...blockedModelSlug === undefined ? {} : { blockedModelSlug },
+      fallbackModelSlugs: fallback as string[],
+    }
+  } catch {
+    // Usage remains useful when a newer backend ships an unsupported banner shape.
+    return undefined
+  }
+}
+
 /**
  * Convert the provider response into the small secret-free object sent to the browser.
  * @param value - opaque JSON returned by the ChatGPT usage endpoint.
@@ -209,10 +248,12 @@ export function parseOpenAICodexUsage(value: unknown): OpenAICodexUsage {
   }
   const credits = parseCredits(value['credits'])
   const individualLimit = parseIndividualLimit(value['spend_control'])
+  const rateLimitUpsell = parseRateLimitUpsell(value['rate_limit_upsell'])
   return {
     rateLimits: limits,
     ...credits === undefined ? {} : { credits },
     ...individualLimit === undefined ? {} : { individualLimit },
+    ...rateLimitUpsell === undefined ? {} : { rateLimitUpsell },
   }
 }
 
