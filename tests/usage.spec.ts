@@ -101,6 +101,34 @@ describe('OpenAI Codex usage', () => {
     })
   })
 
+  it('projects the official backend model fallback instructions without exposing banner copy', () => {
+    expect(parseOpenAICodexUsage({
+      rate_limit: {
+        primary_window: { used_percent: 100, limit_window_seconds: 18_000 },
+      },
+      rate_limit_upsell: {
+        banner_type: 'selected_model_limit_reached',
+        blocked_model_slug: 'gpt-5.6-sol',
+        fallback_model_slugs: ['gpt-5.6-luna', 'gpt-5.6-terra'],
+        title: 'server-owned copy',
+      },
+    }).rateLimitUpsell).toEqual({
+      blockedModelSlug: 'gpt-5.6-sol',
+      fallbackModelSlugs: ['gpt-5.6-luna', 'gpt-5.6-terra'],
+    })
+  })
+
+  it('ignores unsupported backend fallback shapes while retaining quota data', () => {
+    const parsed = parseOpenAICodexUsage({
+      rate_limit: {
+        primary_window: { used_percent: 10, limit_window_seconds: 18_000 },
+      },
+      rate_limit_upsell: { fallback_model_slugs: ['gpt-5.6-luna', 42] },
+    })
+    expect(parsed.rateLimits[0]?.windows[0]?.remainingPercent).toBe(90)
+    expect(parsed.rateLimitUpsell).toBeUndefined()
+  })
+
   it('rejects percentages that would make a quota bar misleading', () => {
     expect(() => parseOpenAICodexUsage({
       rate_limit: {

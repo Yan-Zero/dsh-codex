@@ -297,6 +297,7 @@ describe('OpenAI Codex compaction request', () => {
 
     expect(requests.map(request => request.url)).toEqual([
       'https://chatgpt.com/backend-api/codex/responses',
+      'https://chatgpt.com/backend-api/wham/usage',
       'https://chatgpt.com/backend-api/codex/responses',
     ])
     const compactBody = requestJson(requests[0]!.init)
@@ -314,7 +315,7 @@ describe('OpenAI Codex compaction request', () => {
       { role: 'user', content: [{ type: 'input_text', text: 'keep this request' }] },
       { type: 'compaction_trigger' },
     ])
-    const continuedBody = requestJson(requests[1]!.init)
+    const continuedBody = requestJson(requests[2]!.init)
     expect(continuedBody.input).toEqual([
       ...restoredOutput,
       { role: 'user', content: [{ type: 'input_text', text: 'continue' }] },
