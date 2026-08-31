@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -60,7 +60,7 @@ function payload(): unknown {
 }
 
 async function authenticatedStore(): Promise<OpenAICodexCredentialStore> {
-  root = await mkdtemp(join(tmpdir(), 'dsh-openai-codex-usage-'))
+  root = await mkdtemp(join(await realpath(tmpdir()), 'dsh-openai-codex-usage-'))
   const store = new OpenAICodexCredentialStore(join(root, 'auth.json'))
   const credential: OAuthCredential = {
     type: 'oauth',

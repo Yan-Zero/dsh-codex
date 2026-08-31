@@ -38,6 +38,7 @@ export interface OpenAICodexServiceOptions
     ContextWindowPreferences,
     FastModePreferences,
     ProxyPreferences {
+  credentialFile?: string;
   models?: string[];
   modelCatalog: readonly ModelCatalogEntry[] | (() => readonly ModelCatalogEntry[]);
 }
@@ -47,12 +48,13 @@ export interface OpenAICodexServiceOptions
  * Credentials and live policy stay singletons even when several front doors are mounted.
  */
 export class OpenAICodexService {
-  readonly credentials = new OpenAICodexCredentialStore();
+  readonly credentials: OpenAICodexCredentialStore;
   readonly policy: ImageToolPolicy;
   readonly proxy: OpenAICodexProxyTransport;
   private readonly stopProxyWatch: () => void;
 
   constructor(options: OpenAICodexServiceOptions) {
+    this.credentials = new OpenAICodexCredentialStore(options.credentialFile);
     this.policy = new ImageToolPolicy(options, options.modelCatalog);
     this.proxy = new OpenAICodexProxyTransport(() =>
       this.policy.proxySnapshot()
@@ -79,7 +81,7 @@ export class OpenAICodexService {
   /** Start the provider-native OAuth lifecycle. */
   async login(interaction: AuthInteraction): Promise<void> {
     await this.proxy.apply();
-    return await loginOpenAICodex(interaction, this.credentials);
+    return await this.credentials.withOwnerReauth(() => loginOpenAICodex(interaction, this.credentials));
   }
 
   /** Remove this plugin's credential without touching Codex CLI/Desktop. */

@@ -124,6 +124,10 @@ export {
   OpenAICodexCredentialStore,
   OPENAI_CODEX_AUTH_FILENAME,
   OPENAI_CODEX_PROVIDER,
+  OPENAI_CODEX_REAUTH_REQUIRED,
+  OPENAI_CODEX_REFRESH_IN_PROGRESS,
+  OpenAICodexReauthRequiredError,
+  OpenAICodexRefreshInProgressError,
   openAICodexAuthPath,
 } from "./store.ts";
 export {
@@ -152,6 +156,7 @@ export const inject = ["llm", "web"];
 
 /** Composite model and standalone-search configuration. */
 export interface Config {
+  credentialFile?: string;
   /** Model ids advertised by the provider; omitted to advertise the full catalog. */
   models?: string[] | undefined;
   /** Client-side model context capacity in tokens; omitted to keep provider defaults. */
@@ -183,6 +188,7 @@ export interface Config {
 }
 
 export const Config: z<Config> = z.object({
+  credentialFile: z.string(),
   models: z.union([z.const(undefined), z.array(z.string())]),
   contextWindow: z.union([
     z.const(undefined),
@@ -222,6 +228,7 @@ export function apply(ctx: Context, config: Config): void {
   installOpenAICodexSearchEvent();
   const modelProvider = createOpenAICodexModelProvider();
   const service = new OpenAICodexService({
+    ...(config.credentialFile === undefined ? {} : { credentialFile: config.credentialFile }),
     ...(config.models === undefined ? {} : { models: config.models }),
     contextWindow: config.contextWindow ?? null,
     overrideSparkContextWindow: config.overrideSparkContextWindow ?? false,

@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -26,7 +26,7 @@ function credential(access = 'access-secret'): OAuthCredential {
 }
 
 async function store(): Promise<OpenAICodexCredentialStore> {
-  root = await mkdtemp(join(tmpdir(), 'dsh-openai-codex-'))
+  root = await mkdtemp(join(await realpath(tmpdir()), 'dsh-openai-codex-'))
   return new OpenAICodexCredentialStore(join(root, 'auth.json'))
 }
 
