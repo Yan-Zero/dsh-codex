@@ -54,6 +54,7 @@ export type {
   OpenAICodexIndividualLimit,
   OpenAICodexRateLimit,
   OpenAICodexRateLimitWindow,
+  OpenAICodexRateLimitUpsell,
   OpenAICodexUsage,
 } from './usage.ts'
 export {

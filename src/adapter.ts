@@ -4,13 +4,15 @@ import { createModels } from '@earendil-works/pi-ai'
 import type { Context as PiContext, MutableModels, Provider, SimpleStreamOptions } from '@earendil-works/pi-ai'
 import { openaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-codex'
 import { resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
-import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions, LlmModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { ResolvedPiAiProviderProfile } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import type { OpenAICodexCredentialStore } from './store.ts'
 import { OPENAI_CODEX_PROVIDER } from './store.ts'
 import { OpenAICodexResponseRuntime } from './responses.ts'
+import { readOpenAICodexRateLimits } from './usage.ts'
+import type { OpenAICodexUsage } from './usage.ts'
 import type { ModelCatalogEntry, ResponseApiPreferences } from './tool-policy.ts'
 import type { FastModeRegistry } from './fast-mode.ts'
 
@@ -71,6 +73,32 @@ export const OPENAI_CODEX_RETRY_POLICY = resolveRetryPolicy({
   backoff: { initialDelayMs: 1_000, maxDelayMs: 30_000, jitterRatio: 0.2 },
 }, 'dsh-openai-codex retryPolicy')
 
+/** Keep account-policy reads bounded while matching the official client's startup refresh model. */
+const OPENAI_CODEX_USAGE_CACHE_MS = 15_000
+
+function isQuotaFailure(chunk: StreamChunk): boolean {
+  if (chunk.type !== 'finish' || chunk.reason.kind !== 'error') return false
+  return /quota|usage.?limit|rate.?limit|429/i.test(
+    `${chunk.reason.failure.code} ${chunk.reason.failure.message}`,
+  )
+}
+
+function isQuotaError(error: unknown): boolean {
+  return /quota|usage.?limit|rate.?limit|429/i.test(error instanceof Error ? error.message : String(error))
+}
+
+/** Select only a server-authorized fallback that is present in the active model catalog. */
+export function selectOpenAICodexFallbackModel(
+  usage: OpenAICodexUsage | undefined,
+  currentModel: string,
+  availableModels: readonly Pick<LlmModelInfo, 'id'>[],
+): string | undefined {
+  const banner = usage?.rateLimitUpsell
+  if (banner?.blockedModelSlug !== currentModel) return undefined
+  return banner.fallbackModelSlugs.find(candidate => candidate !== currentModel
+    && availableModels.some(model => model.id === candidate))
+}
+
 /**
  * Give the generic dsh adapter a request-scoped bearer-token entry without
  * changing the provider's user-facing OAuth flow. The resolver accepts only
@@ -129,12 +157,54 @@ function requestProvider(provider: Provider, fastMode?: FastModeRegistry): Provi
 
 /** Preserve Harness call purpose until the generic pi-ai adapter reaches the provider. */
 class OpenAICodexAdapter extends PiAiAdapter {
+  private usageCache: { expiresAt: number; value: Promise<OpenAICodexUsage | undefined> } | undefined
+
   constructor(
     options: ConstructorParameters<typeof PiAiAdapter>[0],
     private readonly responses: OpenAICodexResponseRuntime,
     private readonly visibleModelIds?: () => readonly string[],
+    private readonly credentials?: OpenAICodexCredentialStore,
   ) {
     super(options)
+  }
+
+  /** Read backend-owned fallback policy without making an ordinary model request. */
+  private readUsage(forceRefresh = false): Promise<OpenAICodexUsage | undefined> {
+    if (this.credentials === undefined) return Promise.resolve(undefined)
+    const now = Date.now()
+    if (!forceRefresh && this.usageCache !== undefined && this.usageCache.expiresAt > now) {
+      return this.usageCache.value
+    }
+    const value = readOpenAICodexRateLimits(this.credentials).catch(() => undefined)
+    this.usageCache = { expiresAt: now + OPENAI_CODEX_USAGE_CACHE_MS, value }
+    return value
+  }
+
+  /** Convert the official CLI's ordered backend fallback into a Harness request. */
+  private async fallbackOptions(
+    options: GenerateOptions,
+    forceRefresh = false,
+  ): Promise<GenerateOptions | undefined> {
+    if (options.provider !== OPENAI_CODEX_PROVIDER) return undefined
+    const banner = (await this.readUsage(forceRefresh))?.rateLimitUpsell
+    if (banner?.blockedModelSlug !== options.model) return undefined
+    const available = await super.listModels(options.provider)
+    const candidate = selectOpenAICodexFallbackModel(
+      { rateLimits: [], rateLimitUpsell: banner },
+      options.model,
+      available,
+    )
+    if (candidate === undefined) return undefined
+    const resolved = await super.resolveModel(options.provider, candidate)
+    const requested = options.reasoningEffort
+    const compatible = requested !== undefined
+      && resolved.reasoning?.efforts.some(effort => String(effort.id) === String(requested)) === true
+    const reasoningEffort = compatible ? requested : resolved.reasoning?.defaultEffort
+    const fallback: GenerateOptions = {
+      ...options,
+      model: candidate,
+    }
+    return reasoningEffort === undefined ? fallback : { ...fallback, reasoningEffort }
   }
 
   override async listModels(provider: string) {
@@ -150,7 +220,50 @@ class OpenAICodexAdapter extends PiAiAdapter {
       ? this.responses.enterCompaction(options.sessionId === undefined ? undefined : String(options.sessionId))
       : undefined
     try {
-      for await (const chunk of super.stream(migrateReplayHistory(options))) yield chunk
+      let active = migrateReplayHistory(options)
+      // This is the same server-driven decision the official CLI applies after
+      // reading its account rate-limit snapshot. No fallback is inferred from
+      // model names; OpenAI must explicitly provide the blocked model and its
+      // ordered replacements.
+      const initialFallback = active.purpose === 'compaction'
+        ? undefined
+        : await this.fallbackOptions(active)
+      if (initialFallback !== undefined) active = initialFallback
+
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const buffered: StreamChunk[] = []
+        let outputStarted = false
+        let quotaFailure = false
+        try {
+          for await (const chunk of super.stream(active)) {
+            const isContent = chunk.type !== 'usage' && chunk.type !== 'finish'
+            if (!outputStarted && isContent) {
+              outputStarted = true
+              for (const pending of buffered) yield pending
+            }
+            if (!outputStarted && chunk.type === 'finish' && isQuotaFailure(chunk)) {
+              quotaFailure = true
+              continue
+            }
+            if (quotaFailure) continue
+            if (outputStarted) yield chunk
+            else buffered.push(chunk)
+          }
+        } catch (error: unknown) {
+          if (!outputStarted && isQuotaError(error)) quotaFailure = true
+          else throw error
+        }
+
+        if (quotaFailure && !outputStarted && attempt === 0) {
+          const fallback = await this.fallbackOptions(active, true)
+          if (fallback !== undefined) {
+            active = fallback
+            continue
+          }
+        }
+        for (const pending of buffered) yield pending
+        return
+      }
     } finally {
       release?.()
     }
@@ -186,5 +299,5 @@ export function createOpenAICodexAdapter(
     profiles: () => profiles,
     resolveApiKey: async () => (await models.getAuth(OPENAI_CODEX_PROVIDER))?.auth.apiKey,
     resolveAttachments,
-  }, responses, visibleModelIds)
+  }, responses, visibleModelIds, credentials)
 }

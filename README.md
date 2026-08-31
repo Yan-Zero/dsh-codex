@@ -14,6 +14,7 @@ Use a ChatGPT subscription in [DeepSeek Harness](https://github.com/deepseek-ai/
 - an `imagegen` tool backed by `gpt-image-2`, with workspace or conversation reference images and automatic workspace output
 - browser image input through dsh's existing paste and drop controls
 - a per-conversation Fast Mode switch and compact weekly quota indicator in the Web composer
+- backend-authorized model fallback recovery, including Luna Reserve when OpenAI supplies it for the account
 
 ChatGPT subscription authentication and usage-based OpenAI API access are different products. This plugin uses the ChatGPT Codex backend only; it does not turn a subscription into a general-purpose OpenAI API credential.
 
@@ -53,6 +54,8 @@ After restarting the TUI, `/model` lists the `openai-codex` catalog. With no exp
 Codex, Claude Code, and other automation agents should follow [INSTALL.md](INSTALL.md). It is a complete, idempotent runbook and does not require reading this repository's source or design notes.
 
 The bundle selects `openai-codex` / `gpt-5.6-sol` for new agents and selects the Codex search provider. A model already saved in dsh settings still takes precedence; the model picker can select any other Codex model visible to the signed-in account.
+
+When OpenAI's usage response marks the selected model as blocked and supplies an ordered fallback list, the adapter follows that list and retries once after a quota failure. This is the same server-driven contract used by the official Codex client; the plugin does not infer Reserve eligibility from a model name or copy Codex credentials.
 
 ## Model catalog
 

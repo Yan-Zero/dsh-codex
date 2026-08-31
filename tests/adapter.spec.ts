@@ -4,6 +4,7 @@ import { OPENAI_CODEX_PROVIDER } from '../src/store.ts'
 import {
   createOpenAICodexAdapter,
   OPENAI_CODEX_RETRY_POLICY,
+  selectOpenAICodexFallbackModel,
 } from '../src/adapter.ts'
 import { Config } from '../src/index.ts'
 
@@ -29,6 +30,26 @@ describe('OpenAI Codex adapter policy', () => {
       maxDelayMs: 30_000,
       jitterRatio: 0.2,
     })
+  })
+
+  it('accepts only the backend-ordered fallback for the blocked model', () => {
+    expect(selectOpenAICodexFallbackModel({
+      rateLimits: [],
+      rateLimitUpsell: {
+        blockedModelSlug: 'gpt-5.6-sol',
+        fallbackModelSlugs: ['not-in-catalog', 'gpt-5.6-luna', 'gpt-5.6-terra'],
+      },
+    }, 'gpt-5.6-sol', [
+      { id: 'gpt-5.6-luna' },
+      { id: 'gpt-5.6-terra' },
+    ])).toBe('gpt-5.6-luna')
+    expect(selectOpenAICodexFallbackModel({
+      rateLimits: [],
+      rateLimitUpsell: {
+        blockedModelSlug: 'gpt-5.6-sol',
+        fallbackModelSlugs: ['gpt-5.6-luna'],
+      },
+    }, 'gpt-5.6-luna', [{ id: 'gpt-5.6-luna' }])).toBeUndefined()
   })
 
   it('advertises only configured models while keeping hidden models resolvable', async () => {
