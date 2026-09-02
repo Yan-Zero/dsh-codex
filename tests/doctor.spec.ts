@@ -54,12 +54,12 @@ describe('dsh-codex doctor', () => {
         packageVersions: {
           '@deepseek-ai/dsh-llm': '0.1.0-rc.7',
           '@deepseek-ai/dsh-llm-pi-ai': '0.1.0-rc.6',
-          '@earendil-works/pi-ai': '0.82.1',
+          '@earendil-works/pi-ai': '0.84.4',
         },
       },
     })
     expect(report.compatibility.status).toBe('incompatible')
-    expect(report.hints.join('\n')).toMatch(/pin @earendil-works\/pi-ai to 0\.82\.1/)
+    expect(report.hints.join('\n')).toMatch(/pin @earendil-works\/pi-ai to 0\.84\.4/)
   })
 
   it('reports unknown compatibility without pretending it is supported', async () => {

@@ -1,6 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
-import type { SettingsScope } from '@deepseek-ai/dsh-settings'
+import type { SettingsNamespace, SettingsScope } from '@deepseek-ai/dsh-settings'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import z from '@deepseek-ai/schemastery'
 import { OPENAI_CODEX_PROVIDER } from './store.ts'
@@ -62,7 +61,7 @@ export const DEFAULT_CONTEXT_WINDOW_PREFERENCES: ContextWindowPreferences = {
   contextWindow: null,
 }
 
-const NAMESPACE = settingsNamespace('openai-codex')
+const NAMESPACE = 'openai-codex' as SettingsNamespace
 
 function preferenceSchema(defaultModels: readonly string[]): z<OpenAICodexPreferences> {
   return z.object({

@@ -7,3 +7,6 @@ allowBuilds:
   protobufjs: false
 
 autoInstallPeers: true
+
+overrides:
+  '@earendil-works/pi-ai': 0.84.4

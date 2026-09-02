@@ -1,13 +1,23 @@
 /** OpenAI Codex adapter assembled from public dsh-llm-pi-ai extension points. */
 
 import { createModels } from '@earendil-works/pi-ai'
-import type { Context as PiContext, MutableModels, Provider, SimpleStreamOptions } from '@earendil-works/pi-ai'
+import type {
+  AuthContext,
+  Context as PiContext,
+  MutableModels,
+  Provider,
+  SimpleStreamOptions,
+} from '@earendil-works/pi-ai'
 import { openaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-codex'
 import { resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
-import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions, PreparedAdapterCall, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { ResolvedPiAiProviderProfile } from '@deepseek-ai/dsh-llm-pi-ai'
-import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
+import type {
+  AttachmentStore,
+  ImageAttachmentRef,
+  ImageRequestPolicy,
+} from '@deepseek-ai/dsh-attachment'
 import type { OpenAICodexCredentialStore } from './store.ts'
 import { OPENAI_CODEX_PROVIDER } from './store.ts'
 import { OpenAICodexResponseRuntime } from './responses.ts'
@@ -26,19 +36,118 @@ export function openAICodexModelCatalog(): readonly ModelCatalogEntry[] {
 /** Provider idle ceiling used by the composite route. */
 export const OPENAI_CODEX_STREAM_IDLE_TIMEOUT_MS = 300_000
 
+/** Patch geometry used by Codex for `auto`/`high` prompt images. */
+export const OPENAI_CODEX_IMAGE_PATCH_SIZE = 32
+/** Maximum patch count used by Codex for `auto`/`high` prompt images. */
+export const OPENAI_CODEX_HIGH_DETAIL_MAX_PATCHES = 2_500
+/** Maximum width or height accepted by Codex's `auto`/`high` preparation. */
+export const OPENAI_CODEX_HIGH_DETAIL_MAX_DIMENSION = 2_048
+/** Closest DSH pixel-budget projection of Codex's 2,500 32x32 patch limit. */
+export const OPENAI_CODEX_REQUEST_IMAGE_PIXEL_BUDGET
+  = OPENAI_CODEX_HIGH_DETAIL_MAX_PATCHES * OPENAI_CODEX_IMAGE_PATCH_SIZE ** 2
 /**
- * Image request budgets for the composite profile, mirroring the
- * dsh-llm-pi-ai defaults. `ResolvedPiAiProviderProfile` gained these required
- * fields after the dsh `0.1.0-rc.7` this package pins: newer hosts hand them
- * to attachment policy validation, so an image-bearing request fails with
- * `Image request maxPixels must be a positive integer` when they are absent,
- * while older hosts ignore them. The spread keeps the profile literal free
- * of excess-property errors against the pinned rc.7 types.
+ * Codex's high sanity guard for one prompt-image representation. DSH already
+ * validates and normalizes attachments at much smaller ingestion limits, so
+ * this deliberately avoids imposing a second lossy byte target on an image.
  */
-const OPENAI_CODEX_IMAGE_REQUEST_BUDGETS = {
-  maxRequestImageBytes: 20 * 1024 * 1024,
-  requestImagePixelBudget: 2048 * 2048,
-  requestImageMaxBytes: 1024 * 1024,
+export const OPENAI_CODEX_PROMPT_IMAGE_INPUT_GUARD_BYTES = 1024 * 1024 * 1024
+
+function projectedImageDimensions(
+  width: number,
+  height: number,
+  maxPixels: number,
+): { width: number, height: number } {
+  const scale = Math.min(1, Math.sqrt(maxPixels / (width * height)))
+  if (scale === 1) return { width, height }
+  if (width >= height) {
+    let projectedWidth = Math.max(1, Math.floor(width * scale))
+    let projectedHeight = Math.max(1, Math.round(projectedWidth * height / width))
+    while (projectedWidth * projectedHeight > maxPixels && projectedWidth > 1) {
+      projectedWidth -= 1
+      projectedHeight = Math.max(1, Math.round(projectedWidth * height / width))
+    }
+    return { width: projectedWidth, height: projectedHeight }
+  }
+  let projectedHeight = Math.max(1, Math.floor(height * scale))
+  let projectedWidth = Math.max(1, Math.round(projectedHeight * width / height))
+  while (projectedWidth * projectedHeight > maxPixels && projectedHeight > 1) {
+    projectedHeight -= 1
+    projectedWidth = Math.max(1, Math.round(projectedHeight * width / height))
+  }
+  return { width: projectedWidth, height: projectedHeight }
+}
+
+function fitsOpenAICodexHighDetail(width: number, height: number): boolean {
+  const patchesWide = Math.ceil(width / OPENAI_CODEX_IMAGE_PATCH_SIZE)
+  const patchesHigh = Math.ceil(height / OPENAI_CODEX_IMAGE_PATCH_SIZE)
+  return width <= OPENAI_CODEX_HIGH_DETAIL_MAX_DIMENSION
+    && height <= OPENAI_CODEX_HIGH_DETAIL_MAX_DIMENSION
+    && patchesWide * patchesHigh <= OPENAI_CODEX_HIGH_DETAIL_MAX_PATCHES
+}
+
+/**
+ * Tighten DSH's area-only request projection until its resulting dimensions
+ * also satisfy Codex's longest-edge and rounded patch-grid limits.
+ */
+export function openAICodexRequestImagePixelBudget(
+  width: number,
+  height: number,
+  maxPixels: number,
+): number {
+  const projected = projectedImageDimensions(width, height, maxPixels)
+  if (fitsOpenAICodexHighDetail(projected.width, projected.height)) return maxPixels
+
+  let lower = 1
+  let upper = Math.min(maxPixels, width * height - 1)
+  let accepted = 1
+  while (lower <= upper) {
+    const candidate = lower + Math.floor((upper - lower) / 2)
+    const dimensions = projectedImageDimensions(width, height, candidate)
+    if (fitsOpenAICodexHighDetail(dimensions.width, dimensions.height)) {
+      accepted = candidate
+      lower = candidate + 1
+    } else {
+      upper = candidate - 1
+    }
+  }
+  const dimensions = projectedImageDimensions(width, height, accepted)
+  return dimensions.width * dimensions.height
+}
+
+function withOpenAICodexImagePolicy(store: AttachmentStore): AttachmentStore {
+  return new Proxy(store, {
+    get(target, property) {
+      if (property === 'readImageRequest') {
+        return (
+          ref: ImageAttachmentRef,
+          policy: ImageRequestPolicy,
+          signal?: AbortSignal,
+        ) => target.readImageRequest(ref, {
+          ...policy,
+          maxPixels: openAICodexRequestImagePixelBudget(ref.width, ref.height, policy.maxPixels),
+        }, signal)
+      }
+      const value = Reflect.get(target, property, target) as unknown
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+}
+
+/** Codex authentication is deliberately confined to this plugin's OAuth store. */
+const OPENAI_CODEX_AUTH_CONTEXT: AuthContext = {
+  async env() { return undefined },
+  async fileExists() { return false },
+}
+
+/**
+ * Image-policy fields added to resolved pi-ai profiles after the oldest DSH
+ * version this plugin still compiles against. Keeping the compatibility shape
+ * local lets one build serve both that baseline and current runtimes.
+ */
+type ImageCompatibleResolvedPiAiProviderProfile = ResolvedPiAiProviderProfile & {
+  maxRequestImageBytes: number
+  requestImagePixelBudget: number
+  requestImageMaxBytes: number
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -179,15 +288,34 @@ class OpenAICodexAdapter extends PiAiAdapter {
     return models.filter(model => visible.has(model.id))
   }
 
-  override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+  private async *streamPrepared(
+    stream: (options: GenerateOptions) => AsyncIterable<StreamChunk>,
+    options: GenerateOptions,
+  ): AsyncIterable<StreamChunk> {
     const release = options.purpose === 'compaction'
       ? this.responses.enterCompaction(options.sessionId === undefined ? undefined : String(options.sessionId))
       : undefined
     try {
-      for await (const chunk of super.stream(migrateReplayHistory(options))) yield chunk
+      for await (const chunk of stream(migrateReplayHistory(options))) yield chunk
     } finally {
       release?.()
     }
+  }
+
+  override async prepareCall(
+    provider: string,
+    model: string,
+    signal?: AbortSignal,
+  ): Promise<PreparedAdapterCall> {
+    const prepared = await super.prepareCall(provider, model, signal)
+    return {
+      model: prepared.model,
+      stream: options => this.streamPrepared(prepared.stream, options),
+    }
+  }
+
+  override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    yield* this.streamPrepared(next => super.stream(next), options)
   }
 }
 
@@ -214,23 +342,44 @@ export function createOpenAICodexAdapter(
     const nextContextWindow = contextWindow?.()
     if (resolvedProfiles !== undefined && nextContextWindow === resolvedContextWindow) return resolvedProfiles
     const configuredProvider = withOpenAICodexContextWindow(provider, nextContextWindow)
-    resolvedContextWindow = nextContextWindow
-    resolvedProfiles = new Map([[OPENAI_CODEX_PROVIDER, {
+    const profile: ImageCompatibleResolvedPiAiProviderProfile = {
       provider: OPENAI_CODEX_PROVIDER,
       displayName: 'OpenAI Codex',
       streamIdleTimeoutMs: OPENAI_CODEX_STREAM_IDLE_TIMEOUT_MS,
+      // pi-ai emits `detail: "auto"`. The profile carries Codex's patch-derived
+      // area budget; the provider-scoped attachment wrapper below further
+      // tightens it per image for the 2048px edge and rounded patch-grid limits.
+      requestImagePixelBudget: OPENAI_CODEX_REQUEST_IMAGE_PIXEL_BUDGET,
+      // DSH exposes an aggregate history limit rather than Codex's per-image
+      // input guard. Reusing the 1GiB sanity ceiling keeps pathological history
+      // bounded without evicting normal image turns at an arbitrary 20MiB.
+      maxRequestImageBytes: OPENAI_CODEX_PROMPT_IMAGE_INPUT_GUARD_BYTES,
+      requestImageMaxBytes: OPENAI_CODEX_PROMPT_IMAGE_INPUT_GUARD_BYTES,
       retryPolicy: OPENAI_CODEX_RETRY_POLICY,
       configuredMaxTokens: new Map(),
-      ...OPENAI_CODEX_IMAGE_REQUEST_BUDGETS,
       piProvider: responses.wrap(configuredProvider),
-    }]])
+    }
+    resolvedContextWindow = nextContextWindow
+    resolvedProfiles = new Map([[OPENAI_CODEX_PROVIDER, profile]])
     return resolvedProfiles
   }
-  const models: MutableModels = createModels({ credentials })
+  const auth = { credentials, authContext: OPENAI_CODEX_AUTH_CONTEXT }
+  const models: MutableModels = createModels(auth)
   models.setProvider(provider)
+  let attachmentStore: AttachmentStore | undefined
+  let codexAttachmentStore: AttachmentStore | undefined
   return new OpenAICodexAdapter({
     profiles,
     resolveApiKey: async () => (await models.getAuth(OPENAI_CODEX_PROVIDER))?.auth.apiKey,
-    resolveAttachments,
+    auth,
+    resolveAttachments: () => {
+      const resolved = resolveAttachments()
+      if (resolved === undefined) return undefined
+      if (resolved !== attachmentStore) {
+        attachmentStore = resolved
+        codexAttachmentStore = withOpenAICodexImagePolicy(resolved)
+      }
+      return codexAttachmentStore
+    },
   }, responses, visibleModelIds)
 }

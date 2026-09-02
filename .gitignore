@@ -2,3 +2,4 @@ node_modules/
 lib/
 *.tsbuildinfo
 .openai-codex-auth.json
+dist-package/
