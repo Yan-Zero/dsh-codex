@@ -174,11 +174,13 @@ describe('OpenAI Codex Web OAuth boundary', () => {
 
   it('serves, updates, resets, and validates the context-window override', async () => {
     let contextWindow: number | null = null
+    let overrideSparkContextWindow = false
     const preferences = {
-      contextWindowSnapshot: vi.fn(() => ({ contextWindow })),
-      updateContextWindow: vi.fn(async (patch: { contextWindow?: number | null }) => {
+      contextWindowSnapshot: vi.fn(() => ({ contextWindow, overrideSparkContextWindow })),
+      updateContextWindow: vi.fn(async (patch: { contextWindow?: number | null, overrideSparkContextWindow?: boolean }) => {
         if (patch.contextWindow !== undefined) contextWindow = patch.contextWindow
-        return { contextWindow }
+        if (patch.overrideSparkContextWindow !== undefined) overrideSparkContextWindow = patch.overrideSparkContextWindow
+        return { contextWindow, overrideSparkContextWindow }
       }),
     } as unknown as ImageToolPolicy
     const route = captureRoutes(emptyTrustedOrigins, preferences)
@@ -187,12 +189,20 @@ describe('OpenAI Codex Web OAuth boundary', () => {
 
     const getResponse = response()
     await route.handler(request({}), getResponse)
-    expect(JSON.parse(getResponse.observed.body ?? 'null')).toEqual({ contextWindow: null })
+    expect(JSON.parse(getResponse.observed.body ?? 'null')).toEqual({
+      contextWindow: null,
+      overrideSparkContextWindow: false,
+    })
 
     const updateResponse = response()
     await route.handler(request({ method: 'POST', body: JSON.stringify({ contextWindow: 512_000 }) }), updateResponse)
     expect(updateResponse.observed.status).toBe(200)
     expect(contextWindow).toBe(512_000)
+
+    const sparkResponse = response()
+    await route.handler(request({ method: 'POST', body: JSON.stringify({ overrideSparkContextWindow: true }) }), sparkResponse)
+    expect(sparkResponse.observed.status).toBe(200)
+    expect(overrideSparkContextWindow).toBe(true)
 
     const resetResponse = response()
     await route.handler(request({ method: 'POST', body: JSON.stringify({ contextWindow: null }) }), resetResponse)
@@ -204,6 +214,9 @@ describe('OpenAI Codex Web OAuth boundary', () => {
       await route.handler(request({ method: 'POST', body: JSON.stringify({ contextWindow: value }) }), invalidResponse)
       expect(invalidResponse.observed.status).toBe(400)
     }
+    const invalidSparkResponse = response()
+    await route.handler(request({ method: 'POST', body: JSON.stringify({ overrideSparkContextWindow: 'yes' }) }), invalidSparkResponse)
+    expect(invalidSparkResponse.observed.status).toBe(400)
   })
 
   it('returns a stable remote-origin error until the exact effective origin is trusted', async () => {
