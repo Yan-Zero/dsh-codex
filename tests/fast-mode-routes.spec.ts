@@ -1,12 +1,14 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   OPENAI_CODEX_FAST_MODE_PATH,
+  OPENAI_CODEX_FAST_MODE_SETTINGS_PATH,
   registerOpenAICodexAuthRoutes,
 } from '../src/auth-routes.ts'
 import { FastModeRegistry } from '../src/fast-mode.ts'
 import type { OpenAICodexCredentialStore } from '../src/store.ts'
+import type { ImageToolPolicy } from '../src/tool-policy.ts'
 
 const store = {} as OpenAICodexCredentialStore
 
@@ -15,7 +17,7 @@ interface CapturedRoute {
   handler(req: IncomingMessage, res: ServerResponse): Promise<void> | void
 }
 
-function routes(registry = new FastModeRegistry()): CapturedRoute[] {
+function routes(registry = new FastModeRegistry(), policy?: ImageToolPolicy): CapturedRoute[] {
   const captured: CapturedRoute[] = []
   const ctx = {
     webServer: {
@@ -28,7 +30,7 @@ function routes(registry = new FastModeRegistry()): CapturedRoute[] {
       return factory()
     },
   } as unknown as Context
-  registerOpenAICodexAuthRoutes(ctx, store, undefined, registry)
+  registerOpenAICodexAuthRoutes(ctx, store, undefined, registry, policy)
   return captured
 }
 
@@ -69,8 +71,8 @@ function response(): ServerResponse & { status?: number; body?: string } {
   } as unknown as ServerResponse & { status?: number; body?: string }
 }
 
-function fastRoute(registry?: FastModeRegistry): CapturedRoute {
-  const route = routes(registry).find(candidate => candidate.path === OPENAI_CODEX_FAST_MODE_PATH)
+function fastRoute(registry?: FastModeRegistry, policy?: ImageToolPolicy): CapturedRoute {
+  const route = routes(registry, policy).find(candidate => candidate.path === OPENAI_CODEX_FAST_MODE_PATH)
   if (route === undefined) throw new Error('Fast Mode route was not registered')
   return route
 }
@@ -138,5 +140,83 @@ describe('OpenAI Codex Fast Mode routes', () => {
     const oversized = response()
     await route.handler(request({ method: 'POST', contentType: 'application/json', body: 'x'.repeat(4_097) }), oversized)
     expect(oversized.status).toBe(413)
+  })
+})
+
+describe('OpenAI Codex Fast Mode default preference', () => {
+  it('reports enabled for any session while the default is forced on', async () => {
+    const registry = new FastModeRegistry()
+    const policy = {
+      fastModeSnapshot: () => ({ fastModeDefault: true }),
+    } as unknown as ImageToolPolicy
+    const route = fastRoute(registry, policy)
+
+    const forced = response()
+    await route.handler(request({ method: 'GET', url: `${OPENAI_CODEX_FAST_MODE_PATH}?sessionId=never-registered` }), forced)
+    expect(forced.status).toBe(200)
+    expect(bodyOf(forced)).toEqual({ enabled: true })
+
+    const posted = response()
+    await route.handler(request({
+      method: 'POST',
+      contentType: 'application/json',
+      body: JSON.stringify({ sessionId: 'a', enabled: false }),
+    }), posted)
+    expect(posted.status).toBe(200)
+    expect(bodyOf(posted)).toEqual({ enabled: false })
+    expect(registry.size).toBe(0)
+
+    registry.set('a', true)
+    const stillForced = response()
+    await route.handler(request({ method: 'GET', url: `${OPENAI_CODEX_FAST_MODE_PATH}?sessionId=a` }), stillForced)
+    expect(bodyOf(stillForced)).toEqual({ enabled: true })
+  })
+
+  it('serves and updates the Fast Mode default through its settings route', async () => {
+    let fastModeDefault = false
+    const policy = {
+      fastModeSnapshot: vi.fn(() => ({ fastModeDefault })),
+      updateFastMode: vi.fn(async (patch: { fastModeDefault?: boolean }) => {
+        if (patch.fastModeDefault !== undefined) fastModeDefault = patch.fastModeDefault
+        return { fastModeDefault }
+      }),
+    } as unknown as ImageToolPolicy
+    const route = routes(new FastModeRegistry(), policy)
+      .find(candidate => candidate.path === OPENAI_CODEX_FAST_MODE_SETTINGS_PATH)
+    if (route === undefined) throw new Error('Fast Mode settings route was not registered')
+
+    const getResponse = response()
+    await route.handler(request({ method: 'GET', url: OPENAI_CODEX_FAST_MODE_SETTINGS_PATH }), getResponse)
+    expect(getResponse.status).toBe(200)
+    expect(bodyOf(getResponse)).toEqual({ fastModeDefault: false })
+
+    const postResponse = response()
+    await route.handler(request({
+      method: 'POST',
+      url: OPENAI_CODEX_FAST_MODE_SETTINGS_PATH,
+      contentType: 'application/json',
+      body: JSON.stringify({ fastModeDefault: true }),
+    }), postResponse)
+    expect(postResponse.status).toBe(200)
+    expect(policy.updateFastMode).toHaveBeenCalledWith({ fastModeDefault: true })
+    expect(bodyOf(postResponse)).toEqual({ fastModeDefault: true })
+
+    const invalidResponse = response()
+    await route.handler(request({
+      method: 'POST',
+      url: OPENAI_CODEX_FAST_MODE_SETTINGS_PATH,
+      contentType: 'application/json',
+      body: JSON.stringify({ fastModeDefault: 'yes' }),
+    }), invalidResponse)
+    expect(invalidResponse.status).toBe(400)
+
+    const unknownResponse = response()
+    await route.handler(request({
+      method: 'POST',
+      url: OPENAI_CODEX_FAST_MODE_SETTINGS_PATH,
+      contentType: 'application/json',
+      body: JSON.stringify({ unknown: true }),
+    }), unknownResponse)
+    expect(unknownResponse.status).toBe(400)
   })
 })

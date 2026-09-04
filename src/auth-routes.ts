@@ -31,6 +31,7 @@ import { FastModeRegistry, isFastModeSessionId } from "./fast-mode.ts";
 import { OPENAI_CODEX_FAST_MODE_PATH } from "./fast-mode-paths.ts";
 import type {
   ContextWindowPreferences,
+  FastModePreferences,
   ImageToolPolicy,
   ImageToolPreferences,
   ModelCatalogPreferences,
@@ -57,6 +58,9 @@ export const OPENAI_CODEX_MODEL_CATALOG_SETTINGS_PATH =
 /** Plugin-owned client-side context capacity endpoint consumed by its browser half. */
 export const OPENAI_CODEX_CONTEXT_WINDOW_SETTINGS_PATH =
   "/plugins/dsh-openai-codex/context-window";
+/** Plugin-owned Fast Mode default endpoint consumed by its browser half. */
+export const OPENAI_CODEX_FAST_MODE_SETTINGS_PATH =
+  "/plugins/dsh-openai-codex/fast-mode-default";
 /** Plugin-owned proxy preference endpoint consumed by its browser half. */
 export const OPENAI_CODEX_PROXY_SETTINGS_PATH =
   "/plugins/dsh-openai-codex/proxy";
@@ -689,6 +693,27 @@ function modelCatalogPatch(
   return { models };
 }
 
+function fastModeSettingsPatch(
+  value: Record<string, unknown>
+): Partial<FastModePreferences> {
+  const allowed = new Set<keyof FastModePreferences>(["fastModeDefault"]);
+  if (
+    Object.keys(value).some(
+      (key) => !allowed.has(key as keyof FastModePreferences)
+    )
+  ) {
+    throw new TypeError("request contains an unknown Fast Mode setting");
+  }
+  const patch: Partial<FastModePreferences> = {};
+  for (const key of allowed) {
+    if (value[key] === undefined) continue;
+    if (typeof value[key] !== "boolean")
+      throw new TypeError(`${key} must be a boolean`);
+    patch[key] = value[key];
+  }
+  return patch;
+}
+
 function proxyPreferencePatch(
   value: Record<string, unknown>
 ): Partial<ProxyPreferences> {
@@ -819,7 +844,11 @@ export function registerOpenAICodexAuthRoutes(
             const sessionId = fastModeSessionIdFromQuery(req);
             if (sessionId === undefined)
               return json(res, 400, { error: "invalid input" });
-            return json(res, 200, { enabled: fastMode.isEnabled(sessionId) });
+            return json(res, 200, {
+              enabled:
+                imageTools?.fastModeSnapshot().fastModeDefault === true ||
+                fastMode.isEnabled(sessionId),
+            });
           }
           const type = header(req, "content-type");
           if (
@@ -930,6 +959,28 @@ export function registerOpenAICodexAuthRoutes(
                     200,
                     await imageTools.updateModelCatalog(
                       modelCatalogPatch(await readSettingsBody(req))
+                    )
+                  );
+                } catch (error: unknown) {
+                  return json(res, 400, { error: safeMessage(error) });
+                }
+              },
+            }),
+            ctx.webServer.register({
+              kind: "exact",
+              path: OPENAI_CODEX_FAST_MODE_SETTINGS_PATH,
+              handler: async (req, res) => {
+                if (!(await authorize(req, res))) return;
+                if (req.method === "GET")
+                  return json(res, 200, imageTools.fastModeSnapshot());
+                if (req.method !== "POST")
+                  return json(res, 405, { error: "method not allowed" });
+                try {
+                  return json(
+                    res,
+                    200,
+                    await imageTools.updateFastMode(
+                      fastModeSettingsPatch(await readSettingsBody(req))
                     )
                   );
                 } catch (error: unknown) {

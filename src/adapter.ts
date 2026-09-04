@@ -325,7 +325,8 @@ function isPayloadRecord(value: unknown): value is Record<string, unknown> {
 /** Add the request-scoped Fast Mode hint without changing other payload fields. */
 export function withOpenAICodexFastMode(
   provider: Provider,
-  fastMode: FastModeRegistry | undefined
+  fastMode: FastModeRegistry | undefined,
+  fastModeDefault?: () => boolean
 ): Provider {
   const streamSimple = provider.streamSimple;
   return {
@@ -334,7 +335,8 @@ export function withOpenAICodexFastMode(
       const enabled =
         provider.id === OPENAI_CODEX_PROVIDER &&
         model.provider === OPENAI_CODEX_PROVIDER &&
-        fastMode?.isEnabled(options?.sessionId) === true;
+        (fastModeDefault?.() === true ||
+          fastMode?.isEnabled(options?.sessionId) === true);
       if (!enabled) return streamSimple.call(provider, model, context, options);
       const previousOnPayload = options?.onPayload;
       return streamSimple.call(provider, model, context, {
@@ -376,9 +378,14 @@ function withOpenAICodexContextWindow(
 function requestProvider(
   provider: Provider,
   fastMode?: FastModeRegistry,
+  fastModeDefault?: () => boolean,
   requestFetch?: FetchFunction
 ): Provider {
-  const configured = withOpenAICodexFastMode(provider, fastMode);
+  const configured = withOpenAICodexFastMode(
+    provider,
+    fastMode,
+    fastModeDefault
+  );
   const streamSimple = configured.streamSimple;
   return {
     ...configured,
@@ -476,11 +483,13 @@ export function createOpenAICodexAdapter(
   visibleModelIds?: () => readonly string[],
   contextWindow?: () => number | null | undefined,
   overrideSparkContextWindow?: () => boolean | undefined,
-  requestFetch?: FetchFunction
+  requestFetch?: FetchFunction,
+  fastModeDefault?: () => boolean
 ): PiAiAdapter {
   const provider = requestProvider(
     withOpenAICodexModelAdditions(openaiCodexProvider()),
     fastMode,
+    fastModeDefault,
     requestFetch
   );
   const responses = new OpenAICodexResponseRuntime(

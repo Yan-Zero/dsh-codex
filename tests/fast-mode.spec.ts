@@ -105,4 +105,21 @@ describe('OpenAI Codex Fast Mode adapter boundary', () => {
     wrapped.streamSimple(model('other-provider'), {} as PiContext, { sessionId: 'session-a' })
     expect(fixture.streamSimple).toHaveBeenCalledWith(expect.anything(), expect.anything(), { sessionId: 'session-a' })
   })
+
+  it('adds priority for any session while the Fast Mode default is forced on', async () => {
+    const fixture = providerFixture()
+    const registry = new FastModeRegistry()
+    let fastModeDefault = true
+    const wrapped = withOpenAICodexFastMode(fixture.provider, registry, () => fastModeDefault)
+    wrapped.streamSimple(model('openai-codex'), {} as PiContext, { sessionId: 'unregistered-session' })
+    const enabledOptions = fixture.streamSimple.mock.lastCall?.[2] as SimpleStreamOptions | undefined
+    expect(enabledOptions?.onPayload).toBeTypeOf('function')
+    expect(await enabledOptions?.onPayload?.({ model: 'gpt-5', input: [] }, model('openai-codex')))
+      .toEqual({ model: 'gpt-5', input: [], service_tier: 'priority' })
+    expect(registry.size).toBe(0)
+
+    fastModeDefault = false
+    wrapped.streamSimple(model('openai-codex'), {} as PiContext, { sessionId: 'unregistered-session' })
+    expect(fixture.streamSimple).toHaveBeenLastCalledWith(expect.anything(), expect.anything(), { sessionId: 'unregistered-session' })
+  })
 })

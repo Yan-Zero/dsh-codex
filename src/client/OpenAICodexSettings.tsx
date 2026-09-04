@@ -5,6 +5,7 @@ import type { CSSProperties } from "react";
 import type { OpenAICodexUsage } from "../usage.ts";
 import type {
   ContextWindowPreferences,
+  FastModePreferences,
   ImageToolPreferences,
   ModelCatalogEntry,
   ModelCatalogSettings,
@@ -23,6 +24,7 @@ const IMAGE_TOOLS_PATH = "/plugins/dsh-openai-codex/image-tools";
 const RESPONSE_API_PATH = "/plugins/dsh-openai-codex/response-api";
 const MODEL_CATALOG_PATH = "/plugins/dsh-openai-codex/models";
 const CONTEXT_WINDOW_PATH = "/plugins/dsh-openai-codex/context-window";
+const FAST_MODE_SETTINGS_PATH = "/plugins/dsh-openai-codex/fast-mode-default";
 const PROXY_PATH = "/plugins/dsh-openai-codex/proxy";
 const POLL_INTERVAL_MS = 1_000;
 const USAGE_POLL_INTERVAL_MS = 60_000;
@@ -716,6 +718,9 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   const [contextWindowError, setContextWindowError] = useState<
     string | undefined
   >();
+  const [fastMode, setFastMode] = useState<FastModePreferences | undefined>();
+  const [fastModeBusy, setFastModeBusy] = useState(false);
+  const [fastModeError, setFastModeError] = useState<string | undefined>();
   const [proxy, setProxy] = useState<ProxyPreferences | undefined>();
   const [proxyDraft, setProxyDraft] = useState("");
   const [proxyBusy, setProxyBusy] = useState(false);
@@ -785,6 +790,17 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
       },
       () => {
         setContextWindowError(t("contextWindowSettingsFailed"));
+      }
+    );
+  }, [t]);
+  useEffect(() => {
+    void jsonRequest<FastModePreferences>(FAST_MODE_SETTINGS_PATH).then(
+      (value) => {
+        setFastMode(value);
+        setFastModeError(undefined);
+      },
+      () => {
+        setFastModeError(t("fastModeSettingsFailed"));
       }
     );
   }, [t]);
@@ -986,6 +1002,26 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
       );
     } finally {
       setProxyBusy(false);
+    }
+  };
+
+  const updateFastMode = async (
+    patch: Partial<FastModePreferences>
+  ): Promise<void> => {
+    setFastModeBusy(true);
+    setFastModeError(undefined);
+    try {
+      setFastMode(
+        await jsonRequest<FastModePreferences>(
+          FAST_MODE_SETTINGS_PATH,
+          "POST",
+          patch
+        )
+      );
+    } catch {
+      setFastModeError(t("fastModeSettingsFailed"));
+    } finally {
+      setFastModeBusy(false);
     }
   };
 
@@ -1298,6 +1334,29 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
         </div>
         {responseApiError === undefined ? null : (
           <p style={errorStyle}>{responseApiError}</p>
+        )}
+      </div>
+      <div style={cardStyle}>
+        <div>
+          <h3 style={quotaTitleStyle}>{t("fastMode")}</h3>
+          <p style={{ ...bodyStyle, marginTop: 5 }}>{t("fastModeIntro")}</p>
+        </div>
+        <div style={toggleRowStyle}>
+          <span style={toggleCopyStyle}>
+            <span style={statusStyle}>{t("fastModeDefault")}</span>
+            <span style={bodyStyle}>{t("fastModeDefaultHint")}</span>
+          </span>
+          <PreferenceToggle
+            label={t("fastModeDefault")}
+            disabled={fastMode === undefined || fastModeBusy}
+            checked={fastMode?.fastModeDefault ?? false}
+            onChange={(checked) => {
+              void updateFastMode({ fastModeDefault: checked });
+            }}
+          />
+        </div>
+        {fastModeError === undefined ? null : (
+          <p style={errorStyle}>{fastModeError}</p>
         )}
       </div>
     </section>

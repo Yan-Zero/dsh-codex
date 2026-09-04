@@ -53,6 +53,7 @@ describe("ImageToolPolicy", () => {
       contextWindow: null,
       overrideSparkContextWindow: false,
     });
+    expect(policy.fastModeSnapshot()).toEqual({ fastModeDefault: false });
     expect(policy.proxySnapshot()).toEqual({
       proxyMode: "off",
       proxyUrl: "",
@@ -64,6 +65,7 @@ describe("ImageToolPolicy", () => {
       contextWindow: 512_000,
       overrideSparkContextWindow: true,
     });
+    await policy.updateFastMode({ fastModeDefault: true });
     await policy.updateProxy({
       proxyMode: "scoped",
       proxyUrl: "http://127.0.0.1:7890",
@@ -81,6 +83,7 @@ describe("ImageToolPolicy", () => {
       contextWindow: 512_000,
       overrideSparkContextWindow: true,
     });
+    expect(policy.fastModeSnapshot()).toEqual({ fastModeDefault: true });
     expect(policy.proxySnapshot()).toEqual({
       proxyMode: "scoped",
       proxyUrl: "http://127.0.0.1:7890",
@@ -189,6 +192,7 @@ describe("ImageToolPolicy", () => {
       contextWindow: null,
       overrideSparkContextWindow: false,
     });
+    expect(policy.fastModeSnapshot()).toEqual({ fastModeDefault: false });
     expect(policy.proxySnapshot()).toEqual({
       proxyMode: "off",
       proxyUrl: "",
