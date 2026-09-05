@@ -31,7 +31,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 /** Stable browser-plugin name. */
 export const name = 'dsh-codex-client'
 /** Client services required by the settings contribution. */
-export const inject = ['slots', 'locale', 'sessions', 'modelDirectories']
+export const inject = ['slots', 'locale', 'sessions', 'modelDirectories', 'remote', 'remote.session']
 
 /** Register account copy and the OpenAI Codex settings page. */
 export function apply(ctx: ClientContext): void {
