@@ -39,9 +39,9 @@ const GPT_6_ASTRA = "gpt-6-astra";
 const OPENAI_CODEX_MODEL_ORDER = new Map<string, number>(
   [
     GPT_6_ASTRA,
-    "gpt-5.6-luna",
     "gpt-5.6-sol",
     "gpt-5.6-terra",
+    "gpt-5.6-luna",
     GPT_5_3_CODEX_SPARK,
     "gpt-5.5",
     "gpt-5.4",

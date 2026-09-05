@@ -35,15 +35,21 @@ describe("Codex model discovery", () => {
       { ...astra, baseUrl: "https://untrusted.invalid", headers: { Authorization: "untrusted" } },
       { ...astra, slug: "gpt-future-model", input_modalities: ["text"] },
     ] });
-    expect(models[0]).toMatchObject({
+    const astraModel = models.find((model) => model.id === "gpt-6-astra");
+    expect(astraModel).toMatchObject({
       id: "gpt-6-astra", name: "GPT-6-Astra", contextWindow: 272_000,
       maxTokens: 128_000, input: ["text", "image"],
       baseUrl: "https://chatgpt.com/backend-api", provider: "openai-codex",
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       thinkingLevelMap: { minimal: "low", medium: null, max: "max" },
     });
-    expect(models[0]?.headers).toBeUndefined();
-    expect(models[1]).toMatchObject({ id: "gpt-future-model", input: ["text"] });
+    expect(astraModel?.headers).toBeUndefined();
+    expect(models.find((model) => model.id === "gpt-future-model"))
+      .toMatchObject({ id: "gpt-future-model", input: ["text"] });
+    expect(models.slice(0, bundled.length).map((model) => model.id))
+      .toEqual(bundled.map((model) => model.id));
+    expect(models.slice(bundled.length).map((model) => model.id))
+      .toEqual(["gpt-6-astra", "gpt-future-model"]);
     expect(models.some(model => model.id === "gpt-5.4")).toBe(true);
   });
 
@@ -56,8 +62,39 @@ describe("Codex model discovery", () => {
       { ...astra, slug: "gpt-5.6-sol", context_window: 999 },
     ] });
     expect(models).toHaveLength(bundled.length);
-    expect(models[0]?.contextWindow).toBe(272_000);
-    expect(models[0]?.cost).toEqual(bundled.find(model => model.id === "gpt-5.6-sol")?.cost);
+    const sol = models.find((model) => model.id === "gpt-5.6-sol");
+    expect(sol?.contextWindow).toBe(272_000);
+    expect(sol?.cost).toEqual(bundled.find(model => model.id === "gpt-5.6-sol")?.cost);
+  });
+
+  it("keeps the curated model order and appends unknown cache entries stably", () => {
+    const filename = cacheFile();
+    vi.stubEnv("DSH_CODEX_MODELS_CACHE", filename);
+    writeCache(filename, [
+      astra,
+      { ...astra, slug: "gpt-5.6-sol" },
+      { ...astra, slug: "gpt-future-b" },
+      { ...astra, slug: "gpt-5.6-terra" },
+      { ...astra, slug: "gpt-5.6-luna" },
+      { ...astra, slug: "gpt-5.5" },
+      { ...astra, slug: "gpt-5.4-mini" },
+      { ...astra, slug: "gpt-5.3-codex-spark", input_modalities: ["text"] },
+      { ...astra, slug: "gpt-future-a" },
+    ]);
+
+    expect(createOpenAICodexModelProvider().getModels().map((model) => model.id))
+      .toEqual([
+        "gpt-6-astra",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.3-codex-spark",
+        "gpt-5.5",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-future-b",
+        "gpt-future-a",
+      ]);
   });
 
   it("uses explicit cache paths before CODEX_HOME and the user default", () => {
@@ -74,7 +111,8 @@ describe("Codex model discovery", () => {
     expect(catalog.getModels()).toBe(bundled);
     writeFileSync(filename, '\uFEFF' + JSON.stringify({ models: [astra] }));
     const first = catalog.getModels();
-    expect(first[0]?.id).toBe("gpt-6-astra");
+    expect(first.find((model) => model.id === "gpt-6-astra")?.contextWindow)
+      .toBe(272_000);
     expect(catalog.getModels()).toBe(first);
     writeFileSync(filename, "{");
     expect(catalog.getModels()).toBe(first);
@@ -83,8 +121,10 @@ describe("Codex model discovery", () => {
     rmSync(filename);
     expect(catalog.getModels()).toBe(first);
     writeCache(filename, [{ ...astra, context_window: 512_000 }]);
-    expect(catalog.getModels()[0]?.contextWindow).toBe(512_000);
-    expect(first[0]?.contextWindow).toBe(272_000);
+    expect(catalog.getModels().find((model) => model.id === "gpt-6-astra")?.contextWindow)
+      .toBe(512_000);
+    expect(first.find((model) => model.id === "gpt-6-astra")?.contextWindow)
+      .toBe(272_000);
   });
 
   it("shares updates between settings and actual request resolution without changing prepared calls", async () => {

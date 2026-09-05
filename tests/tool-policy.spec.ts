@@ -168,6 +168,30 @@ describe("ImageToolPolicy", () => {
     expect(policy.modelCatalogSnapshot().models).toEqual(["gpt-5.6-sol"]);
   });
 
+  it("preserves selected model ids while they are temporarily unavailable", async () => {
+    const ctx = new Context();
+    context = ctx;
+    await ctx.plugin(MemorySettings);
+    let catalog = [
+      { id: "gpt-current", name: "GPT Current", contextWindow: 272_000 },
+    ];
+    const policy = new ImageToolPolicy(
+      { models: ["gpt-current", "gpt-future"] },
+      () => catalog
+    );
+    policy.attach(ctx);
+
+    expect(policy.modelCatalogSnapshot().models).toEqual(["gpt-current"]);
+    await policy.updateModelCatalog({ models: [] });
+    expect(policy.modelCatalogSnapshot().models).toEqual([]);
+
+    catalog = [
+      ...catalog,
+      { id: "gpt-future", name: "GPT Future", contextWindow: 272_000 },
+    ];
+    expect(policy.modelCatalogSnapshot().models).toEqual(["gpt-future"]);
+  });
+
   it("defaults an older partial settings document to the complete model catalog", async () => {
     const ctx = new Context();
     context = ctx;

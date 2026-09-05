@@ -74,7 +74,11 @@ export function mergeOpenAICodexModels(
     });
   }
   if (discovered.size === 0) return bundled;
-  return [...discovered.values(), ...bundled.filter(model => !discovered.has(model.id))];
+  const bundledIds = new Set(bundled.map((model) => model.id));
+  return [
+    ...bundled.map((model) => discovered.get(model.id) ?? model),
+    ...[...discovered.values()].filter((model) => !bundledIds.has(model.id)),
+  ];
 }
 
 /** Reload changed metadata without invalidating in-flight request snapshots. */

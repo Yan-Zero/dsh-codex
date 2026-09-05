@@ -312,7 +312,16 @@ export class ImageToolPolicy {
     if (this.scope === undefined)
       throw new Error("OpenAI Codex settings service is unavailable");
     if (patch.models === undefined) return this.modelCatalogSnapshot();
-    await this.scope.update({ models: this.normalizeModels(patch.models) });
+    const availableIds = new Set(this.modelCatalog.map((model) => model.id));
+    const unavailableSelections = [
+      ...new Set(this.current.models.filter((id) => !availableIds.has(id))),
+    ];
+    await this.scope.update({
+      models: [
+        ...this.normalizeModels(patch.models),
+        ...unavailableSelections,
+      ],
+    });
     this.replace(this.scope.get());
     return this.modelCatalogSnapshot();
   }
