@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 import { createModels } from '@earendil-works/pi-ai'
 import type { Models } from '@earendil-works/pi-ai'
-import { openaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-codex'
+import { openaiCodexProvider } from './oauth-provider.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
@@ -125,7 +125,7 @@ export class OpenAICodexImageClient {
     private readonly requestFetch: typeof globalThis.fetch = globalThis.fetch,
   ) {
     const models = createModels({ credentials })
-    models.setProvider(openaiCodexProvider())
+    models.setProvider(openaiCodexProvider(requestFetch))
     this.models = models
   }
 

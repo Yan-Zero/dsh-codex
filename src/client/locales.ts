@@ -62,7 +62,7 @@ export const en = {
   proxyModeOffHint:
     "The plugin does not override networking. Codex still follows any process-wide proxy configured when dsh started.",
   proxyModeScopedHint:
-    "Only Codex HTTP requests after authentication use this proxy. OAuth token refresh and WebSocket transport continue to follow dsh networking.",
+    "Codex HTTP requests and OAuth token refresh use this proxy. Initial login and WebSocket transport continue to follow dsh networking.",
   proxyModeGlobalHint:
     "Applies this proxy to the whole dsh process, including OAuth. Requests from other plugins are affected too.",
   proxyUrl: "Proxy URL",
@@ -193,7 +193,7 @@ export const zh: { [Key in OpenAICodexSettingsKey]: string } = {
   proxyModeOffHint:
     "插件不覆盖网络设置；如果 dsh 启动时已配置进程级代理，Codex 仍会遵循该策略。",
   proxyModeScopedHint:
-    "仅认证完成后的 Codex HTTP 请求使用此代理；OAuth Token 刷新和 WebSocket 仍遵循 dsh 的网络策略。",
+    "Codex HTTP 请求与 OAuth Token 刷新使用此代理；首次登录和 WebSocket 仍遵循 dsh 的网络策略。",
   proxyModeGlobalHint:
     "把此代理应用到整个 dsh 进程，并覆盖 OAuth；其他插件的请求也会受到影响。",
   proxyUrl: "代理 URL",

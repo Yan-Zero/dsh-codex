@@ -60,7 +60,7 @@ The bundle selects `openai-codex` / `gpt-5.6-sol` for new agents and selects the
 
 The plugin reads the Codex CLI/Desktop `models_cache.json` to discover models not yet bundled by pi-ai and update their names, input modalities, reasoning levels, and default `context_window`. It checks the file specified by `DSH_CODEX_MODELS_CACHE`, then `CODEX_HOME/models_cache.json`, then `~/.codex/models_cache.json`. Only valid entries with `visibility: list` are imported; the maximum expandable window does not replace the default capacity.
 
-Codex CLI/Desktop refreshes this cache. The plugin reads model metadata only, keeps its separate dsh OAuth login, never reads or copies Codex credentials, and does not launch a Codex subprocess. After updating and opening Codex, reopen the plugin's model settings or refresh the model list to discover changes. Missing, corrupt, or partially written caches retain the last usable catalog; a fresh start without a cache uses bundled models, including GPT-6 Astra. Catalog metadata does not guarantee model access for the account signed into dsh.
+Codex CLI/Desktop refreshes this cache. Catalog discovery reads model metadata only and does not launch a Codex subprocess. OAuth login remains separate unless `credentialFile` is explicitly configured (see below). After updating and opening Codex, reopen the plugin's model settings or refresh the model list to discover changes. Missing, corrupt, or partially written caches retain the last usable catalog; a fresh start without a cache uses bundled models, including GPT-6 Astra. Catalog metadata does not guarantee model access for the account signed into dsh.
 
 Saved model selections are preserved. Enable newly discovered models in the settings below; a temporarily unavailable cache does not delete saved model IDs. Newly discovered models without bundled pricing use a zero cost estimate, which does not mean the model is free.
 
@@ -98,7 +98,7 @@ This mirrors Codex CLI's `model_context_window` concept on the Harness side; no 
 Open **Settings → OpenAI Codex → Network proxy** to select one of three scopes:
 
 - **Follow dsh** leaves networking untouched. Codex inherits any process-wide proxy configured when dsh started.
-- **Codex only** injects the selected proxy into Codex model SSE requests, native compaction, standalone search, image generation, and quota reads. OAuth token refresh and WebSocket transport still follow the process policy.
+- **Codex only** injects the selected proxy into Codex model SSE requests, native compaction, standalone search, image generation, quota reads, and OAuth token refresh. pi-ai's initial login exchange and WebSocket transport still follow the process policy.
 - **All dsh** applies the proxy process-wide, including OAuth; requests from other plugins are affected too. Turning it off restores the policy that was active before this plugin overrode it.
 
 The URL accepts `http://` and `https://` proxies. Leave it blank to use `DSH_CODEX_PROXY`, then the standard `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` environment variables. The default mode is **Follow dsh**, so installing the plugin never silently changes the process dispatcher.
@@ -154,7 +154,7 @@ The switches are independent. Every ordinary Codex request keeps `store: false`;
 
 ## Credentials and privacy
 
-dsh keeps this login separate from Codex CLI/Desktop:
+dsh keeps this login separate from Codex CLI/Desktop by default:
 
 - credentials are stored at `$DSH_HOME/.openai-codex-auth.json` (`~/.dsh` by default);
 - writes are atomic and token refresh is locked across local dsh processes;
@@ -162,6 +162,12 @@ dsh keeps this login separate from Codex CLI/Desktop:
 - `~/.codex/auth.json` is never copied or modified.
 
 Keeping the stores separate prevents two clients from racing the same rotating refresh token. Removing the bundle does not delete the credential; use the account page or `logout` command when the local account should be removed.
+
+To share an existing login, set the plugin's `credentialFile` to an absolute JSON file path, for example `C:/Users/you/.codex/auth.json`. Existing documents are recognized by shape: Codex `tokens`, CPA/CLIProxyAPI `type: codex`, OpenCode `openai`, Pi `openai-codex`, flat OAuth, or native dsh. Unknown, ambiguous, incomplete, and API-key-only documents fail explicitly; a missing file is created in native dsh format. Use a regular file, not a symlink or hard link, with owner-only permissions on POSIX.
+
+The selected credential must contain only recognized fields; unknown fields are rejected before refresh or writing, with field names but not values in diagnostics. Updates preserve the detected layout, recognized metadata, and other providers' independent entries. A provider-local OAuth refresh handler retains and writes the new access, refresh, and ID tokens, plus email when available, instead of pi-ai's reduced token projection. Login reuses pi-ai's interaction flow followed by one full refresh before saving. A response without an ID token fails explicitly rather than silently retaining stale identity. Logout clears the selected OAuth fields rather than deleting the shared document, and affects other consumers of that login.
+
+Explicit shared files use in-process serialization, with no `.lock` or refresh-intent protocol. Before writing, the plugin re-reads the document and rejects a detected competing credential change. Same-directory temporary-file replacement prevents partial JSON from this writer on supported local filesystems, but does not guarantee crash durability or mutual exclusion with other programs. Simultaneous refreshes can still race; read-back validation cannot solve that. Default separate dsh storage retains its existing cross-process lock.
 
 ## Compatibility notes
 

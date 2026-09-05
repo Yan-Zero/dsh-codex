@@ -3,11 +3,12 @@
  * @module dsh-codex/store
  */
 
-import { mkdir, readFile, rm, stat } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { lstat, mkdir, readFile, rm, stat } from 'node:fs/promises'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import type { Credential, CredentialInfo, CredentialStore, OAuthCredential } from '@earendil-works/pi-ai'
 import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { decodeCredentialDocument } from './credential-document.ts'
 
 /** Provider route and pi-ai provider id owned by this bundle. */
 export const OPENAI_CODEX_PROVIDER = 'openai-codex'
@@ -17,6 +18,17 @@ export const OPENAI_CODEX_AUTH_FILENAME = '.openai-codex-auth.json'
 
 /** Current on-disk format; pre-release readers reject every other version. */
 const AUTH_FORMAT_VERSION = 1
+
+// Shared by store instances in this process; external tools need no lock protocol.
+const pendingWrites = new Map<string, Promise<unknown>>()
+async function serialize<T>(filename: string, operation: () => Promise<T>): Promise<T> {
+  const previous = pendingWrites.get(filename) ?? Promise.resolve()
+  const next = previous.catch(() => {}).then(operation)
+  pendingWrites.set(filename, next)
+  try { return await next } finally {
+    if (pendingWrites.get(filename) === next) pendingWrites.delete(filename)
+  }
+}
 
 interface AuthDocument {
   version: typeof AUTH_FORMAT_VERSION
@@ -72,7 +84,7 @@ function parseDocument(text: string, filename: string): AuthDocument {
     throw new Error(`openai-codex: ${filename} credential must be an object`)
   }
   const credential = raw as Record<string, unknown>
-  if (Object.keys(credential).some(key => !['type', 'access', 'refresh', 'expires', 'accountId'].includes(key))) {
+  if (Object.keys(credential).some(key => !['type', 'access', 'refresh', 'expires', 'accountId', 'idToken', 'email'].includes(key))) {
     throw new Error(`openai-codex: ${filename} credential contains an unknown field`)
   }
   if (credential['type'] !== 'oauth') throw new Error(`openai-codex: ${filename} credential type must be oauth`)
@@ -83,6 +95,10 @@ function parseDocument(text: string, filename: string): AuthDocument {
   }
   if (typeof credential['expires'] !== 'number' || !Number.isFinite(credential['expires']) || credential['expires'] <= 0) {
     throw new Error(`openai-codex: ${filename} credential expires must be a positive finite number`)
+  }
+  for (const key of ['idToken', 'email']) {
+    if (credential[key] !== undefined && (typeof credential[key] !== 'string' || !credential[key]))
+      throw new Error(`openai-codex: invalid credential ${key}`)
   }
   return { version: AUTH_FORMAT_VERSION, credential: credential as unknown as OAuthCredential }
 }
@@ -109,12 +125,22 @@ export class OpenAICodexCredentialStore implements CredentialStore {
   /**
    * @param filename - explicit document path, defaulting under `$DSH_HOME`.
    */
-  constructor(filename: string = openAICodexAuthPath()) {
-    this.filename = resolve(filename)
+  private readonly shared: boolean
+  constructor(filename?: string) {
+    this.shared = filename !== undefined
+    if (filename !== undefined && !isAbsolute(filename)) throw new Error('openai-codex: credentialFile must be an absolute path')
+    this.filename = resolve(filename ?? openAICodexAuthPath())
   }
 
   /** Read and validate the current document without acquiring the writer lock. */
   private async readCurrent(): Promise<OAuthCredential | undefined> {
+    if (this.shared) {
+      try {
+        const info = await lstat(this.filename)
+        if (!info.isFile() || info.nlink !== 1)
+          throw new Error('openai-codex: shared credential must be a single-link regular file')
+      } catch (error) { if (!isENOENT(error)) throw error }
+    }
     await assertOwnerOnly(this.filename)
     let text: string
     try {
@@ -123,7 +149,7 @@ export class OpenAICodexCredentialStore implements CredentialStore {
       if (isENOENT(error)) return undefined
       throw error
     }
-    return cloneCredential(parseDocument(text, this.filename).credential)
+    return this.shared ? decodeCredentialDocument(text).credential : cloneCredential(parseDocument(text, this.filename).credential)
   }
 
   /** @inheritdoc */
@@ -147,15 +173,31 @@ export class OpenAICodexCredentialStore implements CredentialStore {
       throw new Error(`openai-codex: credential store does not own provider "${providerId}"`)
     }
     await mkdir(dirname(this.filename), { recursive: true, mode: 0o700 })
-    return withFileLock(this.filename, async () => {
+    const coordinate = this.shared ? serialize : withFileLock
+    return coordinate(this.filename, async () => {
       const current = await this.readCurrent()
-      const candidate = await fn(current)
+      const candidate = await fn(current === undefined ? undefined : cloneCredential(current))
       if (candidate === undefined) return current
       const document = parseDocument(JSON.stringify({
         version: AUTH_FORMAT_VERSION,
         credential: candidate,
       }), this.filename)
-      await writeFileAtomic(this.filename, `${JSON.stringify(document, null, 2)}\n`, {
+      let output: unknown = document
+      if (this.shared) {
+        // Re-read after refresh to retain concurrent edits to unrelated providers.
+        await assertOwnerOnly(this.filename)
+        try {
+          const source = decodeCredentialDocument(await readFile(this.filename, 'utf8'))
+          if (JSON.stringify(source.credential) !== JSON.stringify(current))
+            throw new Error('openai-codex: credential changed during update; reload before retrying')
+          output = source.update(document.credential)
+          decodeCredentialDocument(JSON.stringify(output))
+        } catch (error) {
+          if (!isENOENT(error)) throw error
+          if (current !== undefined) throw new Error('openai-codex: credential file was removed during update')
+        }
+      }
+      await writeFileAtomic(this.filename, `${JSON.stringify(output, null, 2)}\n`, {
         mode: 0o600,
         dirMode: 0o700,
       })
@@ -167,6 +209,17 @@ export class OpenAICodexCredentialStore implements CredentialStore {
   async delete(providerId: string): Promise<void> {
     if (providerId !== OPENAI_CODEX_PROVIDER) return
     await mkdir(dirname(this.filename), { recursive: true, mode: 0o700 })
-    await withFileLock(this.filename, () => rm(this.filename, { force: true }))
+    if (!this.shared) {
+      await withFileLock(this.filename, () => rm(this.filename, { force: true }))
+      return
+    }
+    await serialize(this.filename, async () => {
+      await this.readCurrent()
+      let text: string
+      try { text = await readFile(this.filename, 'utf8') }
+      catch (error) { if (isENOENT(error)) return; throw error }
+      const document = decodeCredentialDocument(text)
+      await writeFileAtomic(this.filename, `${JSON.stringify(document.update(undefined), null, 2)}\n`, { mode: 0o600, dirMode: 0o700 })
+    })
   }
 }

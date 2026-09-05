@@ -152,6 +152,8 @@ export const inject = ["llm", "web"];
 
 /** Composite model and standalone-search configuration. */
 export interface Config {
+  /** Absolute shared OAuth JSON path; omitted to retain independent dsh storage. */
+  credentialFile?: string;
   /** Model ids advertised by the provider; omitted to advertise the full catalog. */
   models?: string[] | undefined;
   /** Client-side model context capacity in tokens; omitted to keep provider defaults. */
@@ -183,6 +185,7 @@ export interface Config {
 }
 
 export const Config: z<Config> = z.object({
+  credentialFile: z.string(),
   models: z.union([z.const(undefined), z.array(z.string())]),
   contextWindow: z.union([
     z.const(undefined),
@@ -220,8 +223,9 @@ export const Config: z<Config> = z.object({
  */
 export function apply(ctx: Context, config: Config): void {
   installOpenAICodexSearchEvent();
-  const modelProvider = createOpenAICodexModelProvider();
+  const modelProvider = createOpenAICodexModelProvider((input, init) => service.proxy.fetch(input, init));
   const service = new OpenAICodexService({
+    ...(config.credentialFile === undefined ? {} : { credentialFile: config.credentialFile }),
     ...(config.models === undefined ? {} : { models: config.models }),
     contextWindow: config.contextWindow ?? null,
     overrideSparkContextWindow: config.overrideSparkContextWindow ?? false,

@@ -5,7 +5,7 @@
 
 import { createModels } from '@earendil-works/pi-ai'
 import type { Models } from '@earendil-works/pi-ai'
-import { openaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-codex'
+import { openaiCodexProvider } from './oauth-provider.ts'
 import { WebError } from '@deepseek-ai/dsh-web'
 import type {
   WebSearchProvider,
@@ -234,7 +234,7 @@ export class OpenAICodexSearchProvider implements WebSearchProvider {
    */
   constructor(private readonly options: OpenAICodexSearchProviderOptions) {
     const models = createModels({ credentials: options.credentials })
-    models.setProvider(openaiCodexProvider())
+    models.setProvider(openaiCodexProvider(options.fetch))
     this.models = models
   }
 

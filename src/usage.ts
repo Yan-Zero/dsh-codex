@@ -1,7 +1,7 @@
 /** Live ChatGPT Codex rate-limit usage for the browser account page. */
 
 import { createModels } from '@earendil-works/pi-ai'
-import { openaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-codex'
+import { openaiCodexProvider } from './oauth-provider.ts'
 import type { OpenAICodexCredentialStore } from './store.ts'
 import { OPENAI_CODEX_PROVIDER } from './store.ts'
 
@@ -227,7 +227,7 @@ export async function readOpenAICodexRateLimits(
   requestFetch: typeof globalThis.fetch = globalThis.fetch,
 ): Promise<OpenAICodexUsage> {
   const models = createModels({ credentials: store })
-  models.setProvider(openaiCodexProvider())
+  models.setProvider(openaiCodexProvider(requestFetch))
   const auth = await models.getAuth(OPENAI_CODEX_PROVIDER)
   const credential = await store.read(OPENAI_CODEX_PROVIDER)
   const access = auth?.auth.apiKey
