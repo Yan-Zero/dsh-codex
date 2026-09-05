@@ -6,10 +6,11 @@ import { Context } from '@deepseek-ai/cordis'
 import LocalAttachmentStore from '@deepseek-ai/dsh-attachment-local'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import SandboxedFileSystem from '@deepseek-ai/dsh-fs-sandbox'
-import { CallId, createUserMessage, LlmRuntime } from '@deepseek-ai/dsh-llm'
+import { ToolCallId, createUserMessage, LlmRuntime } from '@deepseek-ai/dsh-llm'
 import type { Message } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import SandboxPolicyService from '@deepseek-ai/dsh-sandbox-policy'
+import SessionProjections from '@deepseek-ai/dsh-session-projection'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import WebRuntime from '@deepseek-ai/dsh-web'
 import * as OpenAICodex from '../src/index.ts'
@@ -63,6 +64,7 @@ async function setup(
   if (sandboxMode === undefined) {
     await ctx.plugin(LocalFileSystem, { cwd: workspace })
   } else {
+    await ctx.plugin(SessionProjections)
     await ctx.plugin(SandboxPolicyService, { mode: sandboxMode, workspaceRoot: workspace })
     await ctx.plugin(SandboxedFileSystem, { cwd: workspace })
   }
@@ -83,6 +85,10 @@ function agent(
     session: {
       id: 'imagegen-session',
       events: [],
+      ownEvents: () => [],
+      inheritedEventCount: 0,
+      seq: 0,
+      snapshotEvents: () => [],
       header: { cwd: workspace },
       deriveMessages: () => messages,
       requestHeader: () => ({ config: { provider, model } }),
@@ -100,7 +106,7 @@ async function generate(
 ) {
   return ctx.tools.execute({
     signal,
-    callId: CallId(`imagegen-${++callCounter}`),
+    callId: ToolCallId(`imagegen-${++callCounter}`),
     name: OpenAICodex.IMAGEGEN_TOOL_NAME,
     arguments: args,
     agent: agent(messages, model, provider) as never,
@@ -114,6 +120,18 @@ function successfulFetch() {
 }
 
 describe('imagegen', () => {
+  it('uses an injected request transport for image generation', async () => {
+    const requestFetch = successfulFetch()
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('global fetch must not run') }))
+    const client = new OpenAICodex.OpenAICodexImageClient(
+      new OpenAICodex.OpenAICodexCredentialStore(),
+      requestFetch,
+    )
+
+    await expect(client.generate('A tiny red pixel', [], signal)).resolves.toEqual(PNG_1X1)
+    expect(requestFetch).toHaveBeenCalledOnce()
+  })
+
   it('generates an attachment and optionally publishes the same PNG to the workspace', async () => {
     const ctx = await setup()
     const fetchMock = successfulFetch()
@@ -247,7 +265,7 @@ describe('imagegen', () => {
 
     const result = await generate(ctx, { prompt: 'A tiny pixel', output_path: 'blocked.png' })
 
-    expect(result.isError).toBe(false)
+    expect(result, JSON.stringify(result)).toMatchObject({ isError: false })
     expect(result.content.some(block => block.type === 'image')).toBe(true)
     expect(result.content.find(block => block.type === 'text')?.text).toContain('read-only mode')
     await expect(readFile(join(workspace, 'blocked.png'))).rejects.toMatchObject({ code: 'ENOENT' })

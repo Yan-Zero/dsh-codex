@@ -14,7 +14,11 @@ import type {} from '@deepseek-ai/dsh-web'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-fs'
-import { createOpenAICodexAdapter, openAICodexModelCatalog } from './adapter.ts'
+import {
+  createOpenAICodexAdapter,
+  createOpenAICodexModelProvider,
+  openAICodexModelCatalog,
+} from './adapter.ts'
 export type { UsageCorrelationHint } from './adapter.ts'
 import { registerOpenAICodexAuthRoutes } from './auth-routes.ts'
 import { registerOpenAICodexUsageRoutes } from './usage-routes.ts'
@@ -23,10 +27,7 @@ import { imagegenTool } from './imagegen.ts'
 import { ImageToolPolicy } from './tool-policy.ts'
 import { FastModeRegistry } from './fast-mode.ts'
 import { assertNoOpenAICodexProviderConflict } from './doctor.ts'
-import {
-  installOpenAICodexSearchEvent,
-  recordOpenAICodexSearchRequest,
-} from './search-event.ts'
+import { installOpenAICodexSearchEvent, recordOpenAICodexSearchRequest } from './search-event.ts'
 
 export { READ_IMAGE_TOOL_NAME } from './read-image-enhancement.ts'
 export {
@@ -37,6 +38,8 @@ export {
   OpenAICodexImageClient,
 } from './imagegen.ts'
 export {
+  DEFAULT_CONTEXT_WINDOW_PREFERENCES,
+  DEFAULT_FAST_MODE_PREFERENCES,
   DEFAULT_IMAGE_TOOL_PREFERENCES,
   DEFAULT_RESPONSE_API_PREFERENCES,
   ImageToolPolicy,
@@ -46,6 +49,10 @@ export type {
   ImageToolPreferences,
   OpenAICodexReasoningSummary,
   ResponseApiPreferences,
+} from './tool-policy.ts'
+export type {
+  ContextWindowPreferences,
+  FastModePreferences,
 } from './tool-policy.ts'
 export {
   isOpenAICodexReauthRequiredError,
@@ -81,6 +88,8 @@ import { OpenAICodexService } from './service.ts'
 import { OPENAI_CODEX_REASONING_SUMMARIES } from './tool-policy.ts'
 import type { OpenAICodexReasoningSummary } from './tool-policy.ts'
 import { installProviderUsageTracking } from './usage-middleware.ts'
+import { DEFAULT_PROXY_PREFERENCES } from './proxy.ts'
+import type { OpenAICodexProxyMode } from './proxy.ts'
 
 export { OpenAICodexService } from './service.ts'
 export {
@@ -107,6 +116,8 @@ export type {
 export type { OpenAICodexServiceOptions } from './service.ts'
 export { captureProviderUsage, installProviderUsageTracking } from './usage-middleware.ts'
 export type { UsageCaptureInternals } from './usage-middleware.ts'
+export { DEFAULT_PROXY_PREFERENCES, normalizeProxyUrl, OpenAICodexProxyTransport } from './proxy.ts'
+export type { OpenAICodexProxyMode, ProxyPreferences } from './proxy.ts'
 
 export {
   assertNoOpenAICodexProviderConflict,
@@ -156,8 +167,14 @@ export const inject = ['llm', 'web']
 
 /** Composite model and standalone-search configuration. */
 export interface Config {
+  /** Absolute shared OAuth JSON path; omitted to retain independent dsh storage. */
+  credentialFile?: string
   /** Model ids advertised by the provider; omitted to advertise the full catalog. */
   models?: string[] | undefined
+  /** Client-side model context capacity in tokens; omitted to keep provider defaults. */
+  contextWindow?: number | undefined
+  /** Apply the context-window override to GPT-5.3 Codex Spark as well. */
+  overrideSparkContextWindow?: boolean
   /** Model used for auxiliary standalone searches. */
   searchModel?: string
   /** Cached, indexed, or live web access. */
@@ -176,19 +193,33 @@ export interface Config {
   useWebSocketContextReuse?: boolean
   /** Use Codex V2 Responses compaction for Harness compaction calls. */
   useNativeCompaction?: boolean
+  /** Force the priority service tier on every Codex session. */
+  fastModeDefault?: boolean
+  /** How this plugin applies its proxy URL. */
+  proxyMode?: OpenAICodexProxyMode
+  /** HTTP(S) proxy URL; empty uses the launch environment. */
+  proxyUrl?: string
 }
 
 export const Config: z<Config> = z.object({
+  credentialFile: z.string(),
   models: z.union([z.const(undefined), z.array(z.string())]),
+  contextWindow: z.union([z.const(undefined), z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER)]),
+  overrideSparkContextWindow: z.boolean().default(false),
   searchModel: z.string().default(DEFAULT_OPENAI_CODEX_SEARCH_MODEL),
   searchMode: z.union(['cached', 'indexed', 'live'] as const).default(DEFAULT_OPENAI_CODEX_SEARCH_MODE),
-  searchContextSize: z.union(['low', 'medium', 'high'] as const).default(DEFAULT_OPENAI_CODEX_SEARCH_CONTEXT_SIZE),
+  searchContextSize: z
+    .union(['low', 'medium', 'high'] as const)
+    .default(DEFAULT_OPENAI_CODEX_SEARCH_CONTEXT_SIZE),
   searchMaxOutputTokens: z.number().step(1).min(1).default(DEFAULT_OPENAI_CODEX_SEARCH_MAX_OUTPUT_TOKENS),
   modifyReadImage: z.boolean().default(true),
   shareImagegenWithOtherModels: z.boolean().default(true),
   reasoningSummary: z.union(OPENAI_CODEX_REASONING_SUMMARIES).default('auto'),
   useWebSocketContextReuse: z.boolean().default(false),
   useNativeCompaction: z.boolean().default(false),
+  fastModeDefault: z.boolean().default(false),
+  proxyMode: z.union(['off', 'scoped', 'global'] as const).default(DEFAULT_PROXY_PREFERENCES.proxyMode),
+  proxyUrl: z.string().default(DEFAULT_PROXY_PREFERENCES.proxyUrl),
 })
 
 /**
@@ -199,23 +230,38 @@ export const Config: z<Config> = z.object({
  */
 export function apply(ctx: Context, config: Config): void {
   installOpenAICodexSearchEvent()
+  const modelProvider = createOpenAICodexModelProvider((input, init) => service.proxy.fetch(input, init))
   const service = new OpenAICodexService({
-    ...config.models === undefined ? {} : { models: config.models },
-    modelCatalog: openAICodexModelCatalog(),
+    ...(config.credentialFile === undefined ? {} : { credentialFile: config.credentialFile }),
+    ...(config.models === undefined ? {} : { models: config.models }),
+    contextWindow: config.contextWindow ?? null,
+    overrideSparkContextWindow: config.overrideSparkContextWindow ?? false,
+    modelCatalog: () => openAICodexModelCatalog(modelProvider),
     modifyReadImage: config.modifyReadImage ?? true,
     shareImagegenWithOtherModels: config.shareImagegenWithOtherModels ?? true,
     reasoningSummary: config.reasoningSummary ?? 'auto',
     useWebSocketContextReuse: config.useWebSocketContextReuse ?? false,
     useNativeCompaction: config.useNativeCompaction ?? false,
+    fastModeDefault: config.fastModeDefault ?? false,
+    proxyMode: config.proxyMode ?? DEFAULT_PROXY_PREFERENCES.proxyMode,
+    proxyUrl: config.proxyUrl ?? DEFAULT_PROXY_PREFERENCES.proxyUrl,
   })
   const credentials = service.credentials
   const imageTools = service.policy
   const usageTracker = service.usageTracker
   installProviderUsageTracking(ctx, usageTracker, new Set([OPENAI_CODEX_PROVIDER]))
   const fastMode = new FastModeRegistry()
-  assertNoOpenAICodexProviderConflict(ctx.llm.listProviders().map(provider => provider.id))
+  assertNoOpenAICodexProviderConflict(ctx.llm.listProviders().map((provider) => provider.id))
   ctx.provide('openAICodex', service)
-  ctx.inject(['settings'], settingsCtx => { service.attachSettings(settingsCtx) })
+  ctx.effect(
+    () => async () => {
+      await service.dispose()
+    },
+    'dsh-openai-codex: proxy transport',
+  )
+  ctx.inject(['settings'], (settingsCtx) => {
+    service.attachSettings(settingsCtx)
+  })
   ctx.llm.registerAdapter(
     [OPENAI_CODEX_PROVIDER],
     createOpenAICodexAdapter(
@@ -225,41 +271,46 @@ export function apply(ctx: Context, config: Config): void {
       fastMode,
       () => imageTools.modelCatalogSnapshot().models,
       usageTracker,
+      () => imageTools.contextWindowSnapshot().contextWindow,
+      () => imageTools.contextWindowSnapshot().overrideSparkContextWindow,
+      service.proxy.fetch,
+      () => imageTools.fastModeSnapshot().fastModeDefault,
+      modelProvider,
     ),
   )
-  ctx.web.registerSearchProvider(new OpenAICodexSearchProvider({
-    credentials,
-    model: config.searchModel ?? DEFAULT_OPENAI_CODEX_SEARCH_MODEL,
-    mode: config.searchMode ?? DEFAULT_OPENAI_CODEX_SEARCH_MODE,
-    contextSize: config.searchContextSize ?? DEFAULT_OPENAI_CODEX_SEARCH_CONTEXT_SIZE,
-    maxOutputTokens: config.searchMaxOutputTokens ?? DEFAULT_OPENAI_CODEX_SEARCH_MAX_OUTPUT_TOKENS,
-    resolveRequestId: () => String(ctx.get('agents')?.currentInitiator()?.session.id ?? randomUUID()),
-    recordRequest: request => { recordOpenAICodexSearchRequest(ctx, request) },
-  }))
-  ctx.inject(['webServer'], webCtx => {
-    registerOpenAICodexAuthRoutes(
-      webCtx,
+  ctx.web.registerSearchProvider(
+    new OpenAICodexSearchProvider({
       credentials,
-      undefined,
-      fastMode,
-      imageTools,
-    )
+      fetch: service.proxy.fetch,
+      model: config.searchModel ?? DEFAULT_OPENAI_CODEX_SEARCH_MODEL,
+      mode: config.searchMode ?? DEFAULT_OPENAI_CODEX_SEARCH_MODE,
+      contextSize: config.searchContextSize ?? DEFAULT_OPENAI_CODEX_SEARCH_CONTEXT_SIZE,
+      maxOutputTokens: config.searchMaxOutputTokens ?? DEFAULT_OPENAI_CODEX_SEARCH_MAX_OUTPUT_TOKENS,
+      resolveRequestId: () => String(ctx.get('agents')?.currentInitiator()?.session.id ?? randomUUID()),
+      recordRequest: (request) => {
+        recordOpenAICodexSearchRequest(ctx, request)
+      },
+    }),
+  )
+  ctx.inject(['webServer'], (webCtx) => {
+    registerOpenAICodexAuthRoutes(webCtx, credentials, undefined, fastMode, imageTools, service, service.proxy.fetch, () => service.proxy.apply())
     registerOpenAICodexUsageRoutes(webCtx, service)
   })
-  ctx.inject(['agents'], agentCtx => {
+  ctx.inject(['agents'], (agentCtx) => {
     agentCtx.on('agent/pre-step', async (payload, next) => {
       const decision = await next()
-      if (decision.kind === 'enter') usageTracker.noteStep(String(payload.agent.id), payload.turn, payload.step)
+      if (decision.kind === 'enter')
+        usageTracker.noteStep(String(payload.agent.id), payload.turn, payload.step)
       return decision
     })
-    agentCtx.on('agent/turn-stopping', payload => {
+    agentCtx.on('agent/turn-stopping', (payload) => {
       usageTracker.finishTask(String(payload.agent.id), payload.turn)
     })
   })
-  ctx.inject(['tools', 'fs', 'attachments'], toolCtx => {
-    toolCtx.tools.register(imagegenTool(toolCtx, credentials, imageTools))
+  ctx.inject(['tools', 'fs', 'attachments'], (toolCtx) => {
+    toolCtx.tools.register(imagegenTool(toolCtx, credentials, imageTools, service.proxy.fetch))
   })
-  ctx.inject(['tools', 'fs', 'attachments', 'agents'], toolCtx => {
+  ctx.inject(['tools', 'fs', 'attachments', 'agents'], (toolCtx) => {
     installReadImageEnhancement(toolCtx, imageTools)
   })
   ctx.effect(() => () => usageTracker.ledger.close(), 'dsh-openai-codex: close usage ledger')

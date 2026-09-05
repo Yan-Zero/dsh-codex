@@ -35,7 +35,7 @@ describe('stable OpenAI Codex provider construction', () => {
       type: 'oauth',
       access: 'stored-access-token',
       refresh: 'stored-refresh-token',
-      expires: Date.now() + 60_000,
+      expires: Date.now() + 3_600_000,
       accountId: 'account-1',
     }
     const store: CredentialStore = {

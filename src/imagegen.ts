@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 import { createModels } from '@earendil-works/pi-ai'
 import type { Models } from '@earendil-works/pi-ai'
+import { openaiCodexProvider } from './oauth-provider.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
@@ -32,7 +33,10 @@ export const OPENAI_CODEX_IMAGE_EDITS_URL = `${OPENAI_CODEX_BASE_URL}/images/edi
 const MAX_REFERENCE_IMAGES = 5
 
 function defaultOutputPath(now = new Date(), id = randomUUID()): string {
-  const timestamp = now.toISOString().replace(/\.\d{3}Z$/u, 'Z').replaceAll(':', '-')
+  const timestamp = now
+    .toISOString()
+    .replace(/\.\d{3}Z$/u, 'Z')
+    .replaceAll(':', '-')
   return `generated-${timestamp}-${id.slice(0, 8)}.png`
 }
 
@@ -75,18 +79,24 @@ function accountIdFromToken(access: string): string {
     if (typeof accountId !== 'string' || accountId.length === 0) throw new Error('missing account id')
     return accountId
   } catch (error: unknown) {
-    throw new Error('OpenAI Codex image credential has no usable account id; run "dsh openai-codex login" again', { cause: error })
+    throw new Error(
+      'OpenAI Codex image credential has no usable account id; run "dsh openai-codex login" again',
+      { cause: error },
+    )
   }
 }
 
 function providerMessage(value: unknown): string | undefined {
   if (!isRecord(value)) return undefined
   const error = value['error']
-  const raw = typeof error === 'string'
-    ? error
-    : isRecord(error) && typeof error['message'] === 'string'
-      ? error['message']
-      : typeof value['message'] === 'string' ? value['message'] : undefined
+  const raw =
+    typeof error === 'string'
+      ? error
+      : isRecord(error) && typeof error['message'] === 'string'
+        ? error['message']
+        : typeof value['message'] === 'string'
+          ? value['message']
+          : undefined
   return raw?.replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/gu, '[REDACTED]').slice(0, 1000)
 }
 
@@ -97,10 +107,12 @@ function throwIfAborted(signal: AbortSignal): void {
 function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
   if (signal.aborted) return Promise.reject(signal.reason)
   return new Promise<T>((resolve, reject) => {
-    const onAbort = (): void => { reject(signal.reason) }
+    const onAbort = (): void => {
+      reject(signal.reason)
+    }
     signal.addEventListener('abort', onAbort, { once: true })
     void operation.then(
-      value => {
+      (value) => {
         signal.removeEventListener('abort', onAbort)
         resolve(value)
       },
@@ -116,30 +128,30 @@ function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
 export class OpenAICodexImageClient {
   private readonly models: Models
 
-  /** @param credentials - shared refreshable OAuth store. */
-  constructor(credentials: OpenAICodexCredentialStore) {
+  /**
+   * @param credentials - shared refreshable OAuth store.
+   * @param requestFetch - request transport used after credentials resolve.
+   */
+  constructor(
+    credentials: OpenAICodexCredentialStore,
+    private readonly requestFetch: typeof globalThis.fetch = globalThis.fetch,
+  ) {
     const models = createModels({ credentials })
-    models.setProvider(createOpenAICodexProvider())
+    models.setProvider(openaiCodexProvider(requestFetch))
     this.models = models
   }
 
   /** Send one generation or edit request and return the first PNG payload. */
-  async generate(
-    prompt: string,
-    images: readonly string[],
-    signal: AbortSignal,
-  ): Promise<Uint8Array> {
+  async generate(prompt: string, images: readonly string[], signal: AbortSignal): Promise<Uint8Array> {
     throwIfAborted(signal)
     const auth = await abortable(this.models.getAuth(OPENAI_CODEX_PROVIDER), signal)
     const access = auth?.auth.apiKey
     if (access === undefined || access.length === 0) {
       throw new Error('OpenAI Codex image generation is signed out; run "dsh openai-codex login"')
     }
-    const endpoint = images.length === 0
-      ? OPENAI_CODEX_IMAGE_GENERATIONS_URL
-      : OPENAI_CODEX_IMAGE_EDITS_URL
+    const endpoint = images.length === 0 ? OPENAI_CODEX_IMAGE_GENERATIONS_URL : OPENAI_CODEX_IMAGE_EDITS_URL
     const body = {
-      ...images.length === 0 ? {} : { images: images.map(image_url => ({ image_url })) },
+      ...(images.length === 0 ? {} : { images: images.map((image_url) => ({ image_url })) }),
       prompt,
       background: 'auto',
       model: OPENAI_CODEX_IMAGE_MODEL,
@@ -148,7 +160,7 @@ export class OpenAICodexImageClient {
     }
     let response: Response
     try {
-      response = await fetch(endpoint, {
+      response = await this.requestFetch(endpoint, {
         method: 'POST',
         redirect: 'error',
         headers: {
@@ -169,16 +181,21 @@ export class OpenAICodexImageClient {
     try {
       payload = await response.json()
     } catch (error: unknown) {
-      throw new Error(`OpenAI Codex returned an unprocessable image response (HTTP ${response.status})`, { cause: error })
+      throw new Error(`OpenAI Codex returned an unprocessable image response (HTTP ${response.status})`, {
+        cause: error,
+      })
     }
     if (!response.ok) {
       const detail = providerMessage(payload)
-      const message = detail === undefined
-        ? `OpenAI Codex image request failed (HTTP ${response.status})`
-        : `OpenAI Codex image request failed (HTTP ${response.status}): ${detail}`
-      throw new Error(response.status === 401 || response.status === 403
-        ? `${message}; run "dsh openai-codex login" again`
-        : message)
+      const message =
+        detail === undefined
+          ? `OpenAI Codex image request failed (HTTP ${response.status})`
+          : `OpenAI Codex image request failed (HTTP ${response.status}): ${detail}`
+      throw new Error(
+        response.status === 401 || response.status === 403
+          ? `${message}; run "dsh openai-codex login" again`
+          : message,
+      )
     }
     if (!isRecord(payload) || !Array.isArray(payload['data'])) {
       throw new Error('OpenAI Codex returned an image response without data')
@@ -202,14 +219,17 @@ function attachmentRef(value: ImagegenValue['image']): ImageAttachmentRef {
     bytes: value.bytes,
     width: value.width,
     height: value.height,
-    ...value.name === undefined ? {} : { name: value.name },
+    ...(value.name === undefined ? {} : { name: value.name }),
   }
 }
 
 function contentOf(value: ImagegenValue): ContentBlock[] {
-  const file = value.file === undefined
-    ? value.writeError === undefined ? '' : `\n<output_error>${value.writeError}</output_error>`
-    : `\n<output_path operation="${value.file.operation}">${value.file.path}</output_path>`
+  const file =
+    value.file === undefined
+      ? value.writeError === undefined
+        ? ''
+        : `\n<output_error>${value.writeError}</output_error>`
+      : `\n<output_path operation="${value.file.operation}">${value.file.path}</output_path>`
   return [
     {
       type: 'text',
@@ -234,24 +254,34 @@ function recentImageRefs(messages: readonly Message[], count: number): ImageAtta
 
 async function conversationImages(ctx: Context, exec: ToolExecution, count: number): Promise<string[]> {
   const session = exec.agent?.session
-  if (session === undefined) throw new Error('conversation image references are unavailable outside an agent session')
+  if (session === undefined)
+    throw new Error('conversation image references are unavailable outside an agent session')
   const refs = recentImageRefs(session.deriveMessages(), count)
   if (refs.length !== count) {
     throw new Error(`requested the last ${count} conversation images, but only ${refs.length} were available`)
   }
-  return Promise.all(refs.map(async ref => {
-    const stored = await ctx.attachments.readImage(ref, exec.signal)
-    return `data:${stored.ref.mediaType};base64,${Buffer.from(stored.data).toString('base64')}`
-  }))
+  return Promise.all(
+    refs.map(async (ref) => {
+      const stored = await ctx.attachments.readImage(ref, exec.signal)
+      return `data:${stored.ref.mediaType};base64,${Buffer.from(stored.data).toString('base64')}`
+    }),
+  )
 }
 
-async function workspaceImages(ctx: Context, exec: ToolExecution, paths: readonly string[]): Promise<string[]> {
+async function workspaceImages(
+  ctx: Context,
+  exec: ToolExecution,
+  paths: readonly string[],
+): Promise<string[]> {
   const cwd = exec.agent?.session.header.cwd
-  const maxBytes = Math.min(ctx.attachments.imageLimits.maxImageBytes, ctx.attachments.imageLimits.maxMessageImageBytes)
+  const maxBytes = Math.min(
+    ctx.attachments.imageLimits.maxImageBytes,
+    ctx.attachments.imageLimits.maxMessageImageBytes,
+  )
   const images: string[] = []
   for (const path of paths) {
     if (path.trim().length === 0) throw new Error('referenced_image_paths must not contain an empty path')
-    const target = await ctx.fs.resolve(path, { ...cwd === undefined ? {} : { cwd }, signal: exec.signal })
+    const target = await ctx.fs.resolve(path, { ...(cwd === undefined ? {} : { cwd }), signal: exec.signal })
     const info = await ctx.fs.stat(target, exec.signal)
     if (info === undefined) throw new Error(`referenced image does not exist: ${path}`)
     if (info.type !== 'file') throw new Error(`referenced image is not a regular file: ${path}`)
@@ -265,7 +295,9 @@ async function workspaceImages(ctx: Context, exec: ToolExecution, paths: readonl
   return images
 }
 
-function parseArgs(args: ImagegenArgs): Required<Pick<ImagegenArgs, 'prompt'>> & Omit<ImagegenArgs, 'prompt'> {
+function parseArgs(
+  args: ImagegenArgs,
+): Required<Pick<ImagegenArgs, 'prompt'>> & Omit<ImagegenArgs, 'prompt'> {
   const prompt = args.prompt.trim()
   if (prompt.length === 0) throw new Error('imagegen prompt must not be empty')
   const paths = args.referenced_image_paths ?? []
@@ -284,9 +316,9 @@ function parseArgs(args: ImagegenArgs): Required<Pick<ImagegenArgs, 'prompt'>> &
   }
   return {
     prompt,
-    ...paths.length === 0 ? {} : { referenced_image_paths: paths },
-    ...count === undefined ? {} : { num_last_images_to_include: count },
-    ...args.output_path === undefined ? {} : { output_path: args.output_path },
+    ...(paths.length === 0 ? {} : { referenced_image_paths: paths }),
+    ...(count === undefined ? {} : { num_last_images_to_include: count }),
+    ...(args.output_path === undefined ? {} : { output_path: args.output_path }),
   }
 }
 
@@ -295,16 +327,34 @@ export function imagegenTool(
   ctx: Context,
   credentials: OpenAICodexCredentialStore,
   policy: ImageToolPolicy,
+  requestFetch: typeof globalThis.fetch = globalThis.fetch,
 ): ToolDefinition {
-  const client = new OpenAICodexImageClient(credentials)
+  const client = new OpenAICodexImageClient(credentials, requestFetch)
   return defineTool({
     name: IMAGEGEN_TOOL_NAME,
-    description: 'Generate or edit an image with gpt-image-2. Omit both reference fields for a new image. Use referenced_image_paths for workspace files, or num_last_images_to_include for attached, viewed, or previously generated conversation images. Never provide both. Multiple images keep chronological/path-array order; identify them as Image 1, Image 2, and so on in the prompt. The generated PNG is always saved in the active local or Remote SSH workspace; output_path chooses its location, otherwise a unique generated-<timestamp>-<id>.png name is used.',
+    description:
+      'Generate or edit an image with gpt-image-2. Omit both reference fields for a new image. Use referenced_image_paths for workspace files, or num_last_images_to_include for attached, viewed, or previously generated conversation images. Never provide both. Multiple images keep chronological/path-array order; identify them as Image 1, Image 2, and so on in the prompt. The generated PNG is always saved in the active local or Remote SSH workspace; output_path chooses its location, otherwise a unique generated-<timestamp>-<id>.png name is used.',
     parameters: {
-      prompt: { type: 'string', required: true, description: 'Complete generation or edit instruction. For multiple references, name each input by its Image N order.' },
-      referenced_image_paths: { type: 'array', items: { type: 'string' }, description: 'Up to five local or active-workspace image paths, in Image 1..N order.' },
-      num_last_images_to_include: { type: 'integer', description: 'Use the most recent 1–5 conversation images, preserving chronological order.' },
-      output_path: { type: 'string', description: 'Optional active-workspace path for the generated PNG. Omit it to save under a unique generated-<timestamp>-<id>.png name. Existing files remain subject to filesystem write-intent policy.' },
+      prompt: {
+        type: 'string',
+        required: true,
+        description:
+          'Complete generation or edit instruction. For multiple references, name each input by its Image N order.',
+      },
+      referenced_image_paths: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Up to five local or active-workspace image paths, in Image 1..N order.',
+      },
+      num_last_images_to_include: {
+        type: 'integer',
+        description: 'Use the most recent 1–5 conversation images, preserving chronological order.',
+      },
+      output_path: {
+        type: 'string',
+        description:
+          'Optional active-workspace path for the generated PNG. Omit it to save under a unique generated-<timestamp>-<id>.png name. Existing files remain subject to filesystem write-intent policy.',
+      },
     },
     output: {
       schema: {
@@ -338,16 +388,17 @@ export function imagegenTool(
       },
       render: (_args, value) => contentOf(value),
     },
-    isConcurrencySafe: args => args.output_path === undefined,
+    isConcurrencySafe: (args) => args.output_path === undefined,
     async execute(rawArgs, exec) {
       const args = parseArgs(rawArgs)
       policy.assertAllowed(exec, 'imagegen')
       await assertImageCapable(ctx, exec, 'generate an image')
-      const images = args.referenced_image_paths !== undefined
-        ? await workspaceImages(ctx, exec, args.referenced_image_paths)
-        : args.num_last_images_to_include !== undefined
-          ? await conversationImages(ctx, exec, args.num_last_images_to_include)
-          : []
+      const images =
+        args.referenced_image_paths !== undefined
+          ? await workspaceImages(ctx, exec, args.referenced_image_paths)
+          : args.num_last_images_to_include !== undefined
+            ? await conversationImages(ctx, exec, args.num_last_images_to_include)
+            : []
       const data = await client.generate(args.prompt, images, exec.signal)
       const mediaType = imageMediaType(data)
       if (mediaType !== 'image/png') throw new Error('OpenAI Codex image response was not a PNG')
@@ -360,13 +411,16 @@ export function imagegenTool(
           bytes: ref.bytes,
           width: ref.width,
           height: ref.height,
-          ...ref.name === undefined ? {} : { name: ref.name },
+          ...(ref.name === undefined ? {} : { name: ref.name }),
         },
       }
       const outputPath = args.output_path ?? defaultOutputPath()
       try {
         const cwd = exec.agent?.session.header.cwd
-        const target = await ctx.fs.resolve(outputPath, { ...cwd === undefined ? {} : { cwd }, signal: exec.signal })
+        const target = await ctx.fs.resolve(outputPath, {
+          ...(cwd === undefined ? {} : { cwd }),
+          signal: exec.signal,
+        })
         const intent = await ctx.waterfall('fs/write-intent', target, exec, () => undefined)
         const outcome = await writeWorkspaceBytes(ctx, exec, target, data, intent)
         ctx.emit('fs/observed', target, { kind: 'present', version: outcome.version }, exec)
@@ -377,18 +431,20 @@ export function imagegenTool(
         value.writeError = `generated image was not written to ${JSON.stringify(outputPath)}: ${detail}`
       }
       if (exec.parent !== undefined) {
-        exec.deferContext(createUserMessage({
-          content: contentOf(value),
-          source: { kind: 'plugin', plugin: 'dsh-openai-codex' },
-        }))
+        exec.deferContext(
+          createUserMessage({
+            content: contentOf(value),
+            source: { kind: 'plugin', plugin: 'dsh-openai-codex' },
+          }),
+        )
       }
       return value
     },
-    presentCall: args => ({
+    presentCall: (args) => ({
       card: 'generic',
       title: args.output_path === undefined ? 'Generate image' : `Generate image ${args.output_path}`,
       kind: args.output_path === undefined ? 'execute' : 'edit',
-      ...args.output_path === undefined ? {} : { locations: [{ path: args.output_path }] },
+      ...(args.output_path === undefined ? {} : { locations: [{ path: args.output_path }] }),
     }),
     presentResult: (args, result) => ({
       card: 'generic',

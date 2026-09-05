@@ -176,6 +176,7 @@ export function installReadImageEnhancement(
 ): void {
   const installed = new Map<Agent, ScopedEnhancement>()
   let syncing = false
+  let active = true
 
   const remove = (agent: Agent): void => {
     const current = installed.get(agent)
@@ -184,25 +185,28 @@ export function installReadImageEnhancement(
     current.dispose()
   }
 
-  const syncAgent = (agent: Agent): void => {
+  const syncAgent = (agent: Agent, refresh: boolean): void => {
     const current = installed.get(agent)
-    const original = ctx.tools.get(READ_IMAGE_TOOL_NAME)
-    if (!policy.snapshot().modifyReadImage || original === undefined) {
+    if (!policy.snapshot().modifyReadImage) {
       remove(agent)
       return
     }
-    if (current?.original === original) return
+    if (current !== undefined && !refresh) return
     if (current !== undefined) remove(agent)
-    if (ctx.tools.get(READ_IMAGE_TOOL_NAME, agent) !== original) return
+    // Resolve the definition this exact agent inherits. Newer DSH presets may
+    // contribute filesystem tools from an ancestor scope instead of the global
+    // layer; registering into agent.ctx then shadows either form uniformly.
+    const original = ctx.tools.get(READ_IMAGE_TOOL_NAME, agent)
+    if (original === undefined) return
     const dispose = agent.ctx.tools.register(enhancedReadImageTool(ctx, original, publicHttpRuntime))
     installed.set(agent, { original, dispose })
   }
 
-  const syncAll = (): void => {
-    if (syncing) return
+  const syncAll = (refresh = false): void => {
+    if (!active || syncing) return
     syncing = true
     try {
-      for (const agent of ctx.agents.list()) syncAgent(agent)
+      for (const agent of ctx.agents.list()) syncAgent(agent, refresh)
       for (const agent of [...installed.keys()]) {
         if (ctx.agents.get(agent.id) !== agent) remove(agent)
       }
@@ -211,12 +215,15 @@ export function installReadImageEnhancement(
     }
   }
 
-  ctx.on('agent/created', ({ agent }) => { syncAgent(agent) })
+  // Reconcile through syncAll so the tools/change emitted by a scoped
+  // registration cannot re-enter before its installed record is committed.
+  ctx.on('agent/created', () => { syncAll() })
   ctx.on('agent/disposed', ({ agent }) => { installed.delete(agent) })
-  ctx.on('tools/change', syncAll)
-  const stopPolicy = policy.watchImagePreferences(syncAll)
+  ctx.on('tools/change', () => { syncAll(true) })
+  const stopPolicy = policy.watchImagePreferences(() => { syncAll() })
   syncAll()
   ctx.effect(() => () => {
+    active = false
     stopPolicy()
     for (const agent of [...installed.keys()]) remove(agent)
   }, 'dsh-openai-codex: enhanced read_image')

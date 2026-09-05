@@ -47,10 +47,28 @@ describe('ImageToolPolicy', () => {
       useWebSocketContextReuse: false,
       useNativeCompaction: false,
     })
-    expect(policy.usageUiSnapshot()).toEqual({ showUsageHud: true, pinUsageHud: false })
+    expect(policy.contextWindowSnapshot()).toEqual({
+      contextWindow: null,
+      overrideSparkContextWindow: false,
+    })
+    expect(policy.fastModeSnapshot()).toEqual({ fastModeDefault: false })
+    expect(policy.proxySnapshot()).toEqual({
+      proxyMode: 'off',
+      proxyUrl: '',
+    })
 
     await policy.update({ shareImagegenWithOtherModels: false })
     await policy.updateResponseApi({ reasoningSummary: 'detailed', useNativeCompaction: true })
+    await policy.updateContextWindow({
+      contextWindow: 512_000,
+      overrideSparkContextWindow: true,
+    })
+    await policy.updateFastMode({ fastModeDefault: true })
+    await policy.updateProxy({
+      proxyMode: 'scoped',
+      proxyUrl: 'http://127.0.0.1:7890',
+    })
+
     await policy.updateUsageUi({ showUsageHud: false, pinUsageHud: true })
 
     expect(policy.snapshot()).toEqual({
@@ -63,6 +81,15 @@ describe('ImageToolPolicy', () => {
       useNativeCompaction: true,
     })
     expect(policy.usageUiSnapshot()).toEqual({ showUsageHud: false, pinUsageHud: true })
+    expect(policy.contextWindowSnapshot()).toEqual({
+      contextWindow: 512_000,
+      overrideSparkContextWindow: true,
+    })
+    expect(policy.fastModeSnapshot()).toEqual({ fastModeDefault: true })
+    expect(policy.proxySnapshot()).toEqual({
+      proxyMode: 'scoped',
+      proxyUrl: 'http://127.0.0.1:7890',
+    })
   })
 
   it('notifies the read_image enhancer when its live setting changes', async () => {
@@ -75,7 +102,9 @@ describe('ImageToolPolicy', () => {
     })
     policy.attach(ctx)
     let changes = 0
-    policy.watchImagePreferences(() => { changes++ })
+    policy.watchImagePreferences(() => {
+      changes++
+    })
 
     await policy.update({ modifyReadImage: false })
 
@@ -95,15 +124,22 @@ describe('ImageToolPolicy', () => {
 
   it('keeps Codex imagegen access while applying its toggle to another provider', () => {
     const policy = new ImageToolPolicy({ shareImagegenWithOtherModels: false })
-    const execution = (provider: string) => ({
-      agent: {
-        options: {},
-        session: { requestHeader: () => ({ config: { provider, model: 'vision-model' } }) },
-      },
-    }) as never
+    const execution = (provider: string) =>
+      ({
+        agent: {
+          options: {},
+          session: {
+            requestHeader: () => ({
+              config: { provider, model: 'vision-model' },
+            }),
+          },
+        },
+      }) as never
 
     expect(() => policy.assertAllowed(execution('openai-codex'), 'imagegen')).not.toThrow()
-    expect(() => policy.assertAllowed(execution('another-provider'), 'imagegen')).toThrow('disabled for models outside')
+    expect(() => policy.assertAllowed(execution('another-provider'), 'imagegen')).toThrow(
+      'disabled for models outside',
+    )
   })
 
   it('persists a provider-ordered model discovery subset without affecting the full catalog', async () => {
@@ -111,23 +147,39 @@ describe('ImageToolPolicy', () => {
     context = ctx
     await ctx.plugin(MemorySettings)
     const policy = new ImageToolPolicy({ models: ['gpt-5.6-terra', 'gpt-5.6-luna'] }, [
-      { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna' },
-      { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol' },
-      { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra' },
+      { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', contextWindow: 272_000 },
+      { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', contextWindow: 272_000 },
+      { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', contextWindow: 272_000 },
     ])
     policy.attach(ctx)
 
     expect(policy.modelCatalogSnapshot()).toEqual({
       availableModels: [
-        { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna' },
-        { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol' },
-        { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra' },
+        { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', contextWindow: 272_000 },
+        { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', contextWindow: 272_000 },
+        { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', contextWindow: 272_000 },
       ],
       models: ['gpt-5.6-luna', 'gpt-5.6-terra'],
     })
 
     await policy.updateModelCatalog({ models: ['gpt-5.6-sol'] })
     expect(policy.modelCatalogSnapshot().models).toEqual(['gpt-5.6-sol'])
+  })
+
+  it('preserves selected model ids while they are temporarily unavailable', async () => {
+    const ctx = new Context()
+    context = ctx
+    await ctx.plugin(MemorySettings)
+    let catalog = [{ id: 'gpt-current', name: 'GPT Current', contextWindow: 272_000 }]
+    const policy = new ImageToolPolicy({ models: ['gpt-current', 'gpt-future'] }, () => catalog)
+    policy.attach(ctx)
+
+    expect(policy.modelCatalogSnapshot().models).toEqual(['gpt-current'])
+    await policy.updateModelCatalog({ models: [] })
+    expect(policy.modelCatalogSnapshot().models).toEqual([])
+
+    catalog = [...catalog, { id: 'gpt-future', name: 'GPT Future', contextWindow: 272_000 }]
+    expect(policy.modelCatalogSnapshot().models).toEqual(['gpt-future'])
   })
 
   it('defaults an older partial settings document to the complete model catalog', async () => {
@@ -139,13 +191,35 @@ describe('ImageToolPolicy', () => {
       'openai-codex': { useNativeCompaction: true },
     })
     const policy = new ImageToolPolicy({}, [
-      { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna' },
-      { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol' },
+      { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', contextWindow: 272_000 },
+      { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', contextWindow: 272_000 },
     ])
 
     policy.attach(ctx)
 
     expect(policy.modelCatalogSnapshot().models).toEqual(['gpt-5.6-luna', 'gpt-5.6-sol'])
     expect(policy.responseApiSnapshot().useNativeCompaction).toBe(true)
+    expect(policy.contextWindowSnapshot()).toEqual({
+      contextWindow: null,
+      overrideSparkContextWindow: false,
+    })
+    expect(policy.fastModeSnapshot()).toEqual({ fastModeDefault: false })
+    expect(policy.proxySnapshot()).toEqual({
+      proxyMode: 'off',
+      proxyUrl: '',
+    })
+  })
+
+  it('validates proxy URLs before persisting them', async () => {
+    const ctx = new Context()
+    context = ctx
+    await ctx.plugin(MemorySettings)
+    const policy = new ImageToolPolicy()
+    policy.attach(ctx)
+
+    await expect(policy.updateProxy({ proxyUrl: 'socks5://127.0.0.1:1080' })).rejects.toThrow(
+      'http:// or https://',
+    )
+    expect(policy.proxySnapshot()).toEqual({ proxyMode: 'off', proxyUrl: '' })
   })
 })

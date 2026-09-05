@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -26,7 +26,7 @@ function credential(access = 'access-secret'): OAuthCredential {
 }
 
 async function store(): Promise<OpenAICodexCredentialStore> {
-  root = await mkdtemp(join(tmpdir(), 'dsh-openai-codex-'))
+  root = await mkdtemp(join(await realpath(tmpdir()), 'dsh-openai-codex-'))
   return new OpenAICodexCredentialStore(join(root, 'auth.json'))
 }
 
@@ -94,5 +94,53 @@ describe('OpenAICodexCredentialStore', () => {
     await expect(auth.modify('other', () => Promise.resolve(credential())))
       .rejects.toThrow(/does not own provider/)
     expect(await auth.read('other')).toBeUndefined()
+  })
+
+  it('updates a Pi document atomically without lock files or losing concurrent provider changes', async () => {
+    const auth = await store()
+    const original = credential()
+    await writeFile(auth.filename, JSON.stringify({ 'openai-codex': original, other: { key: 'old' } }), { mode: 0o600 })
+    await auth.modify(OPENAI_CODEX_PROVIDER, async () => {
+      await writeFile(auth.filename, JSON.stringify({ 'openai-codex': original, other: { key: 'new' } }), { mode: 0o600 })
+      return credential('new-access')
+    })
+    expect(JSON.parse(await readFile(auth.filename, 'utf8'))).toMatchObject({ 'openai-codex': { access: 'new-access' }, other: { key: 'new' } })
+    await expect(stat(`${auth.filename}.lock`)).rejects.toMatchObject({ code: 'ENOENT' })
+    await auth.delete(OPENAI_CODEX_PROVIDER)
+    expect(await auth.read(OPENAI_CODEX_PROVIDER)).toBeUndefined()
+    expect(JSON.parse(await readFile(auth.filename, 'utf8')).other).toEqual({ key: 'new' })
+  })
+
+  it('propagates callback failures and rejects a detected competing credential update', async () => {
+    const auth = await store()
+    await auth.modify(OPENAI_CODEX_PROVIDER, async () => credential())
+    const failure = new Error('fixture failure')
+    await expect(auth.modify(OPENAI_CODEX_PROVIDER, async () => { throw failure })).rejects.toBe(failure)
+    await expect(auth.modify(OPENAI_CODEX_PROVIDER, async () => {
+      await writeFile(auth.filename, JSON.stringify({ version: 1, credential: credential('external') }), { mode: 0o600 })
+      return credential('local')
+    })).rejects.toThrow('changed during update')
+    expect(await auth.read(OPENAI_CODEX_PROVIDER)).toMatchObject({ access: 'external' })
+  })
+
+  it('rejects unknown existing files before invoking refresh or writing', async () => {
+    const auth = await store()
+    const original = JSON.stringify({ unrelated: 'keep' })
+    await writeFile(auth.filename, original, { mode: 0o600 })
+    let called = false
+    await expect(auth.modify(OPENAI_CODEX_PROVIDER, async () => {
+      called = true
+      return credential()
+    })).rejects.toThrow('unsupported or ambiguous')
+    expect(called).toBe(false)
+    expect(await readFile(auth.filename, 'utf8')).toBe(original)
+    const unsupported = JSON.stringify({ 'openai-codex': { ...credential(), future_token: 'secret' } })
+    await writeFile(auth.filename, unsupported, { mode: 0o600 })
+    await expect(auth.modify(OPENAI_CODEX_PROVIDER, async () => {
+      called = true
+      return credential()
+    })).rejects.toThrow('unsupported credential field')
+    expect(called).toBe(false)
+    expect(await readFile(auth.filename, 'utf8')).toBe(unsupported)
   })
 })

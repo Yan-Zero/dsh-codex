@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { CSSProperties } from 'react'
-import type { UseProjection } from '@deepseek-ai/dsh-client-runtime/client'
+import type { UseProjection } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionUsage, TaskUsage, UsageBreakdownRow, UsageTimePoint, UsageTotals } from '../usage-ledger.ts'
 import { isUsageSelection } from './usage-ui-data.ts'
 import type { CodexHudModelDirectory } from './usage-ui-data.ts'

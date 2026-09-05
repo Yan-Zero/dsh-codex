@@ -54,7 +54,7 @@ const HELP = [
   '  /codex usage',
   '  /codex hud <on|off|toggle|pin|unpin|status>',
   '  /codex config',
-  '  /codex set <read-image|imagegen-other-models|websocket-context|native-compaction> <on|off>',
+  '  /codex set <read-image|imagegen-other-models|websocket-context|native-compaction|spark-context-window> <on|off>',
   '  /codex set reasoning-summary <auto|concise|detailed>',
 ].join('\n')
 
@@ -73,11 +73,32 @@ const CODEX_ACTIONS: readonly TuiSubcommandNode[] = [
 ]
 
 const CODEX_SETTINGS: readonly TuiSubcommandNode[] = [
-  translatedNode('read-image', 'Enhance read_image with HTTP(S) input', '为 read_image 增加 HTTP(S) 图片输入'),
-  translatedNode('imagegen-other-models', 'Allow other vision models to call imagegen', '允许其他视觉模型调用 imagegen'),
-  translatedNode('reasoning-summary', 'Choose the provider-authored reasoning summary detail', '选择提供方推理摘要的详细程度'),
-  translatedNode('websocket-context', 'Reuse Codex WebSocket response context', '复用 Codex WebSocket 响应上下文'),
+  translatedNode(
+    'read-image',
+    'Enhance read_image with HTTP(S) input',
+    '为 read_image 增加 HTTP(S) 图片输入',
+  ),
+  translatedNode(
+    'imagegen-other-models',
+    'Allow other vision models to call imagegen',
+    '允许其他视觉模型调用 imagegen',
+  ),
+  translatedNode(
+    'reasoning-summary',
+    'Choose the provider-authored reasoning summary detail',
+    '选择提供方推理摘要的详细程度',
+  ),
+  translatedNode(
+    'websocket-context',
+    'Reuse Codex WebSocket response context',
+    '复用 Codex WebSocket 响应上下文',
+  ),
   translatedNode('native-compaction', 'Use Codex V2 Responses compaction', '使用 Codex V2 Responses 压缩'),
+  translatedNode(
+    'spark-context-window',
+    'Apply the context-window override to GPT-5.3 Codex Spark',
+    '将上下文窗口覆盖值应用于 GPT-5.3 Codex Spark',
+  ),
 ]
 
 const BOOLEAN_VALUES: readonly TuiSubcommandNode[] = [
@@ -94,12 +115,18 @@ const REASONING_SUMMARY_VALUES: readonly TuiSubcommandNode[] = [
 function codexSubcommands(path: readonly string[]): readonly TuiSubcommandNode[] {
   if (path.length === 1 && path[0] === 'codex') return CODEX_ACTIONS
   if (path.length === 2 && path[0] === 'codex' && path[1] === 'hud') {
-    return [...BOOLEAN_VALUES, translatedNode('toggle', 'Toggle the HUD', '切换用量条'), translatedNode('pin', 'Pin the quota badge', '固定额度标记'), translatedNode('unpin', 'Use the borderless quota readout', '使用无边框额度读数'), translatedNode('status', 'Show HUD state', '查看用量条状态')]
+    return [
+      ...BOOLEAN_VALUES,
+      translatedNode('toggle', 'Toggle the HUD', '切换用量条'),
+      translatedNode('pin', 'Pin the quota badge', '固定额度标记'),
+      translatedNode('unpin', 'Use the borderless quota readout', '使用无边框额度读数'),
+      translatedNode('status', 'Show HUD state', '查看用量条状态'),
+    ]
   }
   if (path.length === 2 && path[0] === 'codex' && path[1] === 'set') return CODEX_SETTINGS
   if (path.length === 3 && path[0] === 'codex' && path[1] === 'set') {
     if (path[2] === 'reasoning-summary') return REASONING_SUMMARY_VALUES
-    if (CODEX_SETTINGS.some(setting => setting.name === path[2])) return BOOLEAN_VALUES
+    if (CODEX_SETTINGS.some((setting) => setting.name === path[2])) return BOOLEAN_VALUES
   }
   return []
 }
@@ -124,22 +151,37 @@ function waitForPromptAbort(prompt: AuthPrompt): Promise<string> {
   if (signal === undefined) return new Promise<string>(() => {})
   if (signal.aborted) return Promise.reject(signal.reason)
   return new Promise<string>((_resolve, reject) => {
-    signal.addEventListener('abort', () => { reject(signal.reason) }, { once: true })
+    signal.addEventListener(
+      'abort',
+      () => {
+        reject(signal.reason)
+      },
+      { once: true },
+    )
   })
 }
 
 /** Open one provider-issued HTTPS challenge without passing it through shell parsing. */
 function openBrowser(rawUrl: string): boolean {
   const url = new URL(rawUrl)
-  if (url.protocol !== 'https:') throw new Error(`refusing to open non-HTTPS authorization URL from ${url.host}`)
-  if (process.platform === 'linux' && process.env.DISPLAY === undefined && process.env.WAYLAND_DISPLAY === undefined) {
+  if (url.protocol !== 'https:')
+    throw new Error(`refusing to open non-HTTPS authorization URL from ${url.host}`)
+  if (
+    process.platform === 'linux' &&
+    process.env.DISPLAY === undefined &&
+    process.env.WAYLAND_DISPLAY === undefined
+  ) {
     return false
   }
-  const command = process.platform === 'win32'
-    ? { file: 'rundll32.exe', args: ['url.dll,FileProtocolHandler', url.href] }
-    : process.platform === 'darwin'
-      ? { file: 'open', args: [url.href] }
-      : { file: 'xdg-open', args: [url.href] }
+  const command =
+    process.platform === 'win32'
+      ? {
+          file: 'rundll32.exe',
+          args: ['url.dll,FileProtocolHandler', url.href],
+        }
+      : process.platform === 'darwin'
+        ? { file: 'open', args: [url.href] }
+        : { file: 'xdg-open', args: [url.href] }
   const child = spawn(command.file, command.args, {
     detached: true,
     stdio: 'ignore',
@@ -150,10 +192,7 @@ function openBrowser(rawUrl: string): boolean {
   return true
 }
 
-type LoginState =
-  | { status: 'idle' }
-  | { status: 'signing-in' }
-  | { status: 'error'; message: string }
+type LoginState = { status: 'idle' } | { status: 'signing-in' } | { status: 'error'; message: string }
 
 /** Own the browser challenge while the command returns control to the TUI immediately. */
 class TuiLoginController {
@@ -171,7 +210,8 @@ class TuiLoginController {
     if (stored.authenticated) return 'OpenAI Codex is already signed in.'
     if (this.operation === undefined) this.begin()
     const challenge = this.challenge
-    if (challenge === undefined) throw new Error('OpenAI Codex sign-in did not create an authorization challenge')
+    if (challenge === undefined)
+      throw new Error('OpenAI Codex sign-in did not create an authorization challenge')
     return await challenge
   }
 
@@ -199,34 +239,42 @@ class TuiLoginController {
       this.resolveChallenge = resolve
       this.rejectChallenge = reject
     })
-    this.operation = this.service.login({
-      signal: cancellation.signal,
-      prompt: prompt => prompt.type === 'select'
-        ? Promise.resolve('browser')
-        : waitForPromptAbort(prompt),
-      notify: event => { this.onEvent(event) },
-    }).then(
-      () => { this.state = { status: 'idle' } },
-      (error: unknown) => {
-        const message = safeMessage(error)
-        this.state = { status: 'error', message }
-        this.rejectChallenge?.(error)
-      },
-    ).finally(() => {
-      this.operation = undefined
-      this.cancellation = undefined
-      this.resolveChallenge = undefined
-      this.rejectChallenge = undefined
-    })
+    this.operation = this.service
+      .login({
+        signal: cancellation.signal,
+        prompt: (prompt) =>
+          prompt.type === 'select' ? Promise.resolve('browser') : waitForPromptAbort(prompt),
+        notify: (event) => {
+          this.onEvent(event)
+        },
+      })
+      .then(
+        () => {
+          this.state = { status: 'idle' }
+        },
+        (error: unknown) => {
+          const message = safeMessage(error)
+          this.state = { status: 'error', message }
+          this.rejectChallenge?.(error)
+        },
+      )
+      .finally(() => {
+        this.operation = undefined
+        this.cancellation = undefined
+        this.resolveChallenge = undefined
+        this.rejectChallenge = undefined
+      })
   }
 
   private onEvent(event: AuthEvent): void {
     if (event.type !== 'auth_url') return
     try {
       const opened = openBrowser(event.url)
-      this.resolveChallenge?.(opened
-        ? 'Opened the ChatGPT authorization page. Use /codex status after approval.'
-        : `Open this ChatGPT authorization page: ${event.url}\nUse /codex status after approval.`)
+      this.resolveChallenge?.(
+        opened
+          ? 'Opened the ChatGPT authorization page. Use /codex status after approval.'
+          : `Open this ChatGPT authorization page: ${event.url}\nUse /codex status after approval.`,
+      )
     } catch (error: unknown) {
       this.cancellation?.abort(error)
       this.rejectChallenge?.(error)
@@ -251,9 +299,34 @@ function formatUsage(usage: OpenAICodexUsage): string {
   return lines.length === 0 ? 'OpenAI Codex usage is currently unavailable.' : lines.join('\n')
 }
 
+function formatTokenCount(tokens: number): string {
+  return tokens % 1_000 === 0 ? `${tokens / 1_000}K tokens` : `${tokens} tokens`
+}
+
+function formatProxyUrl(proxyUrl: string): string {
+  if (proxyUrl.length === 0) return 'environment'
+  try {
+    const parsed = new URL(proxyUrl)
+    return `${parsed.protocol}//${parsed.host}`
+  } catch {
+    return 'invalid'
+  }
+}
+
 function formatConfig(service: OpenAICodexService): string {
   const image = service.imagePreferences()
   const responses = service.responsePreferences()
+  const contextWindow = service.contextWindowPreferences()
+  const catalog = service.modelCatalogSettings()
+  const proxy = service.proxyPreferences()
+  const enabledModels = new Set(catalog.models)
+  const models = catalog.availableModels.flatMap((model) => [
+    '',
+    `model: ${model.name}`,
+    `  id: ${model.id}`,
+    `  default-window: ${formatTokenCount(model.contextWindow)}`,
+    `  enabled: ${enabledModels.has(model.id) ? 'on' : 'off'}`,
+  ])
   return [
     `read-image: ${image.modifyReadImage ? 'on' : 'off'}`,
     `imagegen-other-models: ${image.shareImagegenWithOtherModels ? 'on' : 'off'}`,
@@ -261,6 +334,11 @@ function formatConfig(service: OpenAICodexService): string {
     `websocket-context: ${responses.useWebSocketContextReuse ? 'on' : 'off'}`,
     `native-compaction: ${responses.useNativeCompaction ? 'on' : 'off'}`,
     `usage-hud: ${service.usageUiPreferences().showUsageHud ? 'on' : 'off'} (${service.usageUiPreferences().pinUsageHud ? 'pinned' : 'compact'})`,
+    `context-window: ${contextWindow.contextWindow === null ? 'provider-default' : `${contextWindow.contextWindow} tokens`}`,
+    `spark-context-window: ${contextWindow.overrideSparkContextWindow ? 'on' : 'off'}`,
+    `proxy-mode: ${proxy.proxyMode}`,
+    `proxy-url: ${formatProxyUrl(proxy.proxyUrl)}`,
+    ...models,
   ].join('\n')
 }
 
@@ -271,16 +349,25 @@ async function updateSetting(service: OpenAICodexService, key: string, value: st
       await service.updateImagePreferences({ modifyReadImage: enabled })
       return
     case 'imagegen-other-models':
-      await service.updateImagePreferences({ shareImagegenWithOtherModels: enabled })
+      await service.updateImagePreferences({
+        shareImagegenWithOtherModels: enabled,
+      })
       return
     case 'reasoning-summary':
       await service.updateResponsePreferences({ reasoningSummary: value as OpenAICodexReasoningSummary })
       return
     case 'websocket-context':
-      await service.updateResponsePreferences({ useWebSocketContextReuse: enabled })
+      await service.updateResponsePreferences({
+        useWebSocketContextReuse: enabled,
+      })
       return
     case 'native-compaction':
       await service.updateResponsePreferences({ useNativeCompaction: enabled })
+      return
+    case 'spark-context-window':
+      await service.updateContextWindowPreferences({
+        overrideSparkContextWindow: enabled,
+      })
       return
     default:
       throw new Error(`unknown setting ${JSON.stringify(key)}`)
@@ -308,7 +395,8 @@ function registerCodexCommand(ctx: Context): void {
         switch (action) {
           case 'status': {
             const state = login.status()
-            if (state.status === 'signing-in') return success('OpenAI Codex sign-in is waiting for browser approval.')
+            if (state.status === 'signing-in')
+              return success('OpenAI Codex sign-in is waiting for browser approval.')
             if (state.status === 'error') return failure(`OpenAI Codex sign-in failed: ${state.message}`)
             const status = await service.authStatus()
             return status.authenticated
@@ -327,15 +415,36 @@ function registerCodexCommand(ctx: Context): void {
             return success(formatUsage(await service.usage()))
           case 'hud': {
             const requested = parts[1] ?? 'toggle'
-            if (parts.length > 2 || !['on', 'off', 'toggle', 'pin', 'unpin', 'status'].includes(requested)) return failure(HELP)
+            if (parts.length > 2 || !['on', 'off', 'toggle', 'pin', 'unpin', 'status'].includes(requested))
+              return failure(HELP)
             const current = service.usageUiPreferences()
             if (requested === 'pin' || requested === 'unpin') {
               const next = await service.updateUsageUiPreferences({ pinUsageHud: requested === 'pin' })
-              return success('Codex usage HUD: ' + (next.showUsageHud ? 'on' : 'off') + ' (' + (next.pinUsageHud ? 'pinned' : 'compact') + ')')
+              return success(
+                'Codex usage HUD: ' +
+                  (next.showUsageHud ? 'on' : 'off') +
+                  ' (' +
+                  (next.pinUsageHud ? 'pinned' : 'compact') +
+                  ')',
+              )
             }
-            const visible = requested === 'status' ? current.showUsageHud : requested === 'toggle' ? !current.showUsageHud : requested === 'on'
-            const next = requested === 'status' ? current : await service.updateUsageUiPreferences({ showUsageHud: visible })
-            return success('Codex usage HUD: ' + (next.showUsageHud ? 'on' : 'off') + ' (' + (next.pinUsageHud ? 'pinned' : 'compact') + ')')
+            const visible =
+              requested === 'status'
+                ? current.showUsageHud
+                : requested === 'toggle'
+                  ? !current.showUsageHud
+                  : requested === 'on'
+            const next =
+              requested === 'status'
+                ? current
+                : await service.updateUsageUiPreferences({ showUsageHud: visible })
+            return success(
+              'Codex usage HUD: ' +
+                (next.showUsageHud ? 'on' : 'off') +
+                ' (' +
+                (next.pinUsageHud ? 'pinned' : 'compact') +
+                ')',
+            )
           }
           case 'config':
             if (parts.length !== 1) return failure(HELP)
@@ -343,9 +452,10 @@ function registerCodexCommand(ctx: Context): void {
           case 'set': {
             const key = parts[1]
             const value = parts[2]
-            const valid = key === 'reasoning-summary'
-              ? value === 'auto' || value === 'concise' || value === 'detailed'
-              : value === 'on' || value === 'off'
+            const valid =
+              key === 'reasoning-summary'
+                ? value === 'auto' || value === 'concise' || value === 'detailed'
+                : value === 'on' || value === 'off'
             if (parts.length !== 3 || key === undefined || value === undefined || !valid) return failure(HELP)
             await updateSetting(service, key, value)
             return success(formatConfig(service))
@@ -358,10 +468,13 @@ function registerCodexCommand(ctx: Context): void {
       }
     },
   })
-  ctx.effect(() => async () => {
-    disposeCommand()
-    await login.dispose()
-  }, 'OpenAI Codex command adapter')
+  ctx.effect(
+    () => async () => {
+      disposeCommand()
+      await login.dispose()
+    },
+    'OpenAI Codex command adapter',
+  )
 }
 
 function registerTuiCommandTree(ctx: Context): void {

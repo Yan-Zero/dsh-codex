@@ -5,10 +5,15 @@ import type { Context } from '@deepseek-ai/cordis'
 import { loginOpenAICodex, logoutOpenAICodex, openAICodexAuthStatus } from './auth.ts'
 import type { OpenAICodexAuthStatus } from './auth.ts'
 import { OpenAICodexCredentialStore } from './store.ts'
+import { OpenAICodexProxyTransport } from './proxy.ts'
+import type { ProxyPreferences } from './proxy.ts'
 import { ImageToolPolicy } from './tool-policy.ts'
 import type {
+  ContextWindowPreferences,
+  FastModePreferences,
   ImageToolPreferences,
   ModelCatalogEntry,
+  ModelCatalogSettings,
   ResponseApiPreferences,
   UsageUiPreferences,
 } from './tool-policy.ts'
@@ -24,9 +29,15 @@ declare module '@deepseek-ai/cordis' {
 }
 
 /** Initial settings contributed by the bundle configuration. */
-export interface OpenAICodexServiceOptions extends ImageToolPreferences, ResponseApiPreferences {
+export interface OpenAICodexServiceOptions
+  extends ImageToolPreferences,
+    ResponseApiPreferences,
+    ContextWindowPreferences,
+    FastModePreferences,
+    ProxyPreferences {
+  credentialFile?: string
   models?: string[]
-  modelCatalog: readonly ModelCatalogEntry[]
+  modelCatalog: readonly ModelCatalogEntry[] | (() => readonly ModelCatalogEntry[])
 }
 
 /**
@@ -34,12 +45,29 @@ export interface OpenAICodexServiceOptions extends ImageToolPreferences, Respons
  * Credentials and live policy stay singletons even when several front doors are mounted.
  */
 export class OpenAICodexService {
-  readonly credentials = new OpenAICodexCredentialStore()
+  readonly credentials: OpenAICodexCredentialStore
   readonly policy: ImageToolPolicy
   readonly usageTracker = new CodexUsageTracker()
+  readonly proxy: OpenAICodexProxyTransport
+  private readonly stopProxyWatch: () => void
 
   constructor(options: OpenAICodexServiceOptions) {
-    this.policy = new ImageToolPolicy(options, options.modelCatalog)
+    this.credentials = new OpenAICodexCredentialStore(options.credentialFile)
+    const { credentialFile: _credentialFile, modelCatalog, ...preferences } = options
+    this.policy = new ImageToolPolicy(preferences, modelCatalog)
+    this.proxy = new OpenAICodexProxyTransport(() => this.policy.proxySnapshot())
+    void this.proxy.apply().catch((error: unknown) => {
+      process.stderr.write(
+        `[dsh-codex] failed to apply proxy settings: ${error instanceof Error ? error.message : String(error)}\n`,
+      )
+    })
+    this.stopProxyWatch = this.policy.watchProxyPreferences(() => {
+      void this.proxy.apply().catch((error: unknown) => {
+        process.stderr.write(
+          `[dsh-codex] failed to apply proxy settings: ${error instanceof Error ? error.message : String(error)}\n`,
+        )
+      })
+    })
   }
 
   /** Attach the durable settings document when the active profile provides it. */
@@ -48,11 +76,12 @@ export class OpenAICodexService {
   }
 
   /** Start the provider-native OAuth lifecycle. */
-  login(interaction: AuthInteraction): Promise<void> {
-    return loginOpenAICodex(interaction, this.credentials)
+  async login(interaction: AuthInteraction): Promise<void> {
+    await this.proxy.apply()
+    return await loginOpenAICodex(interaction, this.credentials, this.proxy.fetch)
   }
 
-  /** Remove this plugin's credential without touching Codex CLI/Desktop. */
+  /** Clear the selected credential; explicit shared files affect their other consumers too. */
   logout(): Promise<void> {
     return logoutOpenAICodex(this.credentials)
   }
@@ -64,7 +93,7 @@ export class OpenAICodexService {
 
   /** Read current subscription limits without issuing a model request. */
   async usage(): Promise<OpenAICodexUsage> {
-    const usage = await readOpenAICodexRateLimits(this.credentials)
+    const usage = await readOpenAICodexRateLimits(this.credentials, this.proxy.fetch)
     await this.usageTracker.ledger.saveQuota(usage)
     return usage
   }
@@ -94,5 +123,41 @@ export class OpenAICodexService {
     this.usageTracker.refresh()
     return next
   }
-}
 
+  contextWindowPreferences(): ContextWindowPreferences {
+    return this.policy.contextWindowSnapshot()
+  }
+
+  updateContextWindowPreferences(
+    patch: Partial<ContextWindowPreferences>,
+  ): Promise<ContextWindowPreferences> {
+    return this.policy.updateContextWindow(patch)
+  }
+
+  fastModePreferences(): FastModePreferences {
+    return this.policy.fastModeSnapshot()
+  }
+
+  updateFastModePreferences(patch: Partial<FastModePreferences>): Promise<FastModePreferences> {
+    return this.policy.updateFastMode(patch)
+  }
+
+  modelCatalogSettings(): ModelCatalogSettings {
+    return this.policy.modelCatalogSnapshot()
+  }
+
+  proxyPreferences(): ProxyPreferences {
+    return this.policy.proxySnapshot()
+  }
+
+  async updateProxyPreferences(patch: Partial<ProxyPreferences>): Promise<ProxyPreferences> {
+    const preferences = await this.policy.updateProxy(patch)
+    await this.proxy.apply()
+    return preferences
+  }
+
+  async dispose(): Promise<void> {
+    this.stopProxyWatch()
+    await this.proxy.dispose()
+  }
+}

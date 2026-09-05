@@ -29,11 +29,14 @@ import {
 import { FastModeRegistry, isFastModeSessionId } from './fast-mode.ts'
 import { OPENAI_CODEX_FAST_MODE_PATH } from './fast-mode-paths.ts'
 import type {
+  ContextWindowPreferences,
+  FastModePreferences,
   ImageToolPolicy,
   ImageToolPreferences,
   ModelCatalogPreferences,
   ResponseApiPreferences,
 } from './tool-policy.ts'
+import type { ProxyPreferences } from './proxy.ts'
 
 export {
   OPENAI_CODEX_AUTH_DEVICE_LOGIN_PATH,
@@ -50,6 +53,12 @@ export const OPENAI_CODEX_IMAGE_TOOL_SETTINGS_PATH = '/plugins/dsh-openai-codex/
 export const OPENAI_CODEX_RESPONSE_API_SETTINGS_PATH = '/plugins/dsh-openai-codex/response-api'
 /** Plugin-owned model discovery preference endpoint consumed by its browser half. */
 export const OPENAI_CODEX_MODEL_CATALOG_SETTINGS_PATH = '/plugins/dsh-openai-codex/models'
+/** Plugin-owned client-side context capacity endpoint consumed by its browser half. */
+export const OPENAI_CODEX_CONTEXT_WINDOW_SETTINGS_PATH = '/plugins/dsh-openai-codex/context-window'
+/** Plugin-owned Fast Mode default endpoint consumed by its browser half. */
+export const OPENAI_CODEX_FAST_MODE_SETTINGS_PATH = '/plugins/dsh-openai-codex/fast-mode-default'
+/** Plugin-owned proxy preference endpoint consumed by its browser half. */
+export const OPENAI_CODEX_PROXY_SETTINGS_PATH = '/plugins/dsh-openai-codex/proxy'
 
 /** Maximum time a browser request waits for the provider's authorization URL. */
 export const OPENAI_CODEX_AUTH_URL_TIMEOUT_MS = 30_000
@@ -60,7 +69,10 @@ export const REMOTE_WEB_ORIGIN_NOT_TRUSTED = 'remote-web-origin-not-trusted'
 export type OpenAICodexWebAuthStatus =
   | { status: 'signed-out' }
   | { status: 'signing-in' }
-  | { status: 'reauth-required'; message: typeof OPENAI_CODEX_REAUTH_REQUIRED_MESSAGE }
+  | {
+      status: 'reauth-required'
+      message: typeof OPENAI_CODEX_REAUTH_REQUIRED_MESSAGE
+    }
   | { status: 'signed-in'; usage: OpenAICodexUsage; quotaError?: string }
   | { status: 'error'; message: string }
 
@@ -83,6 +95,8 @@ export const OPENAI_CODEX_SIGN_IN_TIMEOUT_MS = 10 * 60 * 1000
 export interface OpenAICodexWebAuthOptions {
   challengeTimeoutMs?: number
   signInTimeoutMs?: number
+  requestFetch?: typeof globalThis.fetch
+  beforeNetworkRequest?: () => Promise<void>
 }
 
 /** Redact provider diagnostics before they cross to the browser. */
@@ -99,7 +113,13 @@ function waitForPromptAbort(prompt: AuthPrompt): Promise<string> {
   if (signal === undefined) return new Promise<string>(() => {})
   if (signal.aborted) return Promise.reject(signal.reason)
   return new Promise<string>((_resolve, reject) => {
-    signal.addEventListener('abort', () => { reject(signal.reason) }, { once: true })
+    signal.addEventListener(
+      'abort',
+      () => {
+        reject(signal.reason)
+      },
+      { once: true },
+    )
   })
 }
 
@@ -110,10 +130,15 @@ export class OpenAICodexWebAuth {
   private method: OpenAICodexLoginMethod | undefined
   private cancellation: AbortController | undefined
   private challenge: LoginChallenge | undefined
-  private challengeWaiters: Array<{ resolve(value: LoginChallenge): void; reject(error: unknown): void }> = []
+  private challengeWaiters: Array<{
+    resolve(value: LoginChallenge): void
+    reject(error: unknown): void
+  }> = []
   private challengeTimer: ReturnType<typeof setTimeout> | undefined
   private readonly challengeTimeoutMs: number
   private readonly signInTimeoutMs: number
+  private readonly requestFetch: typeof globalThis.fetch
+  private readonly beforeNetworkRequest: (() => Promise<void>) | undefined
 
   constructor(
     private readonly store: OpenAICodexCredentialStore,
@@ -121,6 +146,8 @@ export class OpenAICodexWebAuth {
   ) {
     this.challengeTimeoutMs = options.challengeTimeoutMs ?? OPENAI_CODEX_AUTH_URL_TIMEOUT_MS
     this.signInTimeoutMs = options.signInTimeoutMs ?? OPENAI_CODEX_SIGN_IN_TIMEOUT_MS
+    this.requestFetch = options.requestFetch ?? globalThis.fetch
+    this.beforeNetworkRequest = options.beforeNetworkRequest
     if (!Number.isFinite(this.challengeTimeoutMs) || this.challengeTimeoutMs <= 0) {
       throw new TypeError('OpenAI Codex auth URL timeout must be a positive finite number')
     }
@@ -171,51 +198,71 @@ export class OpenAICodexWebAuth {
     this.challenge = undefined
     this.state = { status: 'signing-in' }
     this.challengeTimer = setTimeout(() => {
-      this.cancelSignIn(new Error(`OpenAI Codex did not provide an authorization URL within ${String(this.challengeTimeoutMs)}ms`))
+      this.cancelSignIn(
+        new Error(
+          `OpenAI Codex did not provide an authorization URL within ${String(this.challengeTimeoutMs)}ms`,
+        ),
+      )
     }, this.challengeTimeoutMs)
     this.challengeTimer.unref()
     const signInTimer = setTimeout(() => {
-      this.cancelSignIn(new Error(method === 'browser'
-        ? 'OpenAI Codex sign-in timed out waiting for the browser callback'
-        : 'OpenAI Codex device-code sign-in timed out waiting for authorization'))
+      this.cancelSignIn(
+        new Error(
+          method === 'browser'
+            ? 'OpenAI Codex sign-in timed out waiting for the browser callback'
+            : 'OpenAI Codex device-code sign-in timed out waiting for authorization',
+        ),
+      )
     }, this.signInTimeoutMs)
     signInTimer.unref()
-    this.operation = loginOpenAICodex({
-      signal: cancellation.signal,
-      prompt: prompt => prompt.type === 'select'
-        ? Promise.resolve(method)
-        : waitForPromptAbort(prompt),
-      notify: event => { this.onEvent(event) },
-    }, this.store).then(
-      async () => {
-        if (this.challenge === undefined) {
-          const error = new Error('OpenAI Codex sign-in finished without an authorization URL')
-          this.rejectChallenge(error)
-          this.state = { status: 'error', message: safeMessage(error) }
-          return
-        }
-        this.state = await this.readStoredStatus()
-      },
-      async (error: unknown) => {
-        this.rejectChallenge(error)
-        // A failed or abandoned provider flow must not mask a valid stored
-        // credential: sign-in may have completed through another front door.
-        try {
-          const stored = await this.readStoredStatus()
-          if (stored.status === 'signed-in') {
-            this.state = stored
+    const login = (): Promise<void> =>
+      loginOpenAICodex(
+        {
+          signal: cancellation.signal,
+          prompt: (prompt) =>
+            prompt.type === 'select' ? Promise.resolve(method) : waitForPromptAbort(prompt),
+          notify: (event) => {
+            this.onEvent(event)
+          },
+        },
+        this.store,
+      )
+    this.operation = (
+      this.beforeNetworkRequest === undefined ? login() : this.beforeNetworkRequest().then(login)
+    )
+      .then(
+        async () => {
+          if (this.challenge === undefined) {
+            const error = new Error('OpenAI Codex sign-in finished without an authorization URL')
+            this.rejectChallenge(error)
+            this.state = { status: 'error', message: safeMessage(error) }
             return
           }
-        } catch { /* fall through to the original error */ }
-        this.state = { status: 'error', message: safeMessage(error) }
-      },
-    ).finally(() => {
-      this.clearChallengeTimer()
-      clearTimeout(signInTimer)
-      this.operation = undefined
-      this.cancellation = undefined
-      this.method = undefined
-    })
+          this.state = await this.readStoredStatus()
+        },
+        async (error: unknown) => {
+          this.rejectChallenge(error)
+          // A failed or abandoned provider flow must not mask a valid stored
+          // credential: sign-in may have completed through another front door.
+          try {
+            const stored = await this.readStoredStatus()
+            if (stored.status === 'signed-in') {
+              this.state = stored
+              return
+            }
+          } catch {
+            /* fall through to the original error */
+          }
+          this.state = { status: 'error', message: safeMessage(error) }
+        },
+      )
+      .finally(() => {
+        this.clearChallengeTimer()
+        clearTimeout(signInTimer)
+        this.operation = undefined
+        this.cancellation = undefined
+        this.method = undefined
+      })
   }
 
   private onEvent(event: AuthEvent): void {
@@ -239,24 +286,36 @@ export class OpenAICodexWebAuth {
       this.cancelSignIn(error)
       return
     }
-    const challenge: LoginChallenge = event.type === 'auth_url'
-      ? { method: 'browser', url: event.url }
-      : { method: 'device_code', url: event.verificationUri, code: event.userCode }
+    const challenge: LoginChallenge =
+      event.type === 'auth_url'
+        ? { method: 'browser', url: event.url }
+        : { method: 'device_code', url: event.verificationUri, code: event.userCode }
     this.challenge = challenge
     this.clearChallengeTimer()
     for (const waiter of this.challengeWaiters.splice(0)) waiter.resolve(challenge)
   }
 
   private async readStoredStatus(): Promise<OpenAICodexWebAuthStatus> {
+    await this.beforeNetworkRequest?.()
     const stored = await openAICodexAuthStatus(this.store)
     if (!stored.authenticated) return { status: 'signed-out' }
     try {
-      return { status: 'signed-in', usage: await readOpenAICodexRateLimits(this.store) }
+      return {
+        status: 'signed-in',
+        usage: await readOpenAICodexRateLimits(this.store, this.requestFetch),
+      }
     } catch (error: unknown) {
       if (isOpenAICodexReauthRequiredError(error)) {
-        return { status: 'reauth-required', message: OPENAI_CODEX_REAUTH_REQUIRED_MESSAGE }
+        return {
+          status: 'reauth-required',
+          message: OPENAI_CODEX_REAUTH_REQUIRED_MESSAGE,
+        }
       }
-      return { status: 'signed-in', usage: { rateLimits: [] }, quotaError: safeMessage(error) }
+      return {
+        status: 'signed-in',
+        usage: { rateLimits: [] },
+        quotaError: safeMessage(error),
+      }
     }
   }
 
@@ -281,16 +340,26 @@ function loopbackHost(rawHost: string): boolean {
   if (/[\\/@?#]/u.test(rawHost)) return false
   try {
     const parsed = new URL(`http://${rawHost}`)
-    if (parsed.username !== '' || parsed.password !== '' || parsed.pathname !== '/' || parsed.search !== '' || parsed.hash !== '') return false
-    const bracketless = parsed.hostname.startsWith('[') && parsed.hostname.endsWith(']')
-      ? parsed.hostname.slice(1, -1)
-      : parsed.hostname
+    if (
+      parsed.username !== '' ||
+      parsed.password !== '' ||
+      parsed.pathname !== '/' ||
+      parsed.search !== '' ||
+      parsed.hash !== ''
+    )
+      return false
+    const bracketless =
+      parsed.hostname.startsWith('[') && parsed.hostname.endsWith(']')
+        ? parsed.hostname.slice(1, -1)
+        : parsed.hostname
     const hostname = bracketless.toLowerCase().replace(/\.$/u, '')
-    return hostname === 'localhost'
-      || hostname.endsWith('.localhost')
-      || hostname === '127.0.0.1'
-      || hostname === '::1'
-      || hostname === '::ffff:127.0.0.1'
+    return (
+      hostname === 'localhost' ||
+      hostname.endsWith('.localhost') ||
+      hostname === '127.0.0.1' ||
+      hostname === '::1' ||
+      hostname === '::ffff:127.0.0.1'
+    )
   } catch {
     return false
   }
@@ -321,13 +390,15 @@ function sameOriginMetadata(req: IncomingMessage, host: string): boolean {
   return typeof origin === 'string' && exactOrigin(req, host, origin)
 }
 
-export type TrustedRequestDecision = {
-  trusted: true
-  error?: undefined
-} | {
-  trusted: false
-  error: typeof REMOTE_WEB_ORIGIN_NOT_TRUSTED | 'forbidden'
-}
+export type TrustedRequestDecision =
+  | {
+      trusted: true
+      error?: undefined
+    }
+  | {
+      trusted: false
+      error: typeof REMOTE_WEB_ORIGIN_NOT_TRUSTED | 'forbidden'
+    }
 
 /** Evaluate one request against loopback defaults and the current sidecar. */
 export async function trustedRequestDecision(
@@ -337,9 +408,10 @@ export async function trustedRequestDecision(
   const remote = req.socket.remoteAddress
   const localPeer = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1'
   const fetchSite: unknown = req.headers['sec-fetch-site']
-  const crossSite = typeof fetchSite === 'string'
-    ? fetchSite.trim().toLowerCase() === 'cross-site'
-    : Array.isArray(fetchSite) && fetchSite.some(value => value.trim().toLowerCase() === 'cross-site')
+  const crossSite =
+    typeof fetchSite === 'string'
+      ? fetchSite.trim().toLowerCase() === 'cross-site'
+      : Array.isArray(fetchSite) && fetchSite.some((value) => value.trim().toLowerCase() === 'cross-site')
   if (crossSite) return { trusted: false, error: 'forbidden' }
   const host = req.headers.host
   if (typeof host !== 'string') return { trusted: false, error: 'forbidden' }
@@ -396,7 +468,10 @@ function contentLength(req: IncomingMessage): number | undefined {
 /** Collect one small JSON body without exposing or logging its contents. */
 async function readFastModeBody(req: IncomingMessage): Promise<unknown> {
   const declared = contentLength(req)
-  if (declared !== undefined && (!Number.isFinite(declared) || declared > OPENAI_CODEX_FAST_MODE_BODY_LIMIT)) {
+  if (
+    declared !== undefined &&
+    (!Number.isFinite(declared) || declared > OPENAI_CODEX_FAST_MODE_BODY_LIMIT)
+  ) {
     throw new RangeError('Fast Mode request body is too large')
   }
   const chunks: Uint8Array[] = []
@@ -406,23 +481,26 @@ async function readFastModeBody(req: IncomingMessage): Promise<unknown> {
     for await (const chunk of iterable) {
       const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : new Uint8Array(chunk)
       total += bytes.byteLength
-      if (total > OPENAI_CODEX_FAST_MODE_BODY_LIMIT) throw new RangeError('Fast Mode request body is too large')
+      if (total > OPENAI_CODEX_FAST_MODE_BODY_LIMIT)
+        throw new RangeError('Fast Mode request body is too large')
       chunks.push(bytes)
     }
   } else {
     const body = (req as IncomingMessage & { body?: unknown }).body
     if (typeof body === 'string') {
       const bytes = Buffer.from(body)
-      if (bytes.byteLength > OPENAI_CODEX_FAST_MODE_BODY_LIMIT) throw new RangeError('Fast Mode request body is too large')
+      if (bytes.byteLength > OPENAI_CODEX_FAST_MODE_BODY_LIMIT)
+        throw new RangeError('Fast Mode request body is too large')
       chunks.push(bytes)
     } else if (body instanceof Uint8Array) {
-      if (body.byteLength > OPENAI_CODEX_FAST_MODE_BODY_LIMIT) throw new RangeError('Fast Mode request body is too large')
+      if (body.byteLength > OPENAI_CODEX_FAST_MODE_BODY_LIMIT)
+        throw new RangeError('Fast Mode request body is too large')
       chunks.push(new Uint8Array(body))
     } else if (body !== undefined) {
       throw new TypeError('Fast Mode request body is invalid')
     }
   }
-  const bytes = Buffer.concat(chunks.map(chunk => Buffer.from(chunk)))
+  const bytes = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)))
   if (bytes.byteLength === 0) throw new TypeError('Fast Mode request body is invalid')
   let text: string
   try {
@@ -455,9 +533,7 @@ function fastModeBody(value: unknown): { sessionId: string; enabled: boolean } |
   if (Object.keys(record).length !== 2) return undefined
   const sessionId = record['sessionId']
   const enabled = record['enabled']
-  return isFastModeSessionId(sessionId) && typeof enabled === 'boolean'
-    ? { sessionId, enabled }
-    : undefined
+  return isFastModeSessionId(sessionId) && typeof enabled === 'boolean' ? { sessionId, enabled } : undefined
 }
 
 async function readSettingsBody(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -470,7 +546,7 @@ async function readSettingsBody(req: IncomingMessage): Promise<Record<string, un
 
 function imagePreferencePatch(value: Record<string, unknown>): Partial<ImageToolPreferences> {
   const allowed = new Set<keyof ImageToolPreferences>(['modifyReadImage', 'shareImagegenWithOtherModels'])
-  if (Object.keys(value).some(key => !allowed.has(key as keyof ImageToolPreferences))) {
+  if (Object.keys(value).some((key) => !allowed.has(key as keyof ImageToolPreferences))) {
     throw new TypeError('request contains an unknown image-tool setting')
   }
   const patch: Partial<ImageToolPreferences> = {}
@@ -488,7 +564,7 @@ function responseApiPatch(value: Record<string, unknown>): Partial<ResponseApiPr
     'useWebSocketContextReuse',
     'useNativeCompaction',
   ])
-  if (Object.keys(value).some(key => !allowed.has(key as keyof ResponseApiPreferences))) {
+  if (Object.keys(value).some((key) => !allowed.has(key as keyof ResponseApiPreferences))) {
     throw new TypeError('request contains an unknown Responses API setting')
   }
   const patch: Partial<ResponseApiPreferences> = {}
@@ -508,15 +584,83 @@ function responseApiPatch(value: Record<string, unknown>): Partial<ResponseApiPr
   return patch
 }
 
+function contextWindowPatch(value: Record<string, unknown>): Partial<ContextWindowPreferences> {
+  const allowed = new Set<keyof ContextWindowPreferences>(['contextWindow', 'overrideSparkContextWindow'])
+  if (Object.keys(value).some((key) => !allowed.has(key as keyof ContextWindowPreferences))) {
+    throw new TypeError('request contains an unknown context-window setting')
+  }
+  const patch: Partial<ContextWindowPreferences> = {}
+  const contextWindow = value['contextWindow']
+  if (contextWindow !== undefined) {
+    if (
+      contextWindow !== null &&
+      (typeof contextWindow !== 'number' || !Number.isSafeInteger(contextWindow) || contextWindow <= 0)
+    ) {
+      throw new TypeError('contextWindow must be a positive safe integer or null')
+    }
+    patch.contextWindow = contextWindow as number | null
+  }
+  const overrideSparkContextWindow = value['overrideSparkContextWindow']
+  if (overrideSparkContextWindow !== undefined) {
+    if (typeof overrideSparkContextWindow !== 'boolean') {
+      throw new TypeError('overrideSparkContextWindow must be a boolean')
+    }
+    patch.overrideSparkContextWindow = overrideSparkContextWindow
+  }
+  return patch
+}
+
 function modelCatalogPatch(value: Record<string, unknown>): Partial<ModelCatalogPreferences> {
-  if (Object.keys(value).some(key => key !== 'models')) {
+  if (Object.keys(value).some((key) => key !== 'models')) {
     throw new TypeError('request contains an unknown model setting')
   }
   const models = value['models']
-  if (!Array.isArray(models) || models.some(model => typeof model !== 'string')) {
+  if (!Array.isArray(models) || models.some((model) => typeof model !== 'string')) {
     throw new TypeError('models must be an array of strings')
   }
   return { models }
+}
+
+function fastModeSettingsPatch(value: Record<string, unknown>): Partial<FastModePreferences> {
+  const allowed = new Set<keyof FastModePreferences>(['fastModeDefault'])
+  if (Object.keys(value).some((key) => !allowed.has(key as keyof FastModePreferences))) {
+    throw new TypeError('request contains an unknown Fast Mode setting')
+  }
+  const patch: Partial<FastModePreferences> = {}
+  for (const key of allowed) {
+    if (value[key] === undefined) continue
+    if (typeof value[key] !== 'boolean') throw new TypeError(`${key} must be a boolean`)
+    patch[key] = value[key]
+  }
+  return patch
+}
+
+function proxyPreferencePatch(value: Record<string, unknown>): Partial<ProxyPreferences> {
+  const allowed = new Set<keyof ProxyPreferences>(['proxyMode', 'proxyUrl'])
+  if (Object.keys(value).some((key) => !allowed.has(key as keyof ProxyPreferences))) {
+    throw new TypeError('request contains an unknown proxy setting')
+  }
+  const patch: Partial<ProxyPreferences> = {}
+  const proxyMode = value['proxyMode']
+  if (proxyMode !== undefined) {
+    if (proxyMode !== 'off' && proxyMode !== 'scoped' && proxyMode !== 'global') {
+      throw new TypeError('proxyMode must be off, scoped, or global')
+    }
+    patch.proxyMode = proxyMode
+  }
+  const proxyUrl = value['proxyUrl']
+  if (proxyUrl !== undefined) {
+    if (typeof proxyUrl !== 'string') {
+      throw new TypeError('proxyUrl must be a string')
+    }
+    patch.proxyUrl = proxyUrl
+  }
+  return patch
+}
+
+interface ProxySettingsController {
+  proxyPreferences(): ProxyPreferences
+  updateProxyPreferences(patch: Partial<ProxyPreferences>): Promise<ProxyPreferences>
 }
 
 /** Register the plugin-owned OAuth routes when the Web server is composed. */
@@ -526,13 +670,23 @@ export function registerOpenAICodexAuthRoutes(
   trustedOriginsOverride?: OpenAICodexTrustedOriginsStore,
   fastModeOverride?: FastModeRegistry,
   imageTools?: ImageToolPolicy,
+  proxySettings?: ProxySettingsController,
+  requestFetch?: typeof globalThis.fetch,
+  beforeNetworkRequest?: () => Promise<void>,
 ): void {
-  const auth = new OpenAICodexWebAuth(store)
+  const auth = new OpenAICodexWebAuth(store, {
+    ...(requestFetch === undefined ? {} : { requestFetch }),
+    ...(beforeNetworkRequest === undefined ? {} : { beforeNetworkRequest }),
+  })
   const storedFilename = (store as OpenAICodexCredentialStore & { filename?: unknown }).filename
   const fastMode = fastModeOverride ?? new FastModeRegistry()
-  const trustedOrigins = trustedOriginsOverride ?? (typeof storedFilename === 'string'
-    ? new OpenAICodexTrustedOriginsStore(join(dirname(storedFilename), OPENAI_CODEX_TRUSTED_ORIGINS_FILENAME))
-    : new OpenAICodexTrustedOriginsStore())
+  const trustedOrigins =
+    trustedOriginsOverride ??
+    (typeof storedFilename === 'string'
+      ? new OpenAICodexTrustedOriginsStore(
+          join(dirname(storedFilename), OPENAI_CODEX_TRUSTED_ORIGINS_FILENAME),
+        )
+      : new OpenAICodexTrustedOriginsStore())
   ctx.effect(() => {
     const authorize = async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
       const decision = await trustedRequestDecision(req, trustedOrigins)
@@ -546,7 +700,7 @@ export function registerOpenAICodexAuthRoutes(
         path: OPENAI_CODEX_AUTH_LOCAL_STATUS_PATH,
         handler: async (req, res) => {
           if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' })
-          if (!await authorize(req, res)) return
+          if (!(await authorize(req, res))) return
           json(res, 200, await openAICodexAuthStatus(store))
         },
       }),
@@ -555,7 +709,7 @@ export function registerOpenAICodexAuthRoutes(
         path: OPENAI_CODEX_AUTH_STATUS_PATH,
         handler: async (req, res) => {
           if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' })
-          if (!await authorize(req, res)) return
+          if (!(await authorize(req, res))) return
           json(res, 200, await auth.status())
         },
       }),
@@ -564,7 +718,7 @@ export function registerOpenAICodexAuthRoutes(
         path: OPENAI_CODEX_AUTH_LOGIN_PATH,
         handler: async (req, res) => {
           if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
-          if (!await authorize(req, res)) return
+          if (!(await authorize(req, res))) return
           try {
             json(res, 200, await auth.signIn('browser'))
           } catch (error: unknown) {
@@ -577,7 +731,7 @@ export function registerOpenAICodexAuthRoutes(
         path: OPENAI_CODEX_AUTH_DEVICE_LOGIN_PATH,
         handler: async (req, res) => {
           if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
-          if (!await authorize(req, res)) return
+          if (!(await authorize(req, res))) return
           try {
             json(res, 200, await auth.signIn('device_code'))
           } catch (error: unknown) {
@@ -590,7 +744,7 @@ export function registerOpenAICodexAuthRoutes(
         path: OPENAI_CODEX_AUTH_LOGOUT_PATH,
         handler: async (req, res) => {
           if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
-          if (!await authorize(req, res)) return
+          if (!(await authorize(req, res))) return
           try {
             await auth.signOut()
             json(res, 200, { ok: true })
@@ -603,12 +757,16 @@ export function registerOpenAICodexAuthRoutes(
         kind: 'exact',
         path: OPENAI_CODEX_FAST_MODE_PATH,
         handler: async (req, res) => {
-          if (req.method !== 'GET' && req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
-          if (!await authorize(req, res)) return
+          if (req.method !== 'GET' && req.method !== 'POST')
+            return json(res, 405, { error: 'method not allowed' })
+          if (!(await authorize(req, res))) return
           if (req.method === 'GET') {
             const sessionId = fastModeSessionIdFromQuery(req)
             if (sessionId === undefined) return json(res, 400, { error: 'invalid input' })
-            return json(res, 200, { enabled: fastMode.isEnabled(sessionId) })
+            return json(res, 200, {
+              enabled:
+                imageTools?.fastModeSnapshot().fastModeDefault === true || fastMode.isEnabled(sessionId),
+            })
           }
           const type = header(req, 'content-type')
           if (type === undefined || !/^application\/json(?:\s*;|$)/iu.test(type.trim())) {
@@ -618,56 +776,138 @@ export function registerOpenAICodexAuthRoutes(
             const body = fastModeBody(await readFastModeBody(req))
             if (body === undefined) return json(res, 400, { error: 'invalid input' })
             fastMode.set(body.sessionId, body.enabled)
-            return json(res, 200, { enabled: fastMode.isEnabled(body.sessionId) })
+            return json(res, 200, {
+              enabled: fastMode.isEnabled(body.sessionId),
+            })
           } catch (error: unknown) {
-            return json(res, error instanceof RangeError ? 413 : 400, { error: error instanceof RangeError ? 'request body too large' : 'invalid input' })
+            return json(res, error instanceof RangeError ? 413 : 400, {
+              error: error instanceof RangeError ? 'request body too large' : 'invalid input',
+            })
           }
         },
       }),
-      ...(imageTools === undefined ? [] : [
-        ctx.webServer.register({
-          kind: 'exact',
-          path: OPENAI_CODEX_IMAGE_TOOL_SETTINGS_PATH,
-          handler: async (req, res) => {
-            if (!await authorize(req, res)) return
-            if (req.method === 'GET') return json(res, 200, imageTools.snapshot())
-            if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
-            try {
-              return json(res, 200, await imageTools.update(imagePreferencePatch(await readSettingsBody(req))))
-            } catch (error: unknown) {
-              return json(res, 400, { error: safeMessage(error) })
-            }
-          },
-        }),
-        ctx.webServer.register({
-          kind: 'exact',
-          path: OPENAI_CODEX_RESPONSE_API_SETTINGS_PATH,
-          handler: async (req, res) => {
-            if (!await authorize(req, res)) return
-            if (req.method === 'GET') return json(res, 200, imageTools.responseApiSnapshot())
-            if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
-            try {
-              return json(res, 200, await imageTools.updateResponseApi(responseApiPatch(await readSettingsBody(req))))
-            } catch (error: unknown) {
-              return json(res, 400, { error: safeMessage(error) })
-            }
-          },
-        }),
-        ctx.webServer.register({
-          kind: 'exact',
-          path: OPENAI_CODEX_MODEL_CATALOG_SETTINGS_PATH,
-          handler: async (req, res) => {
-            if (!await authorize(req, res)) return
-            if (req.method === 'GET') return json(res, 200, imageTools.modelCatalogSnapshot())
-            if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
-            try {
-              return json(res, 200, await imageTools.updateModelCatalog(modelCatalogPatch(await readSettingsBody(req))))
-            } catch (error: unknown) {
-              return json(res, 400, { error: safeMessage(error) })
-            }
-          },
-        }),
-      ]),
+      ...(imageTools === undefined
+        ? []
+        : [
+            ctx.webServer.register({
+              kind: 'exact',
+              path: OPENAI_CODEX_IMAGE_TOOL_SETTINGS_PATH,
+              handler: async (req, res) => {
+                if (!(await authorize(req, res))) return
+                if (req.method === 'GET') return json(res, 200, imageTools.snapshot())
+                if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
+                try {
+                  return json(
+                    res,
+                    200,
+                    await imageTools.update(imagePreferencePatch(await readSettingsBody(req))),
+                  )
+                } catch (error: unknown) {
+                  return json(res, 400, { error: safeMessage(error) })
+                }
+              },
+            }),
+            ctx.webServer.register({
+              kind: 'exact',
+              path: OPENAI_CODEX_RESPONSE_API_SETTINGS_PATH,
+              handler: async (req, res) => {
+                if (!(await authorize(req, res))) return
+                if (req.method === 'GET') return json(res, 200, imageTools.responseApiSnapshot())
+                if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
+                try {
+                  return json(
+                    res,
+                    200,
+                    await imageTools.updateResponseApi(responseApiPatch(await readSettingsBody(req))),
+                  )
+                } catch (error: unknown) {
+                  return json(res, 400, { error: safeMessage(error) })
+                }
+              },
+            }),
+            ctx.webServer.register({
+              kind: 'exact',
+              path: OPENAI_CODEX_CONTEXT_WINDOW_SETTINGS_PATH,
+              handler: async (req, res) => {
+                if (!(await authorize(req, res))) return
+                if (req.method === 'GET') return json(res, 200, imageTools.contextWindowSnapshot())
+                if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
+                try {
+                  return json(
+                    res,
+                    200,
+                    await imageTools.updateContextWindow(contextWindowPatch(await readSettingsBody(req))),
+                  )
+                } catch (error: unknown) {
+                  return json(res, 400, { error: safeMessage(error) })
+                }
+              },
+            }),
+            ctx.webServer.register({
+              kind: 'exact',
+              path: OPENAI_CODEX_MODEL_CATALOG_SETTINGS_PATH,
+              handler: async (req, res) => {
+                if (!(await authorize(req, res))) return
+                if (req.method === 'GET') return json(res, 200, imageTools.modelCatalogSnapshot())
+                if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
+                try {
+                  return json(
+                    res,
+                    200,
+                    await imageTools.updateModelCatalog(modelCatalogPatch(await readSettingsBody(req))),
+                  )
+                } catch (error: unknown) {
+                  return json(res, 400, { error: safeMessage(error) })
+                }
+              },
+            }),
+            ctx.webServer.register({
+              kind: 'exact',
+              path: OPENAI_CODEX_FAST_MODE_SETTINGS_PATH,
+              handler: async (req, res) => {
+                if (!(await authorize(req, res))) return
+                if (req.method === 'GET') return json(res, 200, imageTools.fastModeSnapshot())
+                if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
+                try {
+                  return json(
+                    res,
+                    200,
+                    await imageTools.updateFastMode(fastModeSettingsPatch(await readSettingsBody(req))),
+                  )
+                } catch (error: unknown) {
+                  return json(res, 400, { error: safeMessage(error) })
+                }
+              },
+            }),
+          ]),
+      ...(proxySettings === undefined
+        ? []
+        : [
+            ctx.webServer.register({
+              kind: 'exact',
+              path: OPENAI_CODEX_PROXY_SETTINGS_PATH,
+              handler: async (req, res) => {
+                if (!(await authorize(req, res))) return
+                if (req.method === 'GET') {
+                  return json(res, 200, proxySettings.proxyPreferences())
+                }
+                if (req.method !== 'POST') {
+                  return json(res, 405, { error: 'method not allowed' })
+                }
+                try {
+                  return json(
+                    res,
+                    200,
+                    await proxySettings.updateProxyPreferences(
+                      proxyPreferencePatch(await readSettingsBody(req)),
+                    ),
+                  )
+                } catch (error: unknown) {
+                  return json(res, 400, { error: safeMessage(error) })
+                }
+              },
+            }),
+          ]),
     ]
     return async () => {
       for (const dispose of routes) dispose()

@@ -5,12 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LocalAttachmentStore from '@deepseek-ai/dsh-attachment-local'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
-import { CallId, LlmRuntime } from '@deepseek-ai/dsh-llm'
+import { ToolCallId, LlmRuntime } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { defineTool } from '@deepseek-ai/dsh-tools'
 import WebRuntime from '@deepseek-ai/dsh-web'
 import * as OpenAICodex from '../src/index.ts'
-import { enhancedReadImageTool } from '../src/read-image-enhancement.ts'
+import { enhancedReadImageTool, installReadImageEnhancement } from '../src/read-image-enhancement.ts'
+import { ImageToolPolicy } from '../src/tool-policy.ts'
 import type { PublicHttpRuntime } from '../src/public-http.ts'
 
 const PNG_1X1 = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC', 'base64')
@@ -117,7 +118,7 @@ async function readImage(
 ) {
   return context.tools.execute({
     signal,
-    callId: CallId(`read-image-${++callCounter}`),
+    callId: ToolCallId(`read-image-${++callCounter}`),
     name: OpenAICodex.READ_IMAGE_TOOL_NAME,
     arguments: arguments_,
     agent: agentOn(model) as never,
@@ -125,6 +126,59 @@ async function readImage(
 }
 
 describe('read_image enhancement', () => {
+  it('shadows the read_image definition inherited by an agent scope', () => {
+    const root = {} as Context
+    const first = baseReadImage(root)
+    const second = { ...first, description: 'Read the replacement inherited image tool.' }
+    let inherited = first
+    let scoped: ReturnType<typeof enhancedReadImageTool> | undefined
+    let toolsChanged: (() => void) | undefined
+    let cleanup: (() => void) | undefined
+    const agent = {
+      id: 'agent-with-inherited-tools',
+      ctx: {
+        tools: {
+          register(definition: ReturnType<typeof enhancedReadImageTool>) {
+            scoped = definition
+            toolsChanged?.()
+            return () => {
+              scoped = undefined
+              toolsChanged?.()
+            }
+          },
+        },
+      },
+    }
+    Object.assign(root, {
+      tools: {
+        get: (_name: string, scope?: object) => scope === agent ? scoped ?? inherited : undefined,
+      },
+      agents: {
+        list: () => [agent],
+        get: (id: string) => id === agent.id ? agent : undefined,
+      },
+      on: (name: string, listener: () => void) => {
+        if (name === 'tools/change') toolsChanged = listener
+        return () => undefined
+      },
+      effect: (effect: () => () => void) => {
+        cleanup = effect()
+        return cleanup
+      },
+    })
+
+    installReadImageEnhancement(root, new ImageToolPolicy())
+
+    expect(root.tools.get('read_image', agent as never)?.description).toContain('HTTP(S) URL')
+    expect(root.tools.get('read_image')).toBeUndefined()
+
+    inherited = second
+    toolsChanged?.()
+    expect(root.tools.get('read_image', agent as never)?.description).toContain('HTTP(S) URL')
+    cleanup?.()
+    expect(root.tools.get('read_image', agent as never)).toBe(second)
+  })
+
   it('advertises separate local-path and HTTP(S) URL inputs', async () => {
     const context = await setup()
     const schema = context.tools.schemas().find(tool => tool.name === 'read_image')

@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -32,7 +32,7 @@ function accessToken(accountId: string): string {
 }
 
 async function credentialStore(): Promise<OpenAICodex.OpenAICodexCredentialStore> {
-  root = await mkdtemp(join(tmpdir(), 'dsh-openai-codex-search-'))
+  root = await mkdtemp(join(await realpath(tmpdir()), 'dsh-openai-codex-search-'))
   const store = new OpenAICodex.OpenAICodexCredentialStore(join(root, 'auth.json'))
   await store.modify(OpenAICodex.OPENAI_CODEX_PROVIDER, () => Promise.resolve({
     type: 'oauth',
@@ -104,6 +104,17 @@ describe('OpenAI Codex search response mapping', () => {
 })
 
 describe('OpenAI Codex standalone search request', () => {
+  it('uses an injected request transport without replacing global fetch', async () => {
+    const requestFetch = vi.fn(async () => jsonResponse(searchPayload))
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('global fetch must not run') }))
+    const search = await provider({ fetch: requestFetch })
+
+    await expect(search.search({ query: 'scoped request' })).resolves.toMatchObject({
+      content: 'A synthesized answer.',
+    })
+    expect(requestFetch).toHaveBeenCalledOnce()
+  })
+
   it.each([
     ['cached', false],
     ['indexed', 'indexed'],
@@ -168,7 +179,7 @@ describe('OpenAI Codex standalone search request', () => {
 
 describe('OpenAI Codex standalone search failures', () => {
   it('requires a signed-in credential', async () => {
-    root = await mkdtemp(join(tmpdir(), 'dsh-openai-codex-search-missing-'))
+    root = await mkdtemp(join(await realpath(tmpdir()), 'dsh-openai-codex-search-missing-'))
     const search = new OpenAICodex.OpenAICodexSearchProvider({
       credentials: new OpenAICodex.OpenAICodexCredentialStore(join(root, 'missing.json')),
       model: 'gpt-search-test',
@@ -203,7 +214,7 @@ describe('OpenAI Codex standalone search failures', () => {
 
 describe('OpenAI Codex composite plugin', () => {
   it('registers search through ctx.web and lets the seam cap structured sources', async () => {
-    root = await mkdtemp(join(tmpdir(), 'dsh-openai-codex-plugin-'))
+    root = await mkdtemp(join(await realpath(tmpdir()), 'dsh-openai-codex-plugin-'))
     vi.stubEnv('DSH_HOME', root)
     const store = new OpenAICodex.OpenAICodexCredentialStore()
     await store.modify(OpenAICodex.OPENAI_CODEX_PROVIDER, () => Promise.resolve({

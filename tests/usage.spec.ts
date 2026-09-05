@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -60,7 +60,7 @@ function payload(): unknown {
 }
 
 async function authenticatedStore(): Promise<OpenAICodexCredentialStore> {
-  root = await mkdtemp(join(tmpdir(), 'dsh-openai-codex-usage-'))
+  root = await mkdtemp(join(await realpath(tmpdir()), 'dsh-openai-codex-usage-'))
   const store = new OpenAICodexCredentialStore(join(root, 'auth.json'))
   const credential: OAuthCredential = {
     type: 'oauth',
@@ -177,6 +177,19 @@ describe('OpenAI Codex usage', () => {
         'cache-control': 'no-store',
       },
     })
+  })
+
+  it('uses an injected request transport for the usage endpoint', async () => {
+    const requestFetch = vi.fn(async () => response(payload()))
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('global fetch must not run') }))
+
+    const usage = await readOpenAICodexRateLimits(
+      await authenticatedStore(),
+      requestFetch,
+    )
+
+    expect(usage.rateLimits[0]?.windows[0]?.remainingPercent).toBe(87)
+    expect(requestFetch).toHaveBeenCalledOnce()
   })
 
   it.each([401, 403])('throws a secret-free reauthorization error for usage HTTP %s', async status => {

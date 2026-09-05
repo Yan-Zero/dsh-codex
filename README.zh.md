@@ -11,6 +11,7 @@
 
 - 在 dsh 设置面板或独立 CLI 中完成 ChatGPT OAuth 登录，并自动刷新 token
 - Codex GPT 模型目录；账号提供视觉模型时自动声明其图片输入能力
+- 可实时覆盖 dsh 用于上下文用量显示与压缩策略的客户端窗口容量
 - 经标准 LLM 服务运行的流式响应、工具调用、推理回放、提示词缓存与 dsh 压缩
 - 通过 dsh 现有 `web_search` 工具使用 Codex 独立联网搜索
 - 为 Harness 现有 `read_image` 工具增加可选的 HTTP(S) URL 输入
@@ -18,6 +19,8 @@
 - 复用 dsh Web 输入框的粘贴和拖放图片能力
 - 持久化、provider-neutral 的 SQLite Usage Ledger，由当前 session HUD 与设置页 **LLM Usage** 共用
 - Provider／时间／精确模型／Reasoning 筛选、Task／Session 明细以及不含账户额度的 JSON 报告
+- 在 Web 输入框提供按会话生效的 Fast Mode 开关与紧凑的每周额度指示器
+- 可选择仅 Codex 或整个进程范围的三态 HTTP(S) 代理设置
 
 ChatGPT 订阅认证与按量计费的 OpenAI API 是不同产品。本插件只使用 ChatGPT Codex 后端，不会把订阅转换成通用 OpenAI API 凭据。
 
@@ -73,10 +76,41 @@ bundle 会为新建 agent 选择 `openai-codex` / `gpt-5.6-sol`，并选择 Code
 ## 推理摘要
 
 OpenAI 不会公开模型私有的原始 reasoning tokens。模型支持时，本插件会把提供方生成的推理摘要流式写入 dsh 可折叠的 **Think** 区块。你可以选择 **设置 → OpenAI Codex → 推理摘要 → 详细**，或在 profile 的 `llm-openai-codex` 配置中设置 `reasoningSummary: detailed`，请求尽可能明确的解释。具体返回内容仍由提供方决定，因此 `detailed` 也可能很短，且不能据此还原隐藏思维链。`auto` 是兼容性默认值，目前会选择该模型可用的最详细摘要器。
+插件会读取 Codex CLI/Desktop 的 `models_cache.json`，补充 pi-ai 尚未收录的新模型，并使用缓存中的名称、输入能力、推理档位和默认 `context_window`。查找顺序为 `DSH_CODEX_MODELS_CACHE` 指定的文件、`CODEX_HOME/models_cache.json`、`~/.codex/models_cache.json`。只导入 `visibility: list` 的有效条目；缓存中声明的最大可扩展窗口不会自动替换默认容量。
+
+缓存由 Codex CLI/Desktop 刷新；模型发现只读取模型元数据，不依赖启动 Codex 子进程。除非显式配置 `credentialFile`（见下文），OAuth 登录仍相互独立。更新 Codex 并打开一次后，再打开插件模型设置或刷新模型列表即可发现变化。缓存缺失、损坏或正在写入时保留最近可用目录；首次启动没有缓存时使用随包目录（含 GPT-6 Astra）。目录元数据不保证当前 dsh 登录账号拥有相应模型权限。
+
+已保存的模型选择会保留。新增模型可以在下面的设置中启用；缓存暂时不可用不会删除已保存的模型 ID。新发现模型若没有随包价格信息，用量价格估算为 0，不能把它理解为该模型免费。
+
+默认情况下，模型选择器会展示完整的 `openai-codex` 目录。打开 **设置 → OpenAI Codex**，通过模型复选框选择需要显示的条目。该选择实时生效并持久保存；修改后 dsh 会刷新 Web 与 TUI 的模型目录。
 
 ## WebSocket 恢复
 
 **设置 → OpenAI Codex → WebSocket 上下文复用** 是实时配置：保存后，新请求会在开启时使用 WebSocket、关闭时使用 SSE，通常无需重启。缓存 WebSocket 异常关闭时，插件会把它标记为可恢复的传输失败；dsh 从失败的持久 agent step 边界发起重试，同时 pi-ai 废弃该连接并让重试走 SSE。之前步骤已经完成的工具调用会保留，不会再次执行。
+
+## 上下文窗口
+
+打开 **设置 → OpenAI Codex → 上下文窗口**，可以用 K tokens 为单位覆盖客户端容量。例如输入 `512` 表示 512,000 tokens；留空会恢复各模型在 pi-ai 目录中的默认值。保存后的值会在下一次请求时应用到全部 Codex 模型，并显示在 `/codex config` 中；已打开会话的用量分母会在该请求后刷新。
+
+也可以在初始配置中填写精确 token 数：
+
+```yaml
+- id: llm-openai-codex
+  config:
+    contextWindow: 512000
+```
+
+该功能在 Harness 一侧对应 Codex CLI 的 `model_context_window` 概念，不会向 Responses 端点发送上下文窗口字段。解析后的容量会直接控制 dsh 的上下文用量分母、溢出判断、输出 token 收缩和自动压缩阈值；较小的值会更早压缩。较大的值不会提高后端模型的真实容量，模型不支持时仍可能返回上下文溢出错误。
+
+## 网络代理
+
+打开 **设置 → OpenAI Codex → 网络代理**，可以选择三种范围：
+
+- **跟随 dsh** 不由插件覆盖网络设置；Codex 继承 dsh 启动时已经配置的进程级代理。
+- **仅 Codex** 把所选代理注入 Codex 模型 SSE 请求、原生压缩、独立搜索、生图、额度读取与 OAuth Token 刷新；pi-ai 的首次登录交换和 WebSocket 仍遵循进程策略。
+- **整个 dsh** 把代理应用到整个进程，并覆盖 OAuth；其他插件的请求也会受影响。关闭后会恢复插件覆盖前的宿主策略。
+
+代理 URL 支持 `http://` 与 `https://`。留空时依次使用 `DSH_CODEX_PROXY`，以及标准的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 与 `NO_PROXY` 环境变量。默认模式是 **跟随 dsh**，因此安装插件不会静默改变整个进程的 dispatcher。
 
 ## 图片
 
@@ -92,7 +126,9 @@ OpenAI 不会公开模型私有的原始 reasoning tokens。模型支持时，�
 
 设置页提供独立的 **增强 read_image** 与 **允许其他模型使用生图** 开关，默认均为开启。关闭第一项会撤销插件的 agent-scope 覆盖，恢复 Harness 原本只接受本地路径的 `read_image` Schema。关闭第二项后，Codex 视觉模型仍可使用 `imagegen`，其他模型提供方的调用会在执行入口被拒绝。
 
-`read_image` 在返回实际图片块之前，会先验证图片并把字节持久化为 dsh 附件。本地路径原样委托给 Harness，继续沿用当前文件系统和沙箱行为；URL 扩展会限制重定向次数与下载字节数，也不允许嵌入凭据。
+`read_image` 在返回实际图片块之前，会先验证图片并把字节持久化为 dsh 附件。本地路径原样委托给 Harness，继续沿用当前文件系统和沙箱行为；URL 扩展会限制重定向次数与下载字节数，拒绝内嵌凭据和本地／私网／特殊网络目标，并在每一跳把连接固定到已经验证的公网地址。
+
+对符合条件的 Codex GPT 会话，Web 输入框还会显示仅对当前会话生效的 Fast Mode 开关。开启后只为该会话加入提供方的 priority service tier，不会修改已保存的模型设置；旁边的额度条显示对应的每周额度和提供方声明的重置时间。设置页另有默认关闭的 **默认强制开启 1.5 倍速** 开关，开启后所有会话默认使用 1.5 倍速，无需逐会话点击开关，但额度消耗更快。
 
 ## 搜索
 
@@ -127,7 +163,7 @@ OpenAI 不会公开模型私有的原始 reasoning tokens。模型支持时，�
 
 ## 凭据与隐私
 
-dsh 登录与 Codex CLI／Desktop 相互独立：
+dsh 登录默认与 Codex CLI／Desktop 相互独立：
 
 - 凭据存储于 `$DSH_HOME/.openai-codex-auth.json`，默认位于 `~/.dsh`；
 - 文件原子写入，token 刷新会在本地 dsh 进程之间加锁；
@@ -136,8 +172,15 @@ dsh 登录与 Codex CLI／Desktop 相互独立：
 
 分离存储可以避免两个客户端竞争同一个会轮换的 refresh token。移除 bundle 不会删除凭据；需要移除本地账号时，请使用账号页面或 `logout` 命令。
 
+若要共享现有登录，将插件配置 `credentialFile` 设为 JSON 文件的绝对路径，例如 `C:/Users/you/.codex/auth.json`。已有文件按形状识别：Codex 的 `tokens`、CPA/CLIProxyAPI 的 `type: codex`、OpenCode 的 `openai`、Pi 的 `openai-codex`、扁平 OAuth，以及 dsh 原生格式。不认识、有歧义、字段不完整或只有 API key 的文件会明确报错；文件不存在时创建 dsh 原生格式。请使用普通文件而非符号链接或硬链接，POSIX 下要求仅属主可读写。
+
+选中的凭据只允许包含已识别的字段；存在未知字段时，在刷新或写入前拒绝使用，诊断仅指出字段名、不输出字段值。更新保留识别出的布局、已知元数据和其他 provider 的独立条目。provider 专属 OAuth 刷新函数保留并写回新的 access、refresh、ID token，以及可获取的 email，不再使用 pi-ai 丢弃身份字段的 token 投影。登录复用 pi-ai 的交互流程，随后补一次完整刷新再保存。响应缺少 ID token 时明确失败，而非悄悄保留过时身份。退出登录只清空选中的 OAuth 字段，不删除整个共享文件，也会影响使用该登录的其他程序。
+
+显式共享文件仅做进程内串行化，不使用 `.lock` 或刷新意图协议。写入前重新读取文件，检测到同一凭据被其他写入者更新则报错。同目录临时文件替换可在支持该语义的本地文件系统上避免本插件写出半截 JSON，但不保证断电持久性或与其他程序互斥。同时刷新仍可能竞争，写后读回校验也无法解决这一点。默认独立 dsh 存储继续保留原有跨进程锁。
+
 ## 兼容性说明
 
+- 本分支面向成套发布的 DSH `0.1.2-rc.1` 插件表层。较新 Harness 提供正式 `dsh-http-proxy` 库时，全局代理模式会与其组合；旧版则使用可恢复的兼容 dispatcher。同时使用 `@earendil-works/pi-ai` `0.84.4`，adapter 会在读取历史时迁移旧版 pi-ai replay envelope，因此升级后已有 reasoning／tool 元数据仍可继续使用。
 - 插件只使用已发布的 dsh 插件表层，不要求修改版 Harness checkout。单独安装时即可生成附件并保存本地输出。
 - ChatGPT 套餐资格、模型权限、配额及后端行为由 OpenAI 控制，可能发生变化。
 - Codex 端点不执行普通 Responses 的 `max_output_tokens` 字段。压缩可以工作，但该路由无法在服务端落实配置的摘要上限。

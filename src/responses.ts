@@ -9,6 +9,7 @@ import type {
   AssistantMessageEventStream,
   Api,
   Context as PiContext,
+  FetchFunction,
   Model,
   Provider,
   SimpleStreamOptions,
@@ -355,7 +356,10 @@ function retainedCompactionInput(input: readonly unknown[]): unknown[] {
 export class OpenAICodexResponseRuntime {
   private readonly compactionCalls = new Map<string, number>()
 
-  constructor(private readonly preferences: () => ResponseApiPreferences) {}
+  constructor(
+    private readonly preferences: () => ResponseApiPreferences,
+    private readonly requestFetch: FetchFunction = globalThis.fetch
+  ) {}
 
   /** Mark one Harness stream call as compaction until its iterator closes. */
   enterCompaction(sessionId: string | undefined): () => void {
@@ -520,7 +524,7 @@ export class OpenAICodexResponseRuntime {
       let response: Response
       try {
         const signal = requestSignal(options?.signal, options?.timeoutMs)
-        response = await fetch(OPENAI_CODEX_RESPONSES_URL, {
+        response = await (options?.fetch ?? this.requestFetch)(OPENAI_CODEX_RESPONSES_URL, {
           method: 'POST',
           headers,
           body: JSON.stringify(body),

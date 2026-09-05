@@ -1,6 +1,7 @@
 /** Live ChatGPT Codex rate-limit usage for the browser account page. */
 
 import { createModels } from '@earendil-works/pi-ai'
+import { openaiCodexProvider } from './oauth-provider.ts'
 import type { OpenAICodexCredentialStore } from './store.ts'
 import { OPENAI_CODEX_PROVIDER } from './store.ts'
 import { createOpenAICodexProvider } from './provider.ts'
@@ -103,7 +104,12 @@ function parseResetAt(record: Record<string, unknown>): number | undefined {
   if (!Object.hasOwn(record, 'reset_at')) return undefined
   const value = record['reset_at']
   if (value === null) return undefined
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0 || value > MAX_DATE_UNIX_SECONDS) {
+  if (
+    typeof value !== 'number' ||
+    !Number.isSafeInteger(value) ||
+    value <= 0 ||
+    value > MAX_DATE_UNIX_SECONDS
+  ) {
     throw new Error('OpenAI Codex returned an invalid rate-limit reset time')
   }
   // Keep the projection bounded by Date's actual range rather than allowing an
@@ -119,7 +125,12 @@ function parseWindow(value: unknown): OpenAICodexRateLimitWindow | undefined {
   if (!isRecord(value)) throw new Error('OpenAI Codex returned a malformed rate-limit window')
   const usedPercent = value['used_percent']
   const windowSeconds = value['limit_window_seconds']
-  if (typeof usedPercent !== 'number' || !Number.isFinite(usedPercent) || usedPercent < 0 || usedPercent > 100) {
+  if (
+    typeof usedPercent !== 'number' ||
+    !Number.isFinite(usedPercent) ||
+    usedPercent < 0 ||
+    usedPercent > 100
+  ) {
     throw new Error('OpenAI Codex returned an invalid used percentage')
   }
   if (typeof windowSeconds !== 'number' || !Number.isInteger(windowSeconds) || windowSeconds <= 0) {
@@ -141,24 +152,30 @@ function parseWindow(value: unknown): OpenAICodexRateLimitWindow | undefined {
   return {
     remainingPercent: 100 - usedPercent,
     windowSeconds,
-    ...usedCredits === undefined ? {} : { usedCredits },
-    ...remainingCredits === undefined ? {} : { remainingCredits },
-    ...totalCredits === undefined ? {} : { totalCredits },
-    ...resetAt === undefined ? {} : { resetAt },
+    ...(usedCredits === undefined ? {} : { usedCredits }),
+    ...(remainingCredits === undefined ? {} : { remainingCredits }),
+    ...(totalCredits === undefined ? {} : { totalCredits }),
+    ...(resetAt === undefined ? {} : { resetAt }),
   }
 }
 
 function parseLimit(id: string, name: string | undefined, value: unknown): OpenAICodexRateLimit | undefined {
   if (value === undefined || value === null) return undefined
   if (!isRecord(value)) throw new Error('OpenAI Codex returned malformed rate-limit details')
-  const windows = [parseWindow(value['primary_window']), parseWindow(value['secondary_window'])]
-    .filter(window => window !== undefined)
-  return windows.length === 0 ? undefined : { id, ...name === undefined ? {} : { name }, windows }
+  const windows = [parseWindow(value['primary_window']), parseWindow(value['secondary_window'])].filter(
+    (window) => window !== undefined,
+  )
+  return windows.length === 0 ? undefined : { id, ...(name === undefined ? {} : { name }), windows }
 }
 
 function exactAmount(record: Record<string, unknown>, key: string): string {
   const value = record[key]
-  if (typeof value !== 'string' || value.length === 0 || value.length > 64 || !/^-?\d+(?:\.\d+)?$/u.test(value)) {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > 64 ||
+    !/^-?\d+(?:\.\d+)?$/u.test(value)
+  ) {
     throw new Error(`OpenAI Codex returned an invalid ${key} amount`)
   }
   return value
@@ -166,18 +183,28 @@ function exactAmount(record: Record<string, unknown>, key: string): string {
 
 function parseCredits(value: unknown): OpenAICodexCredits | undefined {
   if (value === undefined || value === null) return undefined
-  if (!isRecord(value) || typeof value['has_credits'] !== 'boolean' || typeof value['unlimited'] !== 'boolean') {
+  if (
+    !isRecord(value) ||
+    typeof value['has_credits'] !== 'boolean' ||
+    typeof value['unlimited'] !== 'boolean'
+  ) {
     throw new Error('OpenAI Codex returned malformed credit details')
   }
   if (!value['has_credits']) return undefined
   const balance = value['balance']
-  if (balance !== undefined && balance !== null
-    && (typeof balance !== 'string' || balance.length === 0 || balance.length > 64 || !/^-?\d+(?:\.\d+)?$/u.test(balance))) {
+  if (
+    balance !== undefined &&
+    balance !== null &&
+    (typeof balance !== 'string' ||
+      balance.length === 0 ||
+      balance.length > 64 ||
+      !/^-?\d+(?:\.\d+)?$/u.test(balance))
+  ) {
     throw new Error('OpenAI Codex returned an invalid credit balance')
   }
   return {
     unlimited: value['unlimited'],
-    ...typeof balance === 'string' ? { balance } : {},
+    ...(typeof balance === 'string' ? { balance } : {}),
   }
 }
 
@@ -188,8 +215,12 @@ function parseIndividualLimit(value: unknown): OpenAICodexIndividualLimit | unde
   if (individual === undefined || individual === null) return undefined
   if (!isRecord(individual)) throw new Error('OpenAI Codex returned a malformed individual limit')
   const remainingPercent = individual['remaining_percent']
-  if (typeof remainingPercent !== 'number' || !Number.isFinite(remainingPercent)
-    || remainingPercent < 0 || remainingPercent > 100) {
+  if (
+    typeof remainingPercent !== 'number' ||
+    !Number.isFinite(remainingPercent) ||
+    remainingPercent < 0 ||
+    remainingPercent > 100
+  ) {
     throw new Error('OpenAI Codex returned an invalid individual-limit percentage')
   }
   return {
@@ -225,15 +256,19 @@ export function parseOpenAICodexUsage(value: unknown): OpenAICodexUsage {
     if (name !== undefined && name !== null && typeof name !== 'string') {
       throw new Error('OpenAI Codex returned an invalid additional rate-limit name')
     }
-    const limit = parseLimit(id, typeof name === 'string' && name.length > 0 ? name : undefined, item['rate_limit'])
+    const limit = parseLimit(
+      id,
+      typeof name === 'string' && name.length > 0 ? name : undefined,
+      item['rate_limit'],
+    )
     if (limit !== undefined) limits.push(limit)
   }
   const credits = parseCredits(value['credits'])
   const individualLimit = parseIndividualLimit(value['spend_control'])
   return {
     rateLimits: limits,
-    ...credits === undefined ? {} : { credits },
-    ...individualLimit === undefined ? {} : { individualLimit },
+    ...(credits === undefined ? {} : { credits }),
+    ...(individualLimit === undefined ? {} : { individualLimit }),
   }
 }
 
@@ -245,17 +280,23 @@ export function parseOpenAICodexUsage(value: unknown): OpenAICodexUsage {
  */
 export async function readOpenAICodexRateLimits(
   store: OpenAICodexCredentialStore,
+  requestFetch: typeof globalThis.fetch = globalThis.fetch,
 ): Promise<OpenAICodexUsage> {
   const models = createModels({ credentials: store })
-  models.setProvider(createOpenAICodexProvider())
+  models.setProvider(openaiCodexProvider(requestFetch))
   const auth = await models.getAuth(OPENAI_CODEX_PROVIDER)
   const credential = await store.read(OPENAI_CODEX_PROVIDER)
   const access = auth?.auth.apiKey
   const accountId = credential?.type === 'oauth' ? credential.accountId : undefined
-  if (access === undefined || access.length === 0 || typeof accountId !== 'string' || accountId.length === 0) {
+  if (
+    access === undefined ||
+    access.length === 0 ||
+    typeof accountId !== 'string' ||
+    accountId.length === 0
+  ) {
     throw new Error('OpenAI Codex is signed out')
   }
-  const response = await fetch(OPENAI_CODEX_USAGE_URL, {
+  const response = await requestFetch(OPENAI_CODEX_USAGE_URL, {
     method: 'GET',
     redirect: 'error',
     headers: {

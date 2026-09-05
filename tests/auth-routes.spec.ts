@@ -11,7 +11,9 @@ import {
   OPENAI_CODEX_AUTH_LOGOUT_PATH,
   OpenAICodexWebAuth,
   OPENAI_CODEX_AUTH_STATUS_PATH,
+  OPENAI_CODEX_CONTEXT_WINDOW_SETTINGS_PATH,
   OPENAI_CODEX_MODEL_CATALOG_SETTINGS_PATH,
+  OPENAI_CODEX_PROXY_SETTINGS_PATH,
   REMOTE_WEB_ORIGIN_NOT_TRUSTED,
   registerOpenAICodexAuthRoutes,
   trustedRequestDecision,
@@ -75,6 +77,10 @@ interface CapturedRoute {
 function captureRoutes(
   trustedOrigins: OpenAICodexTrustedOriginsStore = emptyTrustedOrigins,
   preferences?: ImageToolPolicy,
+  proxySettings?: {
+    proxyPreferences(): { proxyMode: 'off' | 'scoped' | 'global'; proxyUrl: string }
+    updateProxyPreferences(patch: Partial<{ proxyMode: 'off' | 'scoped' | 'global'; proxyUrl: string }>): Promise<{ proxyMode: 'off' | 'scoped' | 'global'; proxyUrl: string }>
+  },
 ): CapturedRoute[] {
   const routes: CapturedRoute[] = []
   const ctx = {
@@ -88,7 +94,7 @@ function captureRoutes(
       return factory()
     },
   } as unknown as Context
-  registerOpenAICodexAuthRoutes(ctx, store, trustedOrigins, undefined, preferences)
+  registerOpenAICodexAuthRoutes(ctx, store, trustedOrigins, undefined, preferences, proxySettings)
   return routes
 }
 
@@ -140,11 +146,41 @@ afterEach(async () => {
 })
 
 describe('OpenAI Codex Web OAuth boundary', () => {
+  it('serves and validates the three-state proxy settings', async () => {
+    let current = { proxyMode: 'off' as 'off' | 'scoped' | 'global', proxyUrl: '' }
+    const proxySettings = {
+      proxyPreferences: vi.fn(() => ({ ...current })),
+      updateProxyPreferences: vi.fn(async (patch: Partial<typeof current>) => {
+        current = { ...current, ...patch }
+        return { ...current }
+      }),
+    }
+    const route = captureRoutes(emptyTrustedOrigins, undefined, proxySettings)
+      .find(candidate => candidate.path === OPENAI_CODEX_PROXY_SETTINGS_PATH)
+    if (route === undefined) throw new Error('proxy settings route was not registered')
+
+    const getResponse = response()
+    await route.handler(request({}), getResponse)
+    expect(JSON.parse(getResponse.observed.body ?? 'null')).toEqual({ proxyMode: 'off', proxyUrl: '' })
+
+    const postResponse = response()
+    await route.handler(request({
+      method: 'POST',
+      body: JSON.stringify({ proxyMode: 'scoped', proxyUrl: 'http://127.0.0.1:7890' }),
+    }), postResponse)
+    expect(postResponse.observed.status).toBe(200)
+    expect(current).toEqual({ proxyMode: 'scoped', proxyUrl: 'http://127.0.0.1:7890' })
+
+    const invalidResponse = response()
+    await route.handler(request({ method: 'POST', body: JSON.stringify({ proxyMode: 'sometimes' }) }), invalidResponse)
+    expect(invalidResponse.observed.status).toBe(400)
+  })
+
   it('serves and updates the model discovery subset through the plugin settings route', async () => {
     const snapshot = {
       availableModels: [
-        { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna' },
-        { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol' },
+        { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', contextWindow: 272_000 },
+        { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', contextWindow: 272_000 },
       ],
       models: ['gpt-5.6-luna', 'gpt-5.6-sol'],
     }
@@ -170,6 +206,53 @@ describe('OpenAI Codex Web OAuth boundary', () => {
     expect(postResponse.observed.status).toBe(200)
     expect(updateModelCatalog).toHaveBeenCalledWith({ models: ['gpt-5.6-sol'] })
     expect(JSON.parse(postResponse.observed.body ?? 'null').models).toEqual(['gpt-5.6-sol'])
+  })
+
+  it('serves, updates, resets, and validates the context-window override', async () => {
+    let contextWindow: number | null = null
+    let overrideSparkContextWindow = false
+    const preferences = {
+      contextWindowSnapshot: vi.fn(() => ({ contextWindow, overrideSparkContextWindow })),
+      updateContextWindow: vi.fn(async (patch: { contextWindow?: number | null, overrideSparkContextWindow?: boolean }) => {
+        if (patch.contextWindow !== undefined) contextWindow = patch.contextWindow
+        if (patch.overrideSparkContextWindow !== undefined) overrideSparkContextWindow = patch.overrideSparkContextWindow
+        return { contextWindow, overrideSparkContextWindow }
+      }),
+    } as unknown as ImageToolPolicy
+    const route = captureRoutes(emptyTrustedOrigins, preferences)
+      .find(candidate => candidate.path === OPENAI_CODEX_CONTEXT_WINDOW_SETTINGS_PATH)
+    if (route === undefined) throw new Error('context-window settings route was not registered')
+
+    const getResponse = response()
+    await route.handler(request({}), getResponse)
+    expect(JSON.parse(getResponse.observed.body ?? 'null')).toEqual({
+      contextWindow: null,
+      overrideSparkContextWindow: false,
+    })
+
+    const updateResponse = response()
+    await route.handler(request({ method: 'POST', body: JSON.stringify({ contextWindow: 512_000 }) }), updateResponse)
+    expect(updateResponse.observed.status).toBe(200)
+    expect(contextWindow).toBe(512_000)
+
+    const sparkResponse = response()
+    await route.handler(request({ method: 'POST', body: JSON.stringify({ overrideSparkContextWindow: true }) }), sparkResponse)
+    expect(sparkResponse.observed.status).toBe(200)
+    expect(overrideSparkContextWindow).toBe(true)
+
+    const resetResponse = response()
+    await route.handler(request({ method: 'POST', body: JSON.stringify({ contextWindow: null }) }), resetResponse)
+    expect(resetResponse.observed.status).toBe(200)
+    expect(contextWindow).toBeNull()
+
+    for (const value of [0, 1.5, '272000']) {
+      const invalidResponse = response()
+      await route.handler(request({ method: 'POST', body: JSON.stringify({ contextWindow: value }) }), invalidResponse)
+      expect(invalidResponse.observed.status).toBe(400)
+    }
+    const invalidSparkResponse = response()
+    await route.handler(request({ method: 'POST', body: JSON.stringify({ overrideSparkContextWindow: 'yes' }) }), invalidSparkResponse)
+    expect(invalidSparkResponse.observed.status).toBe(400)
   })
 
   it('returns a stable remote-origin error until the exact effective origin is trusted', async () => {
