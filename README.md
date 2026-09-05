@@ -113,7 +113,7 @@ The Settings page has separate **Enhance read_image** and **Image generation for
 
 `read_image` stores validated bytes as a dsh attachment before returning the actual image block. Local paths are delegated unchanged to Harness, including its configured filesystem and sandbox behavior. The URL extension bounds redirects and bytes, rejects credentials embedded in URLs, rejects local/private/special network targets, and pins each validated public address across the corresponding HTTP hop.
 
-For an eligible Codex GPT conversation, the Web composer also exposes a session-local Fast Mode switch. Enabling it adds the provider's priority service tier only to that conversation; it does not change saved model settings. A neighboring quota bar shows the applicable weekly limit and provider-declared reset time.
+For an eligible Codex GPT conversation, the Web composer also exposes a session-local Fast Mode switch. Enabling it adds the provider's priority service tier only to that conversation; it does not change saved model settings. A neighboring quota bar shows the applicable weekly limit and provider-declared reset time. The Settings page also has a **Force 1.5× speed by default** switch (off by default) that applies Fast Mode to every conversation without the per-conversation toggle; quota is consumed faster while it is on.
 
 ## Search
 

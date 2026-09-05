@@ -14,6 +14,7 @@ import type { ProxyPreferences } from "./proxy.ts";
 import { ImageToolPolicy } from "./tool-policy.ts";
 import type {
   ContextWindowPreferences,
+  FastModePreferences,
   ImageToolPreferences,
   ModelCatalogEntry,
   ModelCatalogSettings,
@@ -35,6 +36,7 @@ export interface OpenAICodexServiceOptions
     ImageToolPreferences,
     ResponseApiPreferences,
     ContextWindowPreferences,
+    FastModePreferences,
     ProxyPreferences {
   models?: string[];
   modelCatalog: readonly ModelCatalogEntry[];
@@ -123,6 +125,16 @@ export class OpenAICodexService {
     patch: Partial<ContextWindowPreferences>
   ): Promise<ContextWindowPreferences> {
     return this.policy.updateContextWindow(patch);
+  }
+
+  fastModePreferences(): FastModePreferences {
+    return this.policy.fastModeSnapshot();
+  }
+
+  updateFastModePreferences(
+    patch: Partial<FastModePreferences>
+  ): Promise<FastModePreferences> {
+    return this.policy.updateFastMode(patch);
   }
 
   modelCatalogSettings(): ModelCatalogSettings {

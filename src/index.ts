@@ -39,12 +39,14 @@ export {
 } from "./imagegen.ts";
 export {
   DEFAULT_CONTEXT_WINDOW_PREFERENCES,
+  DEFAULT_FAST_MODE_PREFERENCES,
   DEFAULT_IMAGE_TOOL_PREFERENCES,
   DEFAULT_RESPONSE_API_PREFERENCES,
   ImageToolPolicy,
 } from "./tool-policy.ts";
 export type {
   ContextWindowPreferences,
+  FastModePreferences,
   ImageToolPreferences,
   ResponseApiPreferences,
 } from "./tool-policy.ts";
@@ -171,6 +173,8 @@ export interface Config {
   useWebSocketContextReuse?: boolean;
   /** Use Codex V2 Responses compaction for Harness compaction calls. */
   useNativeCompaction?: boolean;
+  /** Force the priority service tier on every Codex session. */
+  fastModeDefault?: boolean;
   /** How this plugin applies its proxy URL. */
   proxyMode?: OpenAICodexProxyMode;
   /** HTTP(S) proxy URL; empty uses the launch environment. */
@@ -200,6 +204,7 @@ export const Config: z<Config> = z.object({
   shareImagegenWithOtherModels: z.boolean().default(true),
   useWebSocketContextReuse: z.boolean().default(false),
   useNativeCompaction: z.boolean().default(false),
+  fastModeDefault: z.boolean().default(false),
   proxyMode: z
     .union(["off", "scoped", "global"] as const)
     .default(DEFAULT_PROXY_PREFERENCES.proxyMode),
@@ -223,6 +228,7 @@ export function apply(ctx: Context, config: Config): void {
     shareImagegenWithOtherModels: config.shareImagegenWithOtherModels ?? true,
     useWebSocketContextReuse: config.useWebSocketContextReuse ?? false,
     useNativeCompaction: config.useNativeCompaction ?? false,
+    fastModeDefault: config.fastModeDefault ?? false,
     proxyMode: config.proxyMode ?? DEFAULT_PROXY_PREFERENCES.proxyMode,
     proxyUrl: config.proxyUrl ?? DEFAULT_PROXY_PREFERENCES.proxyUrl,
   });
@@ -252,7 +258,8 @@ export function apply(ctx: Context, config: Config): void {
       () => imageTools.modelCatalogSnapshot().models,
       () => imageTools.contextWindowSnapshot().contextWindow,
       () => imageTools.contextWindowSnapshot().overrideSparkContextWindow,
-      service.proxy.fetch
+      service.proxy.fetch,
+      () => imageTools.fastModeSnapshot().fastModeDefault
     )
   );
   ctx.web.registerSearchProvider(

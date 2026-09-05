@@ -37,6 +37,13 @@ export const en = {
   fastModeEnabledTitle:
     "Current: 1.5× speed, with faster quota consumption. Click to switch to Standard speed.",
   fastModeDisabledTitle: "Current: Standard speed. Click to enable 1.5× speed.",
+  fastMode: "Fast Mode",
+  fastModeIntro:
+    "Speed up Codex requests with the provider's priority service tier.",
+  fastModeDefault: "Force 1.5× speed by default",
+  fastModeDefaultHint:
+    "When enabled, every conversation uses 1.5× speed with faster quota consumption, without toggling the per-conversation ⚡ switch.",
+  fastModeSettingsFailed: "Fast Mode settings could not be saved.",
   requestFailed: "The OpenAI Codex account request failed.",
   remoteOriginTitle: "Browser origin is not trusted",
   remoteOriginDescription:
@@ -163,6 +170,12 @@ export const zh: { [Key in OpenAICodexSettingsKey]: string } = {
   fastModeUnavailableTitle: "此对话暂时无法使用 Fast Mode。",
   fastModeEnabledTitle: "当前：1.5 倍速度，额度消耗更快。点击切换到标准速度",
   fastModeDisabledTitle: "当前：标准速度。点击开启 1.5 倍速度",
+  fastMode: "Fast Mode",
+  fastModeIntro: "通过提供方的 priority service tier 加速 Codex 请求。",
+  fastModeDefault: "默认强制开启 1.5 倍速",
+  fastModeDefaultHint:
+    "开启后所有会话默认使用 1.5 倍速，额度消耗更快，无需逐会话点击 ⚡ 开关。",
+  fastModeSettingsFailed: "无法保存 Fast Mode 设置。",
   requestFailed: "OpenAI Codex 账户请求失败。",
   remoteOriginTitle: "浏览器来源尚未受信任",
   remoteOriginDescription:

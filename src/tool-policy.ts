@@ -44,6 +44,12 @@ export interface ModelCatalogPreferences {
   models: string[];
 }
 
+/** Fast Mode behavior applied to every Codex session. */
+export interface FastModePreferences {
+  /** Force the priority service tier on all sessions without the per-session toggle. */
+  fastModeDefault: boolean;
+}
+
 /** Browser projection containing both available and currently visible models. */
 export interface ModelCatalogSettings extends ModelCatalogPreferences {
   availableModels: ModelCatalogEntry[];
@@ -55,6 +61,7 @@ interface OpenAICodexPreferences
     ResponseApiPreferences,
     ModelCatalogPreferences,
     ContextWindowPreferences,
+    FastModePreferences,
     ProxyPreferences {
   /** Migration-only key written by the unreleased store:true experiment. */
   useStatefulResponses: boolean;
@@ -78,6 +85,11 @@ export const DEFAULT_CONTEXT_WINDOW_PREFERENCES: ContextWindowPreferences = {
   overrideSparkContextWindow: false,
 };
 
+/** Keep Fast Mode a per-session opt-in until the owner forces it globally. */
+export const DEFAULT_FAST_MODE_PREFERENCES: FastModePreferences = {
+  fastModeDefault: false,
+};
+
 const NAMESPACE = "openai-codex" as SettingsNamespace;
 
 function preferenceSchema(
@@ -99,6 +111,7 @@ function preferenceSchema(
     proxyMode: z.union(["off", "scoped", "global"] as const).default("off"),
     proxyUrl: z.string().default(""),
     models: z.array(z.string()).default([...defaultModels]),
+    fastModeDefault: z.boolean().default(false),
   });
 }
 
@@ -119,6 +132,7 @@ export class ImageToolPolicy {
       ...DEFAULT_IMAGE_TOOL_PREFERENCES,
       ...DEFAULT_RESPONSE_API_PREFERENCES,
       ...DEFAULT_CONTEXT_WINDOW_PREFERENCES,
+      ...DEFAULT_FAST_MODE_PREFERENCES,
       ...DEFAULT_PROXY_PREFERENCES,
       useStatefulResponses: false,
       ...base,
@@ -223,6 +237,24 @@ export class ImageToolPolicy {
     await this.scope.update(patch);
     this.replace(this.scope.get());
     return this.contextWindowSnapshot();
+  }
+
+  /** Return the live Fast Mode default shared by all sessions. */
+  fastModeSnapshot(): FastModePreferences {
+    return {
+      fastModeDefault: this.current.fastModeDefault,
+    };
+  }
+
+  /** Persist the Fast Mode default toggle. */
+  async updateFastMode(
+    patch: Partial<FastModePreferences>
+  ): Promise<FastModePreferences> {
+    if (this.scope === undefined)
+      throw new Error("OpenAI Codex settings service is unavailable");
+    await this.scope.update(patch);
+    this.replace(this.scope.get());
+    return this.fastModeSnapshot();
   }
 
   /** Return the live provider proxy mode and explicit URL. */

@@ -49,6 +49,7 @@ describe("OpenAI Codex settings model catalog", () => {
     let selected = availableModels.slice(1).map((model) => model.id);
     let contextWindow: number | null = null;
     let overrideSparkContextWindow = false;
+    let fastModeDefault = false;
     let proxy = { proxyMode: "off", proxyUrl: "" };
     const fetchMock = vi.fn(
       async (
@@ -68,6 +69,16 @@ describe("OpenAI Codex settings model catalog", () => {
             useWebSocketContextReuse: false,
             useNativeCompaction: false,
           });
+        if (path.endsWith("/fast-mode-default")) {
+          if (init?.method === "POST") {
+            const patch = JSON.parse(String(init.body)) as Partial<{
+              fastModeDefault: boolean;
+            }>;
+            if (patch.fastModeDefault !== undefined)
+              fastModeDefault = patch.fastModeDefault;
+          }
+          return json({ fastModeDefault });
+        }
         if (path.endsWith("/proxy")) {
           if (init?.method === "POST") {
             proxy = {
@@ -199,6 +210,26 @@ describe("OpenAI Codex settings model catalog", () => {
     });
     expect(JSON.parse(String(proxyPosts[1]?.[1]?.body))).toEqual({
       proxyUrl: "http://127.0.0.1:7890",
+    });
+
+    const fastModeToggle = await screen.findByRole<HTMLButtonElement>(
+      "switch",
+      { name: en.fastModeDefault }
+    );
+    expect(fastModeToggle.getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByText(en.fastModeDefaultHint)).toBeDefined();
+    fireEvent.click(fastModeToggle);
+    await waitFor(() => {
+      expect(fastModeDefault).toBe(true);
+      expect(fastModeToggle.getAttribute("aria-checked")).toBe("true");
+    });
+    const fastModePost = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        String(input).endsWith("/fast-mode-default") &&
+        init?.method === "POST"
+    );
+    expect(JSON.parse(String(fastModePost?.[1]?.body))).toEqual({
+      fastModeDefault: true,
     });
 
     fireEvent.change(capacity, { target: { value: "1.0001" } });
