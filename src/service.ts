@@ -39,7 +39,7 @@ export interface OpenAICodexServiceOptions
     FastModePreferences,
     ProxyPreferences {
   models?: string[];
-  modelCatalog: readonly ModelCatalogEntry[];
+  modelCatalog: readonly ModelCatalogEntry[] | (() => readonly ModelCatalogEntry[]);
 }
 
 /**
