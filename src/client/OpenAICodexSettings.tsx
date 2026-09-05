@@ -247,25 +247,26 @@ const numberInputStyle: CSSProperties = {
 const proxyModeStyle: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-  gap: 4,
-  padding: 4,
+  overflow: "hidden",
   border: "1px solid var(--dsw-alias-border-l2)",
-  borderRadius: 12,
-  background: "var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.06))",
+  borderRadius: 999,
+  background: "var(--dsw-alias-bg-layer-1)",
+  boxShadow: "0 1px 2px rgba(0, 0, 0, 0.05)",
 };
 const proxyModeButtonStyle: CSSProperties = {
+  boxSizing: "border-box",
   minWidth: 0,
-  minHeight: 38,
-  padding: "7px 10px",
-  border: "1px solid transparent",
-  borderRadius: 9,
+  minHeight: 40,
+  padding: "8px 12px",
+  border: 0,
+  borderRadius: 0,
   background: "transparent",
   color: "var(--dsw-alias-label-secondary)",
   font: "inherit",
   fontSize: 13,
-  fontWeight: 500,
+  fontWeight: 600,
   cursor: "pointer",
-  transition: "background 120ms ease, color 120ms ease, border 120ms ease",
+  transition: "background 140ms ease, color 140ms ease",
 };
 const proxyInputStyle: CSSProperties = {
   ...numberInputStyle,
@@ -353,8 +354,32 @@ function ProxyModeControl({
     { value: "global", label: "proxyModeGlobal" },
   ];
   return (
-    <div style={proxyModeStyle} role="radiogroup" aria-label={t("proxyMode")}>
-      {options.map((option) => {
+    <div
+      style={proxyModeStyle}
+      role="radiogroup"
+      aria-label={t("proxyMode")}
+      onKeyDown={(event) => {
+        if (
+          event.key !== "ArrowLeft" &&
+          event.key !== "ArrowRight" &&
+          event.key !== "ArrowUp" &&
+          event.key !== "ArrowDown"
+        ) {
+          return;
+        }
+        event.preventDefault();
+        const currentIndex = options.findIndex((option) => option.value === value);
+        const direction =
+          event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : -1;
+        const nextIndex =
+          (currentIndex + direction + options.length) % options.length;
+        const nextOption = options[nextIndex];
+        if (nextOption === undefined) return;
+        onChange(nextOption.value);
+        const buttons = event.currentTarget.querySelectorAll("button");
+        buttons.item(nextIndex).focus();
+      }}>
+      {options.map((option, index) => {
         const selected = value === option.value;
         return (
           <button
@@ -366,12 +391,13 @@ function ProxyModeControl({
             style={{
               ...proxyModeButtonStyle,
               opacity: disabled ? 0.55 : 1,
+              ...(index === 0
+                ? {}
+                : { borderLeft: "1px solid var(--dsw-alias-border-l2)" }),
               ...(selected
                 ? {
-                    borderColor: "var(--dsw-alias-border-l2)",
-                    background: "var(--dsw-alias-bg-layer-1)",
-                    color: "var(--dsw-alias-label-primary)",
-                    boxShadow: "0 1px 3px rgba(0, 0, 0, 0.08)",
+                    background: "var(--dsw-alias-button-primary-fill)",
+                    color: "var(--dsw-alias-label-primary-foreground)",
                   }
                 : {}),
             }}
