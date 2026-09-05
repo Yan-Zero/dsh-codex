@@ -93,23 +93,22 @@ export function registerOpenAICodexUsageRoutes(ctx: Context, service: OpenAICode
           }
           if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' })
           if (path === '/events') {
-            res.writeHead(200, {
-              'content-type': 'text/event-stream; charset=utf-8',
-              'cache-control': 'no-store',
-              connection: 'keep-alive',
-              'x-content-type-options': 'nosniff',
-            })
-            const send = (): void => { res.write(`event: usage\ndata: ${JSON.stringify(service.usageTracker.snapshot())}\n\n`) }
-            send()
-            const unsubscribe = service.usageTracker.subscribe(send)
-            const heartbeat = setInterval(() => { res.write(': keepalive\n\n') }, 25_000)
-            req.once('close', () => {
-              clearInterval(heartbeat)
-              unsubscribe()
-            })
+            res.writeHead(204, { 'cache-control': 'no-store' })
+            res.end()
             return
           }
           const query = filters(req)
+          if (path === '/analytics') {
+            const [summary, timeseries, providers, models, reasoning, tasks] = await Promise.all([
+              ledger.summary(query),
+              ledger.usageOverTime(query),
+              ledger.breakdown('provider', query),
+              ledger.breakdown('model', query),
+              ledger.breakdown('reasoning_effort', query),
+              ledger.tasks(query, 25),
+            ])
+            return json(res, 200, { summary, timeseries, providers, models, reasoning, tasks })
+          }
           if (path === '/summary') return json(res, 200, await ledger.summary(query))
           if (path === '/timeseries') return json(res, 200, await ledger.usageOverTime(query))
           if (path === '/providers') return json(res, 200, await ledger.breakdown('provider', query))

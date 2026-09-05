@@ -32,6 +32,7 @@ describe('OpenAI Codex settings model catalog', () => {
     let selected = availableModels.map(model => model.id)
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       const path = String(input)
+      if (path.endsWith('/auth/local-status')) return json({ authenticated: false })
       if (path.endsWith('/auth/status')) return json({ status: 'signed-out' })
       if (path.endsWith('/image-tools')) return json({ modifyReadImage: true, shareImagegenWithOtherModels: true })
       if (path.endsWith('/response-api')) return json({ useWebSocketContextReuse: false, useNativeCompaction: false })
@@ -54,5 +55,37 @@ describe('OpenAI Codex settings model catalog', () => {
     const modelPost = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/models') && init?.method === 'POST')
     expect(modelPost).toBeDefined()
     expect(JSON.parse(String(modelPost?.[1]?.body))).toEqual({ models: ['gpt-5.6-sol'] })
+  })
+})
+
+describe('OpenAI Codex settings authentication', () => {
+  it('starts device-code login without opening a popup and renders the one-time code', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request): Promise<Response> => {
+      const path = String(input)
+      if (path.endsWith('/auth/local-status')) return json({ authenticated: false })
+      if (path.endsWith('/auth/status')) return json({ status: 'signed-out' })
+      if (path.endsWith('/auth/device-login')) {
+        return json({
+          method: 'device_code',
+          url: 'https://auth.openai.com/codex/device',
+          code: 'ABCD-EFGH',
+        })
+      }
+      if (path.endsWith('/image-tools')) return json({ modifyReadImage: true, shareImagegenWithOtherModels: true })
+      if (path.endsWith('/response-api')) return json({ useWebSocketContextReuse: false, useNativeCompaction: false })
+      if (path.endsWith('/models')) return json({ availableModels: [], models: [] })
+      throw new Error(`unexpected settings request: ${path}`)
+    })
+    const open = vi.spyOn(window, 'open')
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<OpenAICodexSettings t={t} />)
+    fireEvent.click(await screen.findByRole('button', { name: en.loginDeviceCode }))
+
+    expect(await screen.findByText('ABCD-EFGH')).toBeTruthy()
+    expect(screen.getByRole<HTMLAnchorElement>('link', { name: en.openDeviceCodePage }).href)
+      .toBe('https://auth.openai.com/codex/device')
+    expect(open).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledWith('/plugins/dsh-openai-codex/auth/device-login', expect.objectContaining({ method: 'POST' }))
   })
 })

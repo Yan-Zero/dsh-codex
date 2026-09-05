@@ -45,7 +45,9 @@ pnpm dsh plugin --profile web add https://github.com/chenmzh/dsh-codex/releases/
 
 本地 checkout 可先运行 `pnpm install && pnpm run build`，再用 `link:/absolute/path/to/dsh-codex` 安装。
 
-打开 **设置 → OpenAI Codex → 使用 ChatGPT 登录**。插件会打开 OpenAI 授权页面，并通过 localhost 回调完成登录。账号页面只按 OpenAI 服务端实际返回的精度显示 Codex 额度进度；不会反推 Credit denominator，也不会显示拿不到的 Credit 值。
+打开 **设置 → OpenAI Codex**，选择登录方式。dsh-web 运行在 SSH 主机上时，推荐点击 **使用设备码登录**：在任意已登录 ChatGPT 的设备上打开页面中显示的授权网址，输入一次性代码，并保持 dsh 页面开启，直到它显示登录成功。**浏览器回调登录** 仍适用于本机浏览器，通过 localhost 回调完成授权。切换登录方式时，插件会取消另一种方式中卡住的登录任务。
+
+账号页面只按 OpenAI 服务端实际返回的精度显示 Codex 额度进度；不会反推 Credit denominator，也不会显示拿不到的 Credit 值。
 
 终端和无界面环境仍可使用 CLI：
 

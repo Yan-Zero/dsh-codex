@@ -8,6 +8,13 @@ import type { OpenAICodexSearchRequestRecord } from './search.ts'
 /** Dedicated log event written before an OpenAI Codex search dispatch. */
 export const OPENAI_CODEX_SEARCH_MODEL_REQUEST_EVENT = 'web/openai-codex-search-llm-request'
 
+declare module '@deepseek-ai/dsh-session' {
+  interface SessionEventMap {
+    /** Exact secret-free OpenAI Codex standalone-search request. */
+    'web/openai-codex-search-llm-request': OpenAICodexSearchRequestRecord
+  }
+}
+
 declare module '@deepseek-ai/dsh-session/types' {
   interface SessionEventMap {
     /** Exact secret-free OpenAI Codex standalone-search request. */
@@ -39,7 +46,7 @@ export function recordOpenAICodexSearchRequest(
   ctx: Context,
   request: OpenAICodexSearchRequestRecord,
 ): void {
-  ctx.get('agents')?.currentInitiator()?.session.append(
+  (ctx.get('agents')?.currentInitiator()?.session as any)?.append(
     OPENAI_CODEX_SEARCH_MODEL_REQUEST_EVENT,
     request,
   )

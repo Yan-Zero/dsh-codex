@@ -40,6 +40,12 @@ export function openAICodexModelCatalog(): readonly ModelCatalogEntry[] {
 
 /** Provider idle ceiling used by the composite route. */
 export const OPENAI_CODEX_STREAM_IDLE_TIMEOUT_MS = 300_000
+/** Request-level cap for the accumulated base64 image payload. */
+export const OPENAI_CODEX_MAX_REQUEST_IMAGE_BYTES = 20 * 1024 * 1024
+/** Per-image pixel cap expected by the current durable attachment pipeline. */
+export const OPENAI_CODEX_REQUEST_IMAGE_PIXEL_BUDGET = 2048 * 2048
+/** Per-image encoded-byte cap before base64 expansion. */
+export const OPENAI_CODEX_REQUEST_IMAGE_MAX_BYTES = 1024 * 1024
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -253,14 +259,22 @@ export function createOpenAICodexAdapter(
 ): PiAiAdapter {
   const provider = createOpenAICodexProvider()
   const responses = new OpenAICodexResponseRuntime(responsePreferences)
-  const profiles = new Map<string, ResolvedPiAiProviderProfile>([[OPENAI_CODEX_PROVIDER, {
+  const profile: ResolvedPiAiProviderProfile & {
+    maxRequestImageBytes: number
+    requestImagePixelBudget: number
+    requestImageMaxBytes: number
+  } = {
     provider: OPENAI_CODEX_PROVIDER,
     displayName: 'OpenAI Codex',
     streamIdleTimeoutMs: OPENAI_CODEX_STREAM_IDLE_TIMEOUT_MS,
+    maxRequestImageBytes: OPENAI_CODEX_MAX_REQUEST_IMAGE_BYTES,
+    requestImagePixelBudget: OPENAI_CODEX_REQUEST_IMAGE_PIXEL_BUDGET,
+    requestImageMaxBytes: OPENAI_CODEX_REQUEST_IMAGE_MAX_BYTES,
     retryPolicy: OPENAI_CODEX_RETRY_POLICY,
     configuredMaxTokens: new Map(),
     piProvider: responses.wrap(requestProvider(provider, fastMode)),
-  }]])
+  }
+  const profiles = new Map<string, ResolvedPiAiProviderProfile>([[OPENAI_CODEX_PROVIDER, profile]])
   const models: MutableModels = createModels({ credentials })
   models.setProvider(provider)
   return new OpenAICodexAdapter({

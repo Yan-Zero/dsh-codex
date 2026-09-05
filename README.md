@@ -45,7 +45,9 @@ pnpm dsh plugin --profile web add https://github.com/chenmzh/dsh-codex/releases/
 
 A local checkout can be built with `pnpm install && pnpm run build` and installed using `link:/absolute/path/to/dsh-codex`.
 
-Open **Settings → OpenAI Codex → Sign in with ChatGPT**. The plugin opens OpenAI's authorization page and completes the localhost callback. The account page shows live Codex quota bars at exactly the precision returned by OpenAI. The UI does not invent a credit denominator or display unavailable credit values.
+Open **Settings → OpenAI Codex** and choose a login method. **Sign in with device code** is recommended when dsh-web runs over SSH: open the displayed verification page on any device where ChatGPT is signed in, enter the one-time code, and leave the dsh page open until it reports success. **Browser sign-in** remains available for a local browser and completes through the localhost callback. Starting one method cancels any login attempt that is stuck in the other method.
+
+The account page shows live Codex quota bars at exactly the precision returned by OpenAI. The UI does not invent a credit denominator or display unavailable credit values.
 
 The CLI remains available for terminal and headless installations:
 

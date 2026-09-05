@@ -15,7 +15,9 @@ import {
 } from './usage.ts'
 import type { OpenAICodexUsage } from './usage.ts'
 import {
+  OPENAI_CODEX_AUTH_DEVICE_LOGIN_PATH,
   OPENAI_CODEX_AUTH_LOGIN_PATH,
+  OPENAI_CODEX_AUTH_LOCAL_STATUS_PATH,
   OPENAI_CODEX_AUTH_LOGOUT_PATH,
   OPENAI_CODEX_AUTH_STATUS_PATH,
 } from './auth-paths.ts'
@@ -34,7 +36,9 @@ import type {
 } from './tool-policy.ts'
 
 export {
+  OPENAI_CODEX_AUTH_DEVICE_LOGIN_PATH,
   OPENAI_CODEX_AUTH_LOGIN_PATH,
+  OPENAI_CODEX_AUTH_LOCAL_STATUS_PATH,
   OPENAI_CODEX_AUTH_LOGOUT_PATH,
   OPENAI_CODEX_AUTH_STATUS_PATH,
 } from './auth-paths.ts'
@@ -60,20 +64,22 @@ export type OpenAICodexWebAuthStatus =
   | { status: 'signed-in'; usage: OpenAICodexUsage; quotaError?: string }
   | { status: 'error'; message: string }
 
-interface LoginChallenge {
-  url: string
-}
+/** Provider-native OpenAI authorization method selected by the Web surface. */
+export type OpenAICodexLoginMethod = 'browser' | 'device_code'
+
+/** Public, non-secret instructions needed to complete one login attempt. */
+export type LoginChallenge =
+  | { method: 'browser'; url: string }
+  | { method: 'device_code'; url: string; code: string }
 
 /**
- * Maximum time one browser-login operation may stay pending. The OAuth
- * callback listener can otherwise wait forever (closed popup, callback lost
- * to another listener, or sign-in completed through a different front door),
- * which pins the public status at `signing-in` even when a valid credential
- * is already stored.
+ * Maximum time one login operation may stay pending. A browser callback can
+ * be lost and an uncompleted device-code flow can otherwise poll forever,
+ * pinning the public status at `signing-in`.
  */
 export const OPENAI_CODEX_SIGN_IN_TIMEOUT_MS = 10 * 60 * 1000
 
-/** Testable timing boundaries for the authorization URL and complete callback flow. */
+/** Testable timing boundaries for the authorization challenge and complete login flow. */
 export interface OpenAICodexWebAuthOptions {
   challengeTimeoutMs?: number
   signInTimeoutMs?: number
@@ -101,6 +107,7 @@ function waitForPromptAbort(prompt: AuthPrompt): Promise<string> {
 export class OpenAICodexWebAuth {
   private state: OpenAICodexWebAuthStatus = { status: 'signed-out' }
   private operation: Promise<void> | undefined
+  private method: OpenAICodexLoginMethod | undefined
   private cancellation: AbortController | undefined
   private challenge: LoginChallenge | undefined
   private challengeWaiters: Array<{ resolve(value: LoginChallenge): void; reject(error: unknown): void }> = []
@@ -129,16 +136,20 @@ export class OpenAICodexWebAuth {
     return this.readStoredStatus()
   }
 
-  /** Start or join the current browser-login operation. */
-  async signIn(): Promise<LoginChallenge> {
-    if (this.operation === undefined) this.start()
+  /** Start or join one login operation, switching away from a stuck alternate method when requested. */
+  async signIn(method: OpenAICodexLoginMethod = 'browser'): Promise<LoginChallenge> {
+    if (this.operation !== undefined && this.method !== method) {
+      this.cancelSignIn(new Error('OpenAI Codex sign-in method changed'))
+      await this.operation.catch(() => undefined)
+    }
+    if (this.operation === undefined) this.start(method)
     if (this.challenge !== undefined) return this.challenge
     return new Promise<LoginChallenge>((resolve, reject) => {
       this.challengeWaiters.push({ resolve, reject })
     })
   }
 
-  /** Cancel any callback listener, wait for quiescence, then delete the credential. */
+  /** Cancel any provider login, wait for quiescence, then delete the credential. */
   async signOut(): Promise<void> {
     this.cancelSignIn(new Error('OpenAI Codex sign-in cancelled'))
     await this.operation?.catch(() => undefined)
@@ -147,15 +158,16 @@ export class OpenAICodexWebAuth {
     this.state = { status: 'signed-out' }
   }
 
-  /** Stop the owned callback listener during plugin disposal. */
+  /** Stop the owned provider login during plugin disposal. */
   async dispose(): Promise<void> {
     this.cancelSignIn(new Error('OpenAI Codex plugin disposed'))
     await this.operation?.catch(() => undefined)
   }
 
-  private start(): void {
+  private start(method: OpenAICodexLoginMethod): void {
     const cancellation = new AbortController()
     this.cancellation = cancellation
+    this.method = method
     this.challenge = undefined
     this.state = { status: 'signing-in' }
     this.challengeTimer = setTimeout(() => {
@@ -163,13 +175,15 @@ export class OpenAICodexWebAuth {
     }, this.challengeTimeoutMs)
     this.challengeTimer.unref()
     const signInTimer = setTimeout(() => {
-      this.cancelSignIn(new Error('OpenAI Codex sign-in timed out waiting for the browser callback'))
+      this.cancelSignIn(new Error(method === 'browser'
+        ? 'OpenAI Codex sign-in timed out waiting for the browser callback'
+        : 'OpenAI Codex device-code sign-in timed out waiting for authorization'))
     }, this.signInTimeoutMs)
     signInTimer.unref()
     this.operation = loginOpenAICodex({
       signal: cancellation.signal,
       prompt: prompt => prompt.type === 'select'
-        ? Promise.resolve('browser')
+        ? Promise.resolve(method)
         : waitForPromptAbort(prompt),
       notify: event => { this.onEvent(event) },
     }, this.store).then(
@@ -184,7 +198,7 @@ export class OpenAICodexWebAuth {
       },
       async (error: unknown) => {
         this.rejectChallenge(error)
-        // A failed or abandoned browser flow must not mask a valid stored
+        // A failed or abandoned provider flow must not mask a valid stored
         // credential: sign-in may have completed through another front door.
         try {
           const stored = await this.readStoredStatus()
@@ -200,14 +214,21 @@ export class OpenAICodexWebAuth {
       clearTimeout(signInTimer)
       this.operation = undefined
       this.cancellation = undefined
+      this.method = undefined
     })
   }
 
   private onEvent(event: AuthEvent): void {
-    if (event.type !== 'auth_url') return
+    if (event.type !== 'auth_url' && event.type !== 'device_code') return
+    const method: OpenAICodexLoginMethod = event.type === 'auth_url' ? 'browser' : 'device_code'
+    if (method !== this.method) {
+      this.cancelSignIn(new Error('OpenAI Codex returned a challenge for the wrong sign-in method'))
+      return
+    }
+    const rawUrl = event.type === 'auth_url' ? event.url : event.verificationUri
     let url: URL
     try {
-      url = new URL(event.url)
+      url = new URL(rawUrl)
     } catch {
       const error = new Error('OpenAI returned an invalid authorization URL')
       this.cancelSignIn(error)
@@ -218,7 +239,9 @@ export class OpenAICodexWebAuth {
       this.cancelSignIn(error)
       return
     }
-    const challenge = { url: event.url }
+    const challenge: LoginChallenge = event.type === 'auth_url'
+      ? { method: 'browser', url: event.url }
+      : { method: 'device_code', url: event.verificationUri, code: event.userCode }
     this.challenge = challenge
     this.clearChallengeTimer()
     for (const waiter of this.challengeWaiters.splice(0)) waiter.resolve(challenge)
@@ -520,6 +543,15 @@ export function registerOpenAICodexAuthRoutes(
     const routes = [
       ctx.webServer.register({
         kind: 'exact',
+        path: OPENAI_CODEX_AUTH_LOCAL_STATUS_PATH,
+        handler: async (req, res) => {
+          if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' })
+          if (!await authorize(req, res)) return
+          json(res, 200, await openAICodexAuthStatus(store))
+        },
+      }),
+      ctx.webServer.register({
+        kind: 'exact',
         path: OPENAI_CODEX_AUTH_STATUS_PATH,
         handler: async (req, res) => {
           if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' })
@@ -534,7 +566,20 @@ export function registerOpenAICodexAuthRoutes(
           if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
           if (!await authorize(req, res)) return
           try {
-            json(res, 200, await auth.signIn())
+            json(res, 200, await auth.signIn('browser'))
+          } catch (error: unknown) {
+            json(res, 500, { error: safeMessage(error) })
+          }
+        },
+      }),
+      ctx.webServer.register({
+        kind: 'exact',
+        path: OPENAI_CODEX_AUTH_DEVICE_LOGIN_PATH,
+        handler: async (req, res) => {
+          if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
+          if (!await authorize(req, res)) return
+          try {
+            json(res, 200, await auth.signIn('device_code'))
           } catch (error: unknown) {
             json(res, 500, { error: safeMessage(error) })
           }

@@ -11,7 +11,9 @@ import type {
 import type { OpenAICodexSettingsKey } from './locales.ts'
 
 const STATUS_PATH = '/plugins/dsh-openai-codex/auth/status'
+const LOCAL_STATUS_PATH = '/plugins/dsh-openai-codex/auth/local-status'
 const LOGIN_PATH = '/plugins/dsh-openai-codex/auth/login'
+const DEVICE_LOGIN_PATH = '/plugins/dsh-openai-codex/auth/device-login'
 const LOGOUT_PATH = '/plugins/dsh-openai-codex/auth/logout'
 const IMAGE_TOOLS_PATH = '/plugins/dsh-openai-codex/image-tools'
 const RESPONSE_API_PATH = '/plugins/dsh-openai-codex/response-api'
@@ -28,9 +30,13 @@ type AccountStatus =
   | { status: 'remote-web-origin-not-trusted' }
   | { status: 'error'; message: string }
 
-interface LoginChallenge {
-  url: string
+interface LocalAccountStatus {
+  authenticated: boolean
 }
+
+type LoginChallenge =
+  | { method: 'browser'; url: string }
+  | { method: 'device_code'; url: string; code: string }
 
 /** Dependencies injected by the browser plugin entry. */
 export interface OpenAICodexSettingsInjected {
@@ -63,6 +69,7 @@ const modelListStyle: CSSProperties = { display: 'grid', gridTemplateColumns: 'r
 const modelRowStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 9, minHeight: 30, fontSize: 14, color: 'var(--dsw-alias-label-primary)', cursor: 'pointer' }
 const modelIdStyle: CSSProperties = { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, color: 'var(--dsw-alias-label-secondary)' }
 const commandStyle: CSSProperties = { margin: 0, padding: '10px 12px', overflowX: 'auto', borderRadius: 8, background: 'var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.06))', color: 'var(--dsw-alias-label-primary)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 13, lineHeight: '20px', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }
+const deviceCodeStyle: CSSProperties = { ...commandStyle, alignSelf: 'flex-start', paddingInline: 18, fontSize: 20, fontWeight: 700, letterSpacing: 2 }
 
 function PreferenceToggle({
   checked,
@@ -237,6 +244,7 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   if (t === undefined) throw new Error('OpenAI Codex settings requires its translation function')
   const [status, setStatus] = useState<AccountStatus>({ status: 'loading' })
   const [busy, setBusy] = useState(false)
+  const [deviceChallenge, setDeviceChallenge] = useState<Extract<LoginChallenge, { method: 'device_code' }> | undefined>()
   const [copied, setCopied] = useState(false)
   const [copyFailed, setCopyFailed] = useState(false)
   const [imageTools, setImageTools] = useState<ImageToolPreferences | undefined>()
@@ -252,15 +260,36 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
 
   const refresh = useCallback(async () => {
     try {
-      setStatus(await jsonRequest<AccountStatus>(STATUS_PATH))
+      const next = await jsonRequest<AccountStatus>(STATUS_PATH)
+      setStatus(next)
+      if (next.status === 'signed-in') setDeviceChallenge(undefined)
     } catch (error: unknown) {
-      setStatus(error instanceof AccountRequestError && error.code === 'remote-web-origin-not-trusted'
-        ? { status: 'remote-web-origin-not-trusted' }
-        : { status: 'error', message: error instanceof Error ? error.message : t('requestFailed') })
+      const message = error instanceof Error ? error.message : t('requestFailed')
+      setStatus(current => current.status === 'signed-in'
+        ? { ...current, quotaError: message }
+        : error instanceof AccountRequestError && error.code === 'remote-web-origin-not-trusted'
+          ? { status: 'remote-web-origin-not-trusted' }
+          : { status: 'error', message })
     }
   }, [t])
 
-  useEffect(() => { void refresh() }, [refresh])
+  useEffect(() => {
+    let active = true
+    void jsonRequest<LocalAccountStatus>(LOCAL_STATUS_PATH).then(
+      local => {
+        if (!active) return
+        setStatus(current => current.status !== 'loading'
+          ? current
+          : local.authenticated
+            ? { status: 'signed-in', usage: { rateLimits: [] } }
+            : { status: 'signed-out' })
+      },
+      () => {},
+    ).finally(() => {
+      if (active) void refresh()
+    })
+    return () => { active = false }
+  }, [refresh])
   useEffect(() => {
     void jsonRequest<ImageToolPreferences>(IMAGE_TOOLS_PATH).then(
       value => { setImageTools(value); setImageToolsError(undefined) },
@@ -288,13 +317,19 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
     return () => { window.clearInterval(timer) }
   }, [refresh, status.status])
 
-  const signIn = async (): Promise<void> => {
-    const popup = window.open('about:blank', '_blank')
+  const signIn = async (method: LoginChallenge['method']): Promise<void> => {
+    const popup = method === 'browser' ? window.open('about:blank', '_blank') : null
     if (popup !== null) popup.opener = null
     setBusy(true)
+    setDeviceChallenge(undefined)
     setStatus({ status: 'signing-in' })
     try {
-      const challenge = await jsonRequest<LoginChallenge>(LOGIN_PATH, 'POST')
+      const challenge = await jsonRequest<LoginChallenge>(method === 'browser' ? LOGIN_PATH : DEVICE_LOGIN_PATH, 'POST')
+      if (challenge.method !== method) throw new Error('OpenAI Codex returned the wrong sign-in challenge')
+      if (challenge.method === 'device_code') {
+        setDeviceChallenge(challenge)
+        return
+      }
       if (popup === null) {
         setStatus({ status: 'error', message: t('popupBlocked') })
         return
@@ -314,6 +349,7 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
     setBusy(true)
     try {
       await jsonRequest<{ ok: true }>(LOGOUT_PATH, 'POST')
+      setDeviceChallenge(undefined)
       setStatus({ status: 'signed-out' })
     } catch (error: unknown) {
       setStatus({ status: 'error', message: error instanceof Error ? error.message : t('requestFailed') })
@@ -406,9 +442,27 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
             ? null
             : status.status === 'signed-in'
             ? <button type="button" style={buttonStyle} disabled={busy} onClick={() => { void signOut() }}>{busy ? t('working') : t('logout')}</button>
-            : <button type="button" style={primaryButtonStyle} disabled={busy} onClick={() => { void signIn() }}>{busy ? t('working') : status.status === 'error' || status.status === 'reauth-required' ? t('loginAgain') : t('login')}</button>}
+            : (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                <button type="button" style={primaryButtonStyle} disabled={busy} onClick={() => { void signIn('device_code') }}>
+                  {busy ? t('working') : t('loginDeviceCode')}
+                </button>
+                <button type="button" style={buttonStyle} disabled={busy} onClick={() => { void signIn('browser') }}>
+                  {t('loginBrowser')}
+                </button>
+              </div>
+            )}
         </div>
         {status.status === 'error' || status.status === 'reauth-required' ? <p style={errorStyle}>{status.message}</p> : null}
+        {deviceChallenge === undefined ? null : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <p style={bodyStyle}>{t('deviceCodeInstructions')}</p>
+            <code style={deviceCodeStyle}>{deviceChallenge.code}</code>
+            <a href={deviceChallenge.url} target="_blank" rel="noreferrer" style={{ ...buttonStyle, alignSelf: 'flex-start', textDecoration: 'none' }}>
+              {t('openDeviceCodePage')}
+            </a>
+          </div>
+        )}
         {status.status === 'remote-web-origin-not-trusted' ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <p style={errorStyle}>{t('remoteOriginDescription')}</p>

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  OPENAI_CODEX_AUTH_DEVICE_LOGIN_PATH,
   OPENAI_CODEX_AUTH_LOGIN_PATH,
   OPENAI_CODEX_AUTH_LOGOUT_PATH,
   OpenAICodexWebAuth,
@@ -204,6 +205,7 @@ describe('OpenAI Codex Web OAuth boundary', () => {
   it.each([
     ['status', OPENAI_CODEX_AUTH_STATUS_PATH, 'GET'],
     ['login', OPENAI_CODEX_AUTH_LOGIN_PATH, 'POST'],
+    ['device login', OPENAI_CODEX_AUTH_DEVICE_LOGIN_PATH, 'POST'],
     ['logout', OPENAI_CODEX_AUTH_LOGOUT_PATH, 'POST'],
   ] as const)('applies the remote-origin boundary to %s', async (_label, path, method) => {
     const route = captureRoutes().find(candidate => candidate.path === path)
@@ -285,13 +287,75 @@ describe('OpenAI Codex Web OAuth boundary', () => {
     interaction.notify({ type: 'auth_url', url: 'https://auth.openai.com/authorize' })
 
     await expect(Promise.all([first, second])).resolves.toEqual([
-      { url: 'https://auth.openai.com/authorize' },
-      { url: 'https://auth.openai.com/authorize' },
+      { method: 'browser', url: 'https://auth.openai.com/authorize' },
+      { method: 'browser', url: 'https://auth.openai.com/authorize' },
     ])
-    await expect(auth.signIn()).resolves.toEqual({ url: 'https://auth.openai.com/authorize' })
+    await expect(auth.signIn()).resolves.toEqual({ method: 'browser', url: 'https://auth.openai.com/authorize' })
     expect(mocked.login).toHaveBeenCalledOnce()
     completion.resolve()
     await completion.promise
+    await auth.dispose()
+  })
+
+  it('selects provider device-code login and returns the verification page and one-time code', async () => {
+    const completion = deferred<void>()
+    mocked.login.mockImplementation(async (interaction: AuthInteraction) => {
+      await expect(interaction.prompt({
+        type: 'select',
+        message: 'Select login method',
+        options: [
+          { id: 'browser', label: 'Browser' },
+          { id: 'device_code', label: 'Device code' },
+        ],
+      })).resolves.toBe('device_code')
+      interaction.notify({
+        type: 'device_code',
+        verificationUri: 'https://auth.openai.com/codex/device',
+        userCode: 'ABCD-EFGH',
+        intervalSeconds: 5,
+        expiresInSeconds: 900,
+      })
+      return completion.promise
+    })
+    const auth = new OpenAICodexWebAuth(store)
+
+    await expect(auth.signIn('device_code')).resolves.toEqual({
+      method: 'device_code',
+      url: 'https://auth.openai.com/codex/device',
+      code: 'ABCD-EFGH',
+    })
+    completion.resolve()
+    await completion.promise
+    await auth.dispose()
+  })
+
+  it('cancels a stuck browser callback before switching to device-code login', async () => {
+    let browserSignal: AbortSignal | undefined
+    mocked.login
+      .mockImplementationOnce((interaction: AuthInteraction) => {
+        browserSignal = interaction.signal
+        interaction.notify({ type: 'auth_url', url: 'https://auth.openai.com/authorize' })
+        return abortableLogin(interaction)
+      })
+      .mockImplementationOnce((interaction: AuthInteraction) => {
+        interaction.notify({
+          type: 'device_code',
+          verificationUri: 'https://auth.openai.com/codex/device',
+          userCode: 'WXYZ-1234',
+          intervalSeconds: 5,
+          expiresInSeconds: 900,
+        })
+        return abortableLogin(interaction)
+      })
+    const auth = new OpenAICodexWebAuth(store)
+
+    await expect(auth.signIn('browser')).resolves.toMatchObject({ method: 'browser' })
+    await expect(auth.signIn('device_code')).resolves.toEqual({
+      method: 'device_code',
+      url: 'https://auth.openai.com/codex/device',
+      code: 'WXYZ-1234',
+    })
+    expect(browserSignal?.aborted).toBe(true)
     await auth.dispose()
   })
 
@@ -383,7 +447,7 @@ describe('OpenAI Codex Web OAuth boundary', () => {
     if (interaction === undefined) throw new Error('login interaction was not captured')
     interaction.notify({ type: 'auth_url', url: 'https://auth.openai.com/authorize' })
 
-    await expect(challenge).resolves.toEqual({ url: 'https://auth.openai.com/authorize' })
+    await expect(challenge).resolves.toEqual({ method: 'browser', url: 'https://auth.openai.com/authorize' })
     await vi.waitFor(() => { expect(interaction?.signal?.aborted).toBe(true) })
     await auth.dispose()
     await expect(auth.status()).resolves.toEqual({
