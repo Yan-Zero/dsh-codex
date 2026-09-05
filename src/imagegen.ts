@@ -116,8 +116,14 @@ function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
 export class OpenAICodexImageClient {
   private readonly models: Models
 
-  /** @param credentials - shared refreshable OAuth store. */
-  constructor(credentials: OpenAICodexCredentialStore) {
+  /**
+   * @param credentials - shared refreshable OAuth store.
+   * @param requestFetch - request transport used after credentials resolve.
+   */
+  constructor(
+    credentials: OpenAICodexCredentialStore,
+    private readonly requestFetch: typeof globalThis.fetch = globalThis.fetch,
+  ) {
     const models = createModels({ credentials })
     models.setProvider(openaiCodexProvider())
     this.models = models
@@ -148,7 +154,7 @@ export class OpenAICodexImageClient {
     }
     let response: Response
     try {
-      response = await fetch(endpoint, {
+      response = await this.requestFetch(endpoint, {
         method: 'POST',
         redirect: 'error',
         headers: {
@@ -295,8 +301,9 @@ export function imagegenTool(
   ctx: Context,
   credentials: OpenAICodexCredentialStore,
   policy: ImageToolPolicy,
+  requestFetch: typeof globalThis.fetch = globalThis.fetch,
 ): ToolDefinition {
-  const client = new OpenAICodexImageClient(credentials)
+  const client = new OpenAICodexImageClient(credentials, requestFetch)
   return defineTool({
     name: IMAGEGEN_TOOL_NAME,
     description: 'Generate or edit an image with gpt-image-2. Omit both reference fields for a new image. Use referenced_image_paths for workspace files, or num_last_images_to_include for attached, viewed, or previously generated conversation images. Never provide both. Multiple images keep chronological/path-array order; identify them as Image 1, Image 2, and so on in the prompt. The generated PNG is always saved in the active local or Remote SSH workspace; output_path chooses its location, otherwise a unique generated-<timestamp>-<id>.png name is used.',

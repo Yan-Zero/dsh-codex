@@ -15,6 +15,7 @@ Use a ChatGPT subscription in [DeepSeek Harness](https://github.com/deepseek-ai/
 - an `imagegen` tool backed by `gpt-image-2`, with workspace or conversation reference images and automatic workspace output
 - browser image input through dsh's existing paste and drop controls
 - a per-conversation Fast Mode switch and compact weekly quota indicator in the Web composer
+- a three-scope HTTP(S) proxy control for Codex-only or process-wide routing
 
 ChatGPT subscription authentication and usage-based OpenAI API access are different products. This plugin uses the ChatGPT Codex backend only; it does not turn a subscription into a general-purpose OpenAI API credential.
 
@@ -86,6 +87,16 @@ The initial value can also be seeded in exact tokens:
 
 This mirrors Codex CLI's `model_context_window` concept on the Harness side; no context-window field is sent to the Responses endpoint. The resolved capacity drives dsh's context meter, overflow classification, output-token clamping, and automatic-compaction threshold. A smaller value compacts earlier. A larger value does not increase the backend model's real capacity, so unsupported values can still end in a provider overflow error.
 
+## Network proxy
+
+Open **Settings → OpenAI Codex → Network proxy** to select one of three scopes:
+
+- **Follow dsh** leaves networking untouched. Codex inherits any process-wide proxy configured when dsh started.
+- **Codex only** injects the selected proxy into Codex model SSE requests, native compaction, standalone search, image generation, and quota reads. OAuth token refresh and WebSocket transport still follow the process policy.
+- **All dsh** applies the proxy process-wide, including OAuth; requests from other plugins are affected too. Turning it off restores the policy that was active before this plugin overrode it.
+
+The URL accepts `http://` and `https://` proxies. Leave it blank to use `DSH_CODEX_PROXY`, then the standard `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` environment variables. The default mode is **Follow dsh**, so installing the plugin never silently changes the process dispatcher.
+
 ## Images
 
 Image support uses dsh's durable attachment path:
@@ -148,7 +159,7 @@ Keeping the stores separate prevents two clients from racing the same rotating r
 
 ## Compatibility notes
 
-- This branch targets the published DSH `0.1.1-rc.2` plugin surfaces and remains runtime-compatible with the in-development `0.1.2-alpha.2` settings API. It uses `@earendil-works/pi-ai` `0.84.4` and migrates earlier pi-ai replay envelopes while reading history so existing reasoning/tool metadata remains usable after upgrades.
+- This branch targets the coherent published DSH `0.1.1-rc.2` plugin surfaces. Process-wide proxy mode composes with the official `dsh-http-proxy` library when a newer Harness provides it and uses a reversible compatibility dispatcher otherwise. It uses `@earendil-works/pi-ai` `0.84.4` and migrates earlier pi-ai replay envelopes while reading history so existing reasoning/tool metadata remains usable after upgrades.
 - The plugin runs on released dsh plugin surfaces and does not require a modified Harness checkout. It can generate attachments and save local output when installed alone.
 - ChatGPT plan eligibility, model access, quotas, and backend behavior are controlled by OpenAI and may change.
 - The Codex endpoint does not enforce the ordinary Responses `max_output_tokens` field. Compaction works, but its configured summary cap cannot be imposed server-side on this route.

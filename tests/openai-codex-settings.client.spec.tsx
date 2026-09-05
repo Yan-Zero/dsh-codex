@@ -49,6 +49,7 @@ describe("OpenAI Codex settings model catalog", () => {
     let selected = availableModels.slice(1).map((model) => model.id);
     let contextWindow: number | null = null;
     let overrideSparkContextWindow = false;
+    let proxy = { proxyMode: "off", proxyUrl: "" };
     const fetchMock = vi.fn(
       async (
         input: string | URL | Request,
@@ -67,6 +68,15 @@ describe("OpenAI Codex settings model catalog", () => {
             useWebSocketContextReuse: false,
             useNativeCompaction: false,
           });
+        if (path.endsWith("/proxy")) {
+          if (init?.method === "POST") {
+            proxy = {
+              ...proxy,
+              ...(JSON.parse(String(init.body)) as Partial<typeof proxy>),
+            };
+          }
+          return json(proxy);
+        }
         if (path.endsWith("/context-window")) {
           if (init?.method === "POST") {
             const patch = JSON.parse(String(init.body)) as Partial<{
@@ -160,6 +170,36 @@ describe("OpenAI Codex settings model catalog", () => {
       contextWindow: null,
     });
     expect(screen.getByText(en.contextWindowHint)).toBeDefined();
+
+    const scopedProxy = await screen.findByRole<HTMLButtonElement>("radio", {
+      name: en.proxyModeScoped,
+    });
+    expect(scopedProxy.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(scopedProxy);
+    await waitFor(() => {
+      expect(proxy.proxyMode).toBe("scoped");
+      expect(scopedProxy.getAttribute("aria-checked")).toBe("true");
+    });
+    const proxyUrl = screen.getByRole<HTMLInputElement>("textbox", {
+      name: en.proxyUrl,
+    });
+    fireEvent.change(proxyUrl, {
+      target: { value: "http://127.0.0.1:7890" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: en.proxySave }));
+    await waitFor(() => {
+      expect(proxy.proxyUrl).toBe("http://127.0.0.1:7890");
+    });
+    const proxyPosts = fetchMock.mock.calls.filter(
+      ([input, init]) =>
+        String(input).endsWith("/proxy") && init?.method === "POST"
+    );
+    expect(JSON.parse(String(proxyPosts[0]?.[1]?.body))).toEqual({
+      proxyMode: "scoped",
+    });
+    expect(JSON.parse(String(proxyPosts[1]?.[1]?.body))).toEqual({
+      proxyUrl: "http://127.0.0.1:7890",
+    });
 
     fireEvent.change(capacity, { target: { value: "1.0001" } });
     fireEvent.click(screen.getByRole("button", { name: en.contextWindowSave }));

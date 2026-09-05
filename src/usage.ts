@@ -224,6 +224,7 @@ export function parseOpenAICodexUsage(value: unknown): OpenAICodexUsage {
  */
 export async function readOpenAICodexRateLimits(
   store: OpenAICodexCredentialStore,
+  requestFetch: typeof globalThis.fetch = globalThis.fetch,
 ): Promise<OpenAICodexUsage> {
   const models = createModels({ credentials: store })
   models.setProvider(openaiCodexProvider())
@@ -234,7 +235,7 @@ export async function readOpenAICodexRateLimits(
   if (access === undefined || access.length === 0 || typeof accountId !== 'string' || accountId.length === 0) {
     throw new Error('OpenAI Codex is signed out')
   }
-  const response = await fetch(OPENAI_CODEX_USAGE_URL, {
+  const response = await requestFetch(OPENAI_CODEX_USAGE_URL, {
     method: 'GET',
     redirect: 'error',
     headers: {

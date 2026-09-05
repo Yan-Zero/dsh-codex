@@ -11,6 +11,10 @@ import type {
   ResponseApiPreferences,
 } from "../tool-policy.ts";
 import type { OpenAICodexSettingsKey } from "./locales.ts";
+import type {
+  OpenAICodexProxyMode,
+  ProxyPreferences,
+} from "../proxy.ts";
 
 const STATUS_PATH = "/plugins/dsh-openai-codex/auth/status";
 const LOGIN_PATH = "/plugins/dsh-openai-codex/auth/login";
@@ -19,6 +23,7 @@ const IMAGE_TOOLS_PATH = "/plugins/dsh-openai-codex/image-tools";
 const RESPONSE_API_PATH = "/plugins/dsh-openai-codex/response-api";
 const MODEL_CATALOG_PATH = "/plugins/dsh-openai-codex/models";
 const CONTEXT_WINDOW_PATH = "/plugins/dsh-openai-codex/context-window";
+const PROXY_PATH = "/plugins/dsh-openai-codex/proxy";
 const POLL_INTERVAL_MS = 1_000;
 const USAGE_POLL_INTERVAL_MS = 60_000;
 
@@ -239,6 +244,37 @@ const numberInputStyle: CSSProperties = {
   font: "inherit",
   fontSize: 14,
 };
+const proxyModeStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+  overflow: "hidden",
+  border: "1px solid var(--dsw-alias-border-l2)",
+  borderRadius: 999,
+  background: "var(--dsw-alias-bg-layer-1)",
+  boxShadow: "0 1px 2px rgba(0, 0, 0, 0.05)",
+};
+const proxyModeButtonStyle: CSSProperties = {
+  boxSizing: "border-box",
+  minWidth: 0,
+  minHeight: 40,
+  padding: "8px 12px",
+  border: 0,
+  borderRadius: 0,
+  background: "transparent",
+  color: "var(--dsw-alias-label-secondary)",
+  font: "inherit",
+  fontSize: 13,
+  fontWeight: 600,
+  cursor: "pointer",
+  transition: "background 140ms ease, color 140ms ease",
+};
+const proxyInputStyle: CSSProperties = {
+  ...numberInputStyle,
+  width: "auto",
+  flex: "1 1 320px",
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  fontSize: 13,
+};
 const commandStyle: CSSProperties = {
   margin: 0,
   padding: "10px 12px",
@@ -295,6 +331,84 @@ function PreferenceToggle({
         }}
       />
     </button>
+  );
+}
+
+function ProxyModeControl({
+  value,
+  disabled,
+  onChange,
+  t,
+}: {
+  value: OpenAICodexProxyMode;
+  disabled: boolean;
+  onChange(value: OpenAICodexProxyMode): void;
+  t: OpenAICodexSettingsInjected["t"];
+}) {
+  const options: Array<{
+    value: OpenAICodexProxyMode;
+    label: OpenAICodexSettingsKey;
+  }> = [
+    { value: "off", label: "proxyModeOff" },
+    { value: "scoped", label: "proxyModeScoped" },
+    { value: "global", label: "proxyModeGlobal" },
+  ];
+  return (
+    <div
+      style={proxyModeStyle}
+      role="radiogroup"
+      aria-label={t("proxyMode")}
+      onKeyDown={(event) => {
+        if (
+          event.key !== "ArrowLeft" &&
+          event.key !== "ArrowRight" &&
+          event.key !== "ArrowUp" &&
+          event.key !== "ArrowDown"
+        ) {
+          return;
+        }
+        event.preventDefault();
+        const currentIndex = options.findIndex((option) => option.value === value);
+        const direction =
+          event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : -1;
+        const nextIndex =
+          (currentIndex + direction + options.length) % options.length;
+        const nextOption = options[nextIndex];
+        if (nextOption === undefined) return;
+        onChange(nextOption.value);
+        const buttons = event.currentTarget.querySelectorAll("button");
+        buttons.item(nextIndex).focus();
+      }}>
+      {options.map((option, index) => {
+        const selected = value === option.value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            disabled={disabled}
+            style={{
+              ...proxyModeButtonStyle,
+              opacity: disabled ? 0.55 : 1,
+              ...(index === 0
+                ? {}
+                : { borderLeft: "1px solid var(--dsw-alias-border-l2)" }),
+              ...(selected
+                ? {
+                    background: "var(--dsw-alias-button-primary-fill)",
+                    color: "var(--dsw-alias-label-primary-foreground)",
+                  }
+                : {}),
+            }}
+            onClick={() => {
+              onChange(option.value);
+            }}>
+            {t(option.label)}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -602,6 +716,11 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   const [contextWindowError, setContextWindowError] = useState<
     string | undefined
   >();
+  const [proxy, setProxy] = useState<ProxyPreferences | undefined>();
+  const [proxyDraft, setProxyDraft] = useState("");
+  const [proxyBusy, setProxyBusy] = useState(false);
+  const [proxyError, setProxyError] = useState<string | undefined>();
+  const [proxySaved, setProxySaved] = useState(false);
   const trustedOriginCommand = `dsh plugin --profile web exec dsh-openai-codex trust-origin ${window.location.origin}`;
 
   const refresh = useCallback(async () => {
@@ -666,6 +785,18 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
       },
       () => {
         setContextWindowError(t("contextWindowSettingsFailed"));
+      }
+    );
+  }, [t]);
+  useEffect(() => {
+    void jsonRequest<ProxyPreferences>(PROXY_PATH).then(
+      (value) => {
+        setProxy(value);
+        setProxyDraft(value.proxyUrl);
+        setProxyError(undefined);
+      },
+      () => {
+        setProxyError(t("proxySettingsFailed"));
       }
     );
   }, [t]);
@@ -834,6 +965,30 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
     }
   };
 
+  const updateProxy = async (
+    patch: Partial<ProxyPreferences>
+  ): Promise<void> => {
+    setProxyBusy(true);
+    setProxyError(undefined);
+    setProxySaved(false);
+    try {
+      const saved = await jsonRequest<ProxyPreferences>(
+        PROXY_PATH,
+        "POST",
+        patch
+      );
+      setProxy(saved);
+      if (patch.proxyUrl !== undefined) setProxyDraft(saved.proxyUrl);
+      setProxySaved(true);
+    } catch (error: unknown) {
+      setProxyError(
+        error instanceof Error ? error.message : t("proxySettingsFailed")
+      );
+    } finally {
+      setProxyBusy(false);
+    }
+  };
+
   const copyTrustedOriginCommand = async (): Promise<void> => {
     setCopyFailed(false);
     try {
@@ -937,6 +1092,62 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
             t={t}
           />
         ) : null}
+      </div>
+      <div style={cardStyle}>
+        <div>
+          <h3 style={quotaTitleStyle}>{t("proxy")}</h3>
+          <p style={{ ...bodyStyle, marginTop: 5 }}>{t("proxyIntro")}</p>
+        </div>
+        <ProxyModeControl
+          value={proxy?.proxyMode ?? "off"}
+          disabled={proxy === undefined || proxyBusy}
+          onChange={(proxyMode) => {
+            void updateProxy({ proxyMode });
+          }}
+          t={t}
+        />
+        <p style={bodyStyle}>
+          {t(
+            proxy?.proxyMode === "scoped"
+              ? "proxyModeScopedHint"
+              : proxy?.proxyMode === "global"
+                ? "proxyModeGlobalHint"
+                : "proxyModeOffHint"
+          )}
+        </p>
+        <div style={{ ...rowStyle, justifyContent: "flex-start" }}>
+          <label htmlFor="openai-codex-proxy-url" style={statusStyle}>
+            {t("proxyUrl")}
+          </label>
+          <input
+            id="openai-codex-proxy-url"
+            type="url"
+            inputMode="url"
+            spellCheck={false}
+            placeholder={t("proxyUrlPlaceholder")}
+            value={proxyDraft}
+            disabled={proxy === undefined || proxyBusy}
+            style={proxyInputStyle}
+            onChange={(event) => {
+              setProxyDraft(event.currentTarget.value);
+              setProxySaved(false);
+            }}
+          />
+          <button
+            type="button"
+            style={primaryButtonStyle}
+            disabled={proxy === undefined || proxyBusy}
+            onClick={() => {
+              void updateProxy({ proxyUrl: proxyDraft });
+            }}>
+            {proxyBusy ? t("working") : t("proxySave")}
+          </button>
+        </div>
+        <p style={bodyStyle}>{t("proxyUrlHint")}</p>
+        {proxyError === undefined ? null : (
+          <p style={errorStyle}>{proxyError}</p>
+        )}
+        {proxySaved ? <p style={bodyStyle}>{t("proxySaved")}</p> : null}
       </div>
       <div style={cardStyle}>
         <div>

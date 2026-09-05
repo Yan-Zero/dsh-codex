@@ -23,6 +23,8 @@ describe("OpenAI Codex adapter policy", () => {
     expect(Config({}).models).toBeUndefined();
     expect(Config({}).contextWindow).toBeUndefined();
     expect(Config({}).overrideSparkContextWindow).toBe(false);
+    expect(Config({}).proxyMode).toBe("off");
+    expect(Config({}).proxyUrl).toBe("");
     expect(
       Config({
         models: [],
@@ -35,6 +37,7 @@ describe("OpenAI Codex adapter policy", () => {
       overrideSparkContextWindow: true,
     });
     expect(() => Config({ contextWindow: 0 })).toThrow();
+    expect(() => Config({ proxyMode: "sometimes" as never })).toThrow();
   });
 
   it("supplies the complete request-image policy required by current DSH runtimes", () => {
@@ -262,9 +265,22 @@ describe("OpenAI Codex adapter policy", () => {
   });
 
   it("projects provider context capacities into the settings catalog", () => {
-    expect(
-      openAICodexModelCatalog().find((model) => model.id === "gpt-5.6-sol")
-    ).toMatchObject({
+    const catalog = openAICodexModelCatalog();
+    expect(catalog.map((model) => model.id)).toEqual([
+      "gpt-6-astra",
+      "gpt-5.6-luna",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.3-codex-spark",
+      "gpt-5.5",
+      "gpt-5.4",
+      "gpt-5.4-mini",
+    ]);
+    expect(catalog.find((model) => model.id === "gpt-6-astra")).toMatchObject({
+      name: "GPT-6 Astra",
+      contextWindow: 1_050_000,
+    });
+    expect(catalog.find((model) => model.id === "gpt-5.6-sol")).toMatchObject({
       contextWindow: 272_000,
     });
   });
@@ -279,6 +295,7 @@ describe("OpenAI Codex adapter policy", () => {
     const models = await adapter.listModels(OPENAI_CODEX_PROVIDER);
     expect(models.map((model) => model.id)).toEqual(
       expect.arrayContaining([
+        "gpt-6-astra",
         "gpt-5.4",
         "gpt-5.6-luna",
         "gpt-5.6-sol",

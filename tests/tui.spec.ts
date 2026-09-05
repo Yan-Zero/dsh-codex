@@ -25,6 +25,10 @@ function fakeService(): OpenAICodexService {
     contextWindow: null,
     overrideSparkContextWindow: false,
   };
+  let proxyPreferences = {
+    proxyMode: "off" as const,
+    proxyUrl: "",
+  };
   return {
     authStatus: vi.fn(async () => ({
       authenticated: true,
@@ -63,6 +67,11 @@ function fakeService(): OpenAICodexService {
         { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", contextWindow: 272_000 },
       ],
     })),
+    proxyPreferences: vi.fn(() => ({ ...proxyPreferences })),
+    updateProxyPreferences: vi.fn(async (patch) => {
+      proxyPreferences = { ...proxyPreferences, ...patch };
+      return { ...proxyPreferences };
+    }),
     updateResponsePreferences: vi.fn(async (patch) => {
       responsePreferences = { ...responsePreferences, ...patch };
       return { ...responsePreferences };

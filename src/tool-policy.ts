@@ -5,6 +5,11 @@ import type {
 } from "@deepseek-ai/dsh-settings";
 import type { ToolExecution } from "@deepseek-ai/dsh-tools";
 import z from "@deepseek-ai/schemastery";
+import {
+  DEFAULT_PROXY_PREFERENCES,
+  normalizeProxyUrl,
+} from "./proxy.ts";
+import type { ProxyPreferences } from "./proxy.ts";
 import { OPENAI_CODEX_PROVIDER } from "./store.ts";
 
 /** User-controlled image-tool integration. */
@@ -49,7 +54,8 @@ interface OpenAICodexPreferences
     ImageToolPreferences,
     ResponseApiPreferences,
     ModelCatalogPreferences,
-    ContextWindowPreferences {
+    ContextWindowPreferences,
+    ProxyPreferences {
   /** Migration-only key written by the unreleased store:true experiment. */
   useStatefulResponses: boolean;
 }
@@ -90,6 +96,8 @@ function preferenceSchema(
       ])
       .default(null),
     overrideSparkContextWindow: z.boolean().default(false),
+    proxyMode: z.union(["off", "scoped", "global"] as const).default("off"),
+    proxyUrl: z.string().default(""),
     models: z.array(z.string()).default([...defaultModels]),
   });
 }
@@ -99,6 +107,7 @@ export class ImageToolPolicy {
   private current: OpenAICodexPreferences;
   private scope: SettingsScope<OpenAICodexPreferences> | undefined;
   private readonly imageWatchers = new Set<() => void>();
+  private readonly proxyWatchers = new Set<() => void>();
   private readonly modelCatalog: readonly ModelCatalogEntry[];
 
   constructor(
@@ -110,6 +119,7 @@ export class ImageToolPolicy {
       ...DEFAULT_IMAGE_TOOL_PREFERENCES,
       ...DEFAULT_RESPONSE_API_PREFERENCES,
       ...DEFAULT_CONTEXT_WINDOW_PREFERENCES,
+      ...DEFAULT_PROXY_PREFERENCES,
       useStatefulResponses: false,
       ...base,
       models: this.normalizeModels(
@@ -215,6 +225,37 @@ export class ImageToolPolicy {
     return this.contextWindowSnapshot();
   }
 
+  /** Return the live provider proxy mode and explicit URL. */
+  proxySnapshot(): ProxyPreferences {
+    return {
+      proxyMode: this.current.proxyMode,
+      proxyUrl: this.current.proxyUrl,
+    };
+  }
+
+  /** Observe proxy changes so the transport can reconcile global mode. */
+  watchProxyPreferences(listener: () => void): () => void {
+    this.proxyWatchers.add(listener);
+    return () => {
+      this.proxyWatchers.delete(listener);
+    };
+  }
+
+  /** Persist a validated proxy mode or URL. */
+  async updateProxy(
+    patch: Partial<ProxyPreferences>
+  ): Promise<ProxyPreferences> {
+    if (this.scope === undefined)
+      throw new Error("OpenAI Codex settings service is unavailable");
+    const normalized =
+      patch.proxyUrl === undefined
+        ? patch
+        : { ...patch, proxyUrl: normalizeProxyUrl(patch.proxyUrl) };
+    await this.scope.update(normalized);
+    this.replace(this.scope.get());
+    return this.proxySnapshot();
+  }
+
   /** Return available models and the live discovery subset for the browser. */
   modelCatalogSnapshot(): ModelCatalogSettings {
     return {
@@ -257,9 +298,15 @@ export class ImageToolPolicy {
       next.modifyReadImage !== this.current.modifyReadImage ||
       next.shareImagegenWithOtherModels !==
         this.current.shareImagegenWithOtherModels;
+    const proxyChanged =
+      next.proxyMode !== this.current.proxyMode ||
+      next.proxyUrl !== this.current.proxyUrl;
     this.current = next;
     if (imageChanged) {
       for (const listener of this.imageWatchers) listener();
+    }
+    if (proxyChanged) {
+      for (const listener of this.proxyWatchers) listener();
     }
   }
 

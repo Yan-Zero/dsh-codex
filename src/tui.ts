@@ -344,11 +344,22 @@ function formatTokenCount(tokens: number): string {
     : `${tokens} tokens`;
 }
 
+function formatProxyUrl(proxyUrl: string): string {
+  if (proxyUrl.length === 0) return "environment";
+  try {
+    const parsed = new URL(proxyUrl);
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return "invalid";
+  }
+}
+
 function formatConfig(service: OpenAICodexService): string {
   const image = service.imagePreferences();
   const responses = service.responsePreferences();
   const contextWindow = service.contextWindowPreferences();
   const catalog = service.modelCatalogSettings();
+  const proxy = service.proxyPreferences();
   const enabledModels = new Set(catalog.models);
   const models = catalog.availableModels.flatMap((model) => [
     "",
@@ -364,6 +375,8 @@ function formatConfig(service: OpenAICodexService): string {
     `native-compaction: ${responses.useNativeCompaction ? "on" : "off"}`,
     `context-window: ${contextWindow.contextWindow === null ? "provider-default" : `${contextWindow.contextWindow} tokens`}`,
     `spark-context-window: ${contextWindow.overrideSparkContextWindow ? "on" : "off"}`,
+    `proxy-mode: ${proxy.proxyMode}`,
+    `proxy-url: ${formatProxyUrl(proxy.proxyUrl)}`,
     ...models,
   ].join("\n");
 }

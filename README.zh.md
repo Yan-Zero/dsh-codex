@@ -15,6 +15,7 @@
 - 由 `gpt-image-2` 执行的 `imagegen` 工具，支持工作区／会话参考图和自动工作区输出
 - 复用 dsh Web 输入框的粘贴和拖放图片能力
 - 在 Web 输入框提供按会话生效的 Fast Mode 开关与紧凑的每周额度指示器
+- 可选择仅 Codex 或整个进程范围的三态 HTTP(S) 代理设置
 
 ChatGPT 订阅认证与按量计费的 OpenAI API 是不同产品。本插件只使用 ChatGPT Codex 后端，不会把订阅转换成通用 OpenAI API 凭据。
 
@@ -86,6 +87,16 @@ bundle 会为新建 agent 选择 `openai-codex` / `gpt-5.6-sol`，并选择 Code
 
 该功能在 Harness 一侧对应 Codex CLI 的 `model_context_window` 概念，不会向 Responses 端点发送上下文窗口字段。解析后的容量会直接控制 dsh 的上下文用量分母、溢出判断、输出 token 收缩和自动压缩阈值；较小的值会更早压缩。较大的值不会提高后端模型的真实容量，模型不支持时仍可能返回上下文溢出错误。
 
+## 网络代理
+
+打开 **设置 → OpenAI Codex → 网络代理**，可以选择三种范围：
+
+- **跟随 dsh** 不由插件覆盖网络设置；Codex 继承 dsh 启动时已经配置的进程级代理。
+- **仅 Codex** 把所选代理注入 Codex 模型 SSE 请求、原生压缩、独立搜索、生图与额度读取；OAuth Token 刷新和 WebSocket 仍遵循进程策略。
+- **整个 dsh** 把代理应用到整个进程，并覆盖 OAuth；其他插件的请求也会受影响。关闭后会恢复插件覆盖前的宿主策略。
+
+代理 URL 支持 `http://` 与 `https://`。留空时依次使用 `DSH_CODEX_PROXY`，以及标准的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 与 `NO_PROXY` 环境变量。默认模式是 **跟随 dsh**，因此安装插件不会静默改变整个进程的 dispatcher。
+
 ## 图片
 
 图片功能使用 dsh 的持久附件路径：
@@ -148,7 +159,7 @@ dsh 登录与 Codex CLI／Desktop 相互独立：
 
 ## 兼容性说明
 
-- 本分支面向已发布的 DSH `0.1.1-rc.2` 插件表层，并兼容开发中的 `0.1.2-alpha.2` settings API；同时使用 `@earendil-works/pi-ai` `0.84.4`。adapter 会在读取历史时迁移旧版 pi-ai replay envelope，因此升级后已有 reasoning／tool 元数据仍可继续使用。
+- 本分支面向成套发布的 DSH `0.1.1-rc.2` 插件表层。较新 Harness 提供正式 `dsh-http-proxy` 库时，全局代理模式会与其组合；旧版则使用可恢复的兼容 dispatcher。同时使用 `@earendil-works/pi-ai` `0.84.4`，adapter 会在读取历史时迁移旧版 pi-ai replay envelope，因此升级后已有 reasoning／tool 元数据仍可继续使用。
 - 插件只使用已发布的 dsh 插件表层，不要求修改版 Harness checkout。单独安装时即可生成附件并保存本地输出。
 - ChatGPT 套餐资格、模型权限、配额及后端行为由 OpenAI 控制，可能发生变化。
 - Codex 端点不执行普通 Responses 的 `max_output_tokens` 字段。压缩可以工作，但该路由无法在服务端落实配置的摘要上限。
