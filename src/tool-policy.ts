@@ -121,13 +121,22 @@ export class ImageToolPolicy {
   private scope: SettingsScope<OpenAICodexPreferences> | undefined;
   private readonly imageWatchers = new Set<() => void>();
   private readonly proxyWatchers = new Set<() => void>();
-  private readonly modelCatalog: readonly ModelCatalogEntry[];
+  private readonly resolveModelCatalog: () => readonly ModelCatalogEntry[];
+
+  private get modelCatalog(): readonly ModelCatalogEntry[] {
+    return this.resolveModelCatalog();
+  }
 
   constructor(
     base: Partial<OpenAICodexPreferences> = {},
-    modelCatalog: readonly ModelCatalogEntry[] = []
+    modelCatalog: readonly ModelCatalogEntry[] | (() => readonly ModelCatalogEntry[]) = []
   ) {
-    this.modelCatalog = modelCatalog.map((model) => ({ ...model }));
+    if (typeof modelCatalog === "function") {
+      this.resolveModelCatalog = modelCatalog;
+    } else {
+      const initialCatalog = modelCatalog.map((model) => ({ ...model }));
+      this.resolveModelCatalog = () => initialCatalog;
+    }
     this.current = {
       ...DEFAULT_IMAGE_TOOL_PREFERENCES,
       ...DEFAULT_RESPONSE_API_PREFERENCES,
@@ -136,9 +145,9 @@ export class ImageToolPolicy {
       ...DEFAULT_PROXY_PREFERENCES,
       useStatefulResponses: false,
       ...base,
-      models: this.normalizeModels(
+      models: [...(
         base.models ?? this.modelCatalog.map((model) => model.id)
-      ),
+      )],
     };
     if (
       this.current.useStatefulResponses &&
@@ -292,7 +301,7 @@ export class ImageToolPolicy {
   modelCatalogSnapshot(): ModelCatalogSettings {
     return {
       availableModels: this.modelCatalog.map((model) => ({ ...model })),
-      models: [...this.current.models],
+      models: this.normalizeModels(this.current.models),
     };
   }
 
@@ -303,7 +312,16 @@ export class ImageToolPolicy {
     if (this.scope === undefined)
       throw new Error("OpenAI Codex settings service is unavailable");
     if (patch.models === undefined) return this.modelCatalogSnapshot();
-    await this.scope.update({ models: this.normalizeModels(patch.models) });
+    const availableIds = new Set(this.modelCatalog.map((model) => model.id));
+    const unavailableSelections = [
+      ...new Set(this.current.models.filter((id) => !availableIds.has(id))),
+    ];
+    await this.scope.update({
+      models: [
+        ...this.normalizeModels(patch.models),
+        ...unavailableSelections,
+      ],
+    });
     this.replace(this.scope.get());
     return this.modelCatalogSnapshot();
   }
@@ -325,7 +343,9 @@ export class ImageToolPolicy {
       next.useStatefulResponses && !next.useWebSocketContextReuse
         ? { ...next, useWebSocketContextReuse: true }
         : next;
-    next = { ...next, models: this.normalizeModels(next.models) };
+    // Keep saved ids if the optional Codex cache is temporarily unavailable.
+    // Discovery filters against the current catalog without deleting preferences.
+    next = { ...next, models: [...next.models] };
     const imageChanged =
       next.modifyReadImage !== this.current.modifyReadImage ||
       next.shareImagegenWithOtherModels !==

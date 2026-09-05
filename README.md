@@ -58,6 +58,12 @@ The bundle selects `openai-codex` / `gpt-5.6-sol` for new agents and selects the
 
 ## Model catalog
 
+The plugin reads the Codex CLI/Desktop `models_cache.json` to discover models not yet bundled by pi-ai and update their names, input modalities, reasoning levels, and default `context_window`. It checks the file specified by `DSH_CODEX_MODELS_CACHE`, then `CODEX_HOME/models_cache.json`, then `~/.codex/models_cache.json`. Only valid entries with `visibility: list` are imported; the maximum expandable window does not replace the default capacity.
+
+Codex CLI/Desktop refreshes this cache. The plugin reads model metadata only, keeps its separate dsh OAuth login, never reads or copies Codex credentials, and does not launch a Codex subprocess. After updating and opening Codex, reopen the plugin's model settings or refresh the model list to discover changes. Missing, corrupt, or partially written caches retain the last usable catalog; a fresh start without a cache uses bundled models, including GPT-6 Astra. Catalog metadata does not guarantee model access for the account signed into dsh.
+
+Saved model selections are preserved. Enable newly discovered models in the settings below; a temporarily unavailable cache does not delete saved model IDs. Newly discovered models without bundled pricing use a zero cost estimate, which does not mean the model is free.
+
 By default, the model picker advertises the complete `openai-codex` catalog. Open **Settings → OpenAI Codex** and use the model checkboxes to choose which entries remain visible. The selection is live and durable; dsh refreshes the Web and TUI model directories after it changes.
 
 The same initial subset can be seeded through `models` on the `llm-openai-codex` entry while preserving provider order:

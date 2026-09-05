@@ -31,6 +31,7 @@ import type {
   ResponseApiPreferences,
 } from "./tool-policy.ts";
 import type { FastModeRegistry } from "./fast-mode.ts";
+import { OpenAICodexModelCatalog } from "./model-catalog.ts";
 
 const GPT_5_3_CODEX_SPARK = "gpt-5.3-codex-spark";
 const GPT_6_ASTRA = "gpt-6-astra";
@@ -38,9 +39,9 @@ const GPT_6_ASTRA = "gpt-6-astra";
 const OPENAI_CODEX_MODEL_ORDER = new Map<string, number>(
   [
     GPT_6_ASTRA,
-    "gpt-5.6-luna",
     "gpt-5.6-sol",
     "gpt-5.6-terra",
+    "gpt-5.6-luna",
     GPT_5_3_CODEX_SPARK,
     "gpt-5.5",
     "gpt-5.4",
@@ -97,9 +98,18 @@ function withOpenAICodexModelAdditions(provider: Provider): Provider {
   };
 }
 
-/** Return a detached copy of the complete pi-ai Codex model catalog. */
-export function openAICodexModelCatalog(): readonly ModelCatalogEntry[] {
-  return withOpenAICodexModelAdditions(openaiCodexProvider())
+/** Keep bundled models as a fallback and discover new releases from Codex metadata. */
+export function createOpenAICodexModelProvider(): Provider {
+  const provider = withOpenAICodexModelAdditions(openaiCodexProvider());
+  const catalog = new OpenAICodexModelCatalog(provider.getModels());
+  return { ...provider, getModels: () => catalog.getModels() };
+}
+
+/** Return a detached copy of the current Codex model catalog for settings. */
+export function openAICodexModelCatalog(
+  provider: Provider = createOpenAICodexModelProvider()
+): readonly ModelCatalogEntry[] {
+  return provider
     .getModels()
     .map((model) => ({
       id: model.id,
@@ -484,10 +494,11 @@ export function createOpenAICodexAdapter(
   contextWindow?: () => number | null | undefined,
   overrideSparkContextWindow?: () => boolean | undefined,
   requestFetch?: FetchFunction,
-  fastModeDefault?: () => boolean
+  fastModeDefault?: () => boolean,
+  modelProvider: Provider = createOpenAICodexModelProvider()
 ): PiAiAdapter {
   const provider = requestProvider(
-    withOpenAICodexModelAdditions(openaiCodexProvider()),
+    modelProvider,
     fastMode,
     fastModeDefault,
     requestFetch
@@ -500,17 +511,20 @@ export function createOpenAICodexAdapter(
   let resolvedContextWindow: number | null | undefined | typeof unset = unset;
   let resolvedOverrideSparkContextWindow: boolean | undefined;
   let resolvedProfiles: Map<string, ResolvedPiAiProviderProfile> | undefined;
+  let resolvedModelCatalog: ReturnType<Provider["getModels"]> | undefined;
   const profiles = (): Map<string, ResolvedPiAiProviderProfile> => {
+    const nextModelCatalog = provider.getModels();
     const nextContextWindow = contextWindow?.();
     const nextOverrideSparkContextWindow = overrideSparkContextWindow?.();
     if (
       resolvedProfiles !== undefined &&
+      nextModelCatalog === resolvedModelCatalog &&
       nextContextWindow === resolvedContextWindow &&
       nextOverrideSparkContextWindow === resolvedOverrideSparkContextWindow
     )
       return resolvedProfiles;
     const configuredProvider = withOpenAICodexContextWindow(
-      provider,
+      { ...provider, getModels: () => nextModelCatalog },
       nextContextWindow,
       nextOverrideSparkContextWindow
     );
@@ -532,6 +546,7 @@ export function createOpenAICodexAdapter(
       piProvider: responses.wrap(configuredProvider),
     };
     resolvedContextWindow = nextContextWindow;
+    resolvedModelCatalog = nextModelCatalog;
     resolvedOverrideSparkContextWindow = nextOverrideSparkContextWindow;
     resolvedProfiles = new Map([[OPENAI_CODEX_PROVIDER, profile]]);
     return resolvedProfiles;

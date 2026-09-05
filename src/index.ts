@@ -16,6 +16,7 @@ import type {} from "@deepseek-ai/dsh-tools";
 import type {} from "@deepseek-ai/dsh-fs";
 import {
   createOpenAICodexAdapter,
+  createOpenAICodexModelProvider,
   openAICodexModelCatalog,
 } from "./adapter.ts";
 import { registerOpenAICodexAuthRoutes } from "./auth-routes.ts";
@@ -219,11 +220,12 @@ export const Config: z<Config> = z.object({
  */
 export function apply(ctx: Context, config: Config): void {
   installOpenAICodexSearchEvent();
+  const modelProvider = createOpenAICodexModelProvider();
   const service = new OpenAICodexService({
     ...(config.models === undefined ? {} : { models: config.models }),
     contextWindow: config.contextWindow ?? null,
     overrideSparkContextWindow: config.overrideSparkContextWindow ?? false,
-    modelCatalog: openAICodexModelCatalog(),
+    modelCatalog: () => openAICodexModelCatalog(modelProvider),
     modifyReadImage: config.modifyReadImage ?? true,
     shareImagegenWithOtherModels: config.shareImagegenWithOtherModels ?? true,
     useWebSocketContextReuse: config.useWebSocketContextReuse ?? false,
@@ -259,7 +261,8 @@ export function apply(ctx: Context, config: Config): void {
       () => imageTools.contextWindowSnapshot().contextWindow,
       () => imageTools.contextWindowSnapshot().overrideSparkContextWindow,
       service.proxy.fetch,
-      () => imageTools.fastModeSnapshot().fastModeDefault
+      () => imageTools.fastModeSnapshot().fastModeDefault,
+      modelProvider
     )
   );
   ctx.web.registerSearchProvider(
