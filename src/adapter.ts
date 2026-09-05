@@ -9,7 +9,7 @@ import type {
   Provider,
   SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
+import { openaiCodexProvider } from "./oauth-provider.ts";
 import { resolveRetryPolicy } from "@deepseek-ai/dsh-llm";
 import type {
   GenerateOptions,
@@ -99,8 +99,8 @@ function withOpenAICodexModelAdditions(provider: Provider): Provider {
 }
 
 /** Keep bundled models as a fallback and discover new releases from Codex metadata. */
-export function createOpenAICodexModelProvider(): Provider {
-  const provider = withOpenAICodexModelAdditions(openaiCodexProvider());
+export function createOpenAICodexModelProvider(requestFetch?: typeof globalThis.fetch): Provider {
+  const provider = withOpenAICodexModelAdditions(openaiCodexProvider(requestFetch));
   const catalog = new OpenAICodexModelCatalog(provider.getModels());
   return { ...provider, getModels: () => catalog.getModels() };
 }

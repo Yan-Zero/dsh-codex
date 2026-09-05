@@ -124,10 +124,6 @@ export {
   OpenAICodexCredentialStore,
   OPENAI_CODEX_AUTH_FILENAME,
   OPENAI_CODEX_PROVIDER,
-  OPENAI_CODEX_REAUTH_REQUIRED,
-  OPENAI_CODEX_REFRESH_IN_PROGRESS,
-  OpenAICodexReauthRequiredError,
-  OpenAICodexRefreshInProgressError,
   openAICodexAuthPath,
 } from "./store.ts";
 export {
@@ -156,6 +152,7 @@ export const inject = ["llm", "web"];
 
 /** Composite model and standalone-search configuration. */
 export interface Config {
+  /** Absolute shared OAuth JSON path; omitted to retain independent dsh storage. */
   credentialFile?: string;
   /** Model ids advertised by the provider; omitted to advertise the full catalog. */
   models?: string[] | undefined;
@@ -226,7 +223,7 @@ export const Config: z<Config> = z.object({
  */
 export function apply(ctx: Context, config: Config): void {
   installOpenAICodexSearchEvent();
-  const modelProvider = createOpenAICodexModelProvider();
+  const modelProvider = createOpenAICodexModelProvider((input, init) => service.proxy.fetch(input, init));
   const service = new OpenAICodexService({
     ...(config.credentialFile === undefined ? {} : { credentialFile: config.credentialFile }),
     ...(config.models === undefined ? {} : { models: config.models }),

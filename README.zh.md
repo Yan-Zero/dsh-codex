@@ -60,7 +60,7 @@ bundle 会为新建 agent 选择 `openai-codex` / `gpt-5.6-sol`，并选择 Code
 
 插件会读取 Codex CLI/Desktop 的 `models_cache.json`，补充 pi-ai 尚未收录的新模型，并使用缓存中的名称、输入能力、推理档位和默认 `context_window`。查找顺序为 `DSH_CODEX_MODELS_CACHE` 指定的文件、`CODEX_HOME/models_cache.json`、`~/.codex/models_cache.json`。只导入 `visibility: list` 的有效条目；缓存中声明的最大可扩展窗口不会自动替换默认容量。
 
-缓存由 Codex CLI/Desktop 刷新；本插件只读取模型元数据，仍使用独立的 dsh OAuth 登录，不读取或复制 Codex 凭据，也不依赖启动 Codex 子进程。更新 Codex 并打开一次后，再打开插件模型设置或刷新模型列表即可发现变化。缓存缺失、损坏或正在写入时保留最近可用目录；首次启动没有缓存时使用随包目录（含 GPT-6 Astra）。目录元数据不保证当前 dsh 登录账号拥有相应模型权限。
+缓存由 Codex CLI/Desktop 刷新；模型发现只读取模型元数据，不依赖启动 Codex 子进程。除非显式配置 `credentialFile`（见下文），OAuth 登录仍相互独立。更新 Codex 并打开一次后，再打开插件模型设置或刷新模型列表即可发现变化。缓存缺失、损坏或正在写入时保留最近可用目录；首次启动没有缓存时使用随包目录（含 GPT-6 Astra）。目录元数据不保证当前 dsh 登录账号拥有相应模型权限。
 
 已保存的模型选择会保留。新增模型可以在下面的设置中启用；缓存暂时不可用不会删除已保存的模型 ID。新发现模型若没有随包价格信息，用量价格估算为 0，不能把它理解为该模型免费。
 
@@ -98,7 +98,7 @@ bundle 会为新建 agent 选择 `openai-codex` / `gpt-5.6-sol`，并选择 Code
 打开 **设置 → OpenAI Codex → 网络代理**，可以选择三种范围：
 
 - **跟随 dsh** 不由插件覆盖网络设置；Codex 继承 dsh 启动时已经配置的进程级代理。
-- **仅 Codex** 把所选代理注入 Codex 模型 SSE 请求、原生压缩、独立搜索、生图与额度读取；OAuth Token 刷新和 WebSocket 仍遵循进程策略。
+- **仅 Codex** 把所选代理注入 Codex 模型 SSE 请求、原生压缩、独立搜索、生图、额度读取与 OAuth Token 刷新；pi-ai 的首次登录交换和 WebSocket 仍遵循进程策略。
 - **整个 dsh** 把代理应用到整个进程，并覆盖 OAuth；其他插件的请求也会受影响。关闭后会恢复插件覆盖前的宿主策略。
 
 代理 URL 支持 `http://` 与 `https://`。留空时依次使用 `DSH_CODEX_PROXY`，以及标准的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 与 `NO_PROXY` 环境变量。默认模式是 **跟随 dsh**，因此安装插件不会静默改变整个进程的 dispatcher。
@@ -154,7 +154,7 @@ bundle 会为新建 agent 选择 `openai-codex` / `gpt-5.6-sol`，并选择 Code
 
 ## 凭据与隐私
 
-dsh 登录与 Codex CLI／Desktop 相互独立：
+dsh 登录默认与 Codex CLI／Desktop 相互独立：
 
 - 凭据存储于 `$DSH_HOME/.openai-codex-auth.json`，默认位于 `~/.dsh`；
 - 文件原子写入，token 刷新会在本地 dsh 进程之间加锁；
@@ -162,6 +162,12 @@ dsh 登录与 Codex CLI／Desktop 相互独立：
 - 绝不复制或修改 `~/.codex/auth.json`。
 
 分离存储可以避免两个客户端竞争同一个会轮换的 refresh token。移除 bundle 不会删除凭据；需要移除本地账号时，请使用账号页面或 `logout` 命令。
+
+若要共享现有登录，将插件配置 `credentialFile` 设为 JSON 文件的绝对路径，例如 `C:/Users/you/.codex/auth.json`。已有文件按形状识别：Codex 的 `tokens`、CPA/CLIProxyAPI 的 `type: codex`、OpenCode 的 `openai`、Pi 的 `openai-codex`、扁平 OAuth，以及 dsh 原生格式。不认识、有歧义、字段不完整或只有 API key 的文件会明确报错；文件不存在时创建 dsh 原生格式。请使用普通文件而非符号链接或硬链接，POSIX 下要求仅属主可读写。
+
+选中的凭据只允许包含已识别的字段；存在未知字段时，在刷新或写入前拒绝使用，诊断仅指出字段名、不输出字段值。更新保留识别出的布局、已知元数据和其他 provider 的独立条目。provider 专属 OAuth 刷新函数保留并写回新的 access、refresh、ID token，以及可获取的 email，不再使用 pi-ai 丢弃身份字段的 token 投影。登录复用 pi-ai 的交互流程，随后补一次完整刷新再保存。响应缺少 ID token 时明确失败，而非悄悄保留过时身份。退出登录只清空选中的 OAuth 字段，不删除整个共享文件，也会影响使用该登录的其他程序。
+
+显式共享文件仅做进程内串行化，不使用 `.lock` 或刷新意图协议。写入前重新读取文件，检测到同一凭据被其他写入者更新则报错。同目录临时文件替换可在支持该语义的本地文件系统上避免本插件写出半截 JSON，但不保证断电持久性或与其他程序互斥。同时刷新仍可能竞争，写后读回校验也无法解决这一点。默认独立 dsh 存储继续保留原有跨进程锁。
 
 ## 兼容性说明
 

@@ -81,10 +81,10 @@ export class OpenAICodexService {
   /** Start the provider-native OAuth lifecycle. */
   async login(interaction: AuthInteraction): Promise<void> {
     await this.proxy.apply();
-    return await this.credentials.withOwnerReauth(() => loginOpenAICodex(interaction, this.credentials));
+    return await loginOpenAICodex(interaction, this.credentials, this.proxy.fetch);
   }
 
-  /** Remove this plugin's credential without touching Codex CLI/Desktop. */
+  /** Clear the selected credential; explicit shared files affect their other consumers too. */
   logout(): Promise<void> {
     return logoutOpenAICodex(this.credentials);
   }
