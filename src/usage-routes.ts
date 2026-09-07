@@ -137,7 +137,7 @@ export function registerOpenAICodexUsageRoutes(ctx: Context, service: OpenAICode
             if (new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`).searchParams.get('refresh') === '1') {
               await service.usage().catch((error: unknown) => { refreshError = safeMessage(error) })
             }
-            return json(res, 200, { snapshots: await ledger.latestQuota(), ...refreshError === undefined ? {} : { refreshError } })
+            return json(res, 200, { snapshots: await service.latestQuota(), ...refreshError === undefined ? {} : { refreshError } })
           }
           if (path === '/rates') return json(res, 200, await ledger.rateHistory())
           const taskPrefix = '/tasks/'

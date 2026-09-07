@@ -7,6 +7,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { loginOpenAICodex, logoutOpenAICodex, openAICodexAuthStatus } from './auth.ts'
 import type { OpenAICodexCredentialStore } from './store.ts'
+import type { OpenAICodexAccounts } from './accounts.ts'
 import { OPENAI_CODEX_REASONING_SUMMARIES } from './tool-policy.ts'
 import {
   isOpenAICodexReauthRequiredError,
@@ -673,11 +674,46 @@ export function registerOpenAICodexAuthRoutes(
   proxySettings?: ProxySettingsController,
   requestFetch?: typeof globalThis.fetch,
   beforeNetworkRequest?: () => Promise<void>,
+  accounts?: OpenAICodexAccounts,
 ): void {
   const auth = new OpenAICodexWebAuth(store, {
     ...(requestFetch === undefined ? {} : { requestFetch }),
     ...(beforeNetworkRequest === undefined ? {} : { beforeNetworkRequest }),
   })
+  const accountAuth = new Map<string, OpenAICodexWebAuth>()
+  const requestStore = async (req: IncomingMessage): Promise<OpenAICodexCredentialStore> => {
+    const ids = new URL(req.url ?? '/', 'http://dsh.invalid').searchParams.getAll('accountId')
+    if (ids.length > 1 || ids[0] === '') throw new TypeError('invalid accountId')
+    if (accounts === undefined) {
+      if (ids.length) throw new TypeError('account selection unavailable')
+      return store
+    }
+    return accounts.store(ids[0])
+  }
+  const requestAuth = async (req: IncomingMessage): Promise<OpenAICodexWebAuth> => {
+    if (accounts === undefined) { await requestStore(req); return auth }
+    const selectedStore = await requestStore(req)
+    let selectedAuth = accountAuth.get(selectedStore.filename)
+    if (selectedAuth === undefined) {
+      selectedAuth = new OpenAICodexWebAuth(selectedStore, {
+        ...(requestFetch === undefined ? {} : { requestFetch }),
+        ...(beforeNetworkRequest === undefined ? {} : { beforeNetworkRequest }),
+      })
+      accountAuth.set(selectedStore.filename, selectedAuth)
+    }
+    return selectedAuth
+  }
+  let loginQueue: Promise<unknown> = Promise.resolve()
+  const signIn = async (req: IncomingMessage, method: OpenAICodexLoginMethod): Promise<LoginChallenge> => {
+    // Freeze the target before waiting: changing selection must never redirect a login.
+    const selectedAuth = await requestAuth(req)
+    const next = loginQueue.catch(() => undefined).then(async () => {
+      for (const other of accountAuth.values()) if (other !== selectedAuth) await other.dispose()
+      return selectedAuth.signIn(method)
+    })
+    loginQueue = next
+    return next
+  }
   const storedFilename = (store as OpenAICodexCredentialStore & { filename?: unknown }).filename
   const fastMode = fastModeOverride ?? new FastModeRegistry()
   const trustedOrigins =
@@ -694,14 +730,41 @@ export function registerOpenAICodexAuthRoutes(
       json(res, 403, { error: decision.error })
       return false
     }
+    const accountRoutes = accounts === undefined ? [] : [ctx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/dsh-openai-codex/accounts',
+      handler: async (req, res) => {
+        if (!['GET', 'POST', 'PATCH'].includes(req.method ?? '')) return json(res, 405, { error: 'method not allowed' })
+        if (!(await authorize(req, res))) return
+        try {
+          if (req.method === 'GET') return json(res, 200, await accounts.overview())
+          const body = await readSettingsBody(req)
+          if (req.method === 'POST') {
+            if (Object.keys(body).length !== 1 || typeof body['name'] !== 'string') throw new TypeError('name is required')
+            return json(res, 200, await accounts.create(body['name']))
+          }
+          const allowed = new Set(['accountId', 'name', 'selectedAccountId', 'autoSwitch'])
+          if (!Object.keys(body).length || Object.keys(body).some(key => !allowed.has(key))) throw new TypeError('invalid account setting')
+          for (const key of ['accountId', 'name', 'selectedAccountId']) {
+            if (body[key] !== undefined && typeof body[key] !== 'string') throw new TypeError('account fields must be strings')
+          }
+          if (body['autoSwitch'] !== undefined && typeof body['autoSwitch'] !== 'boolean') throw new TypeError('autoSwitch must be boolean')
+          return json(res, 200, await accounts.update(body))
+        } catch {
+          return json(res, 400, { error: 'Unable to update Codex accounts; check the account ID and use a unique name (1–64 characters).' })
+        }
+      },
+    })]
     const routes = [
+      ...accountRoutes,
       ctx.webServer.register({
         kind: 'exact',
         path: OPENAI_CODEX_AUTH_LOCAL_STATUS_PATH,
         handler: async (req, res) => {
           if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' })
           if (!(await authorize(req, res))) return
-          json(res, 200, await openAICodexAuthStatus(store))
+          try { json(res, 200, await openAICodexAuthStatus(await requestStore(req))) }
+          catch { json(res, 400, { error: 'Unable to read the selected Codex account' }) }
         },
       }),
       ctx.webServer.register({
@@ -710,7 +773,8 @@ export function registerOpenAICodexAuthRoutes(
         handler: async (req, res) => {
           if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' })
           if (!(await authorize(req, res))) return
-          json(res, 200, await auth.status())
+          try { json(res, 200, await (await requestAuth(req)).status()) }
+          catch { json(res, 400, { error: 'Unable to read the selected Codex account' }) }
         },
       }),
       ctx.webServer.register({
@@ -720,7 +784,7 @@ export function registerOpenAICodexAuthRoutes(
           if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
           if (!(await authorize(req, res))) return
           try {
-            json(res, 200, await auth.signIn('browser'))
+            json(res, 200, await signIn(req, 'browser'))
           } catch (error: unknown) {
             json(res, 500, { error: safeMessage(error) })
           }
@@ -733,7 +797,7 @@ export function registerOpenAICodexAuthRoutes(
           if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
           if (!(await authorize(req, res))) return
           try {
-            json(res, 200, await auth.signIn('device_code'))
+            json(res, 200, await signIn(req, 'device_code'))
           } catch (error: unknown) {
             json(res, 500, { error: safeMessage(error) })
           }
@@ -746,7 +810,7 @@ export function registerOpenAICodexAuthRoutes(
           if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
           if (!(await authorize(req, res))) return
           try {
-            await auth.signOut()
+            await (await requestAuth(req)).signOut()
             json(res, 200, { ok: true })
           } catch (error: unknown) {
             json(res, 500, { error: safeMessage(error) })
@@ -912,6 +976,7 @@ export function registerOpenAICodexAuthRoutes(
     return async () => {
       for (const dispose of routes) dispose()
       await auth.dispose()
+      await Promise.all([...accountAuth.values()].map(account => account.dispose()))
     }
   }, 'dsh-openai-codex: Web OAuth routes')
 }

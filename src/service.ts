@@ -5,6 +5,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { loginOpenAICodex, logoutOpenAICodex, openAICodexAuthStatus } from './auth.ts'
 import type { OpenAICodexAuthStatus } from './auth.ts'
 import { OpenAICodexCredentialStore } from './store.ts'
+import { OpenAICodexAccounts } from './accounts.ts'
 import { OpenAICodexProxyTransport } from './proxy.ts'
 import type { ProxyPreferences } from './proxy.ts'
 import { ImageToolPolicy } from './tool-policy.ts'
@@ -19,7 +20,8 @@ import type {
 } from './tool-policy.ts'
 import { readOpenAICodexRateLimits } from './usage.ts'
 import type { OpenAICodexUsage } from './usage.ts'
-import { CodexUsageTracker } from './usage-ledger.ts'
+import { CodexUsageLedger, CodexUsageTracker } from './usage-ledger.ts'
+import type { QuotaSnapshot } from './usage-ledger.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -45,14 +47,17 @@ export interface OpenAICodexServiceOptions
  * Credentials and live policy stay singletons even when several front doors are mounted.
  */
 export class OpenAICodexService {
+  readonly accounts: OpenAICodexAccounts
   readonly credentials: OpenAICodexCredentialStore
   readonly policy: ImageToolPolicy
   readonly usageTracker = new CodexUsageTracker()
   readonly proxy: OpenAICodexProxyTransport
   private readonly stopProxyWatch: () => void
+  private readonly accountQuotaLedgers = new Map<string, CodexUsageLedger>()
 
   constructor(options: OpenAICodexServiceOptions) {
     this.credentials = new OpenAICodexCredentialStore(options.credentialFile)
+    this.accounts = new OpenAICodexAccounts(this.credentials)
     const { credentialFile: _credentialFile, modelCatalog, ...preferences } = options
     this.policy = new ImageToolPolicy(preferences, modelCatalog)
     this.proxy = new OpenAICodexProxyTransport(() => this.policy.proxySnapshot())
@@ -78,24 +83,42 @@ export class OpenAICodexService {
   /** Start the provider-native OAuth lifecycle. */
   async login(interaction: AuthInteraction): Promise<void> {
     await this.proxy.apply()
-    return await loginOpenAICodex(interaction, this.credentials, this.proxy.fetch)
+    return await loginOpenAICodex(interaction, await this.accounts.store(), this.proxy.fetch)
   }
 
   /** Clear the selected credential; explicit shared files affect their other consumers too. */
-  logout(): Promise<void> {
-    return logoutOpenAICodex(this.credentials)
+  async logout(): Promise<void> {
+    return logoutOpenAICodex(await this.accounts.store())
   }
 
   /** Read non-secret authentication metadata. */
-  authStatus(): Promise<OpenAICodexAuthStatus> {
-    return openAICodexAuthStatus(this.credentials)
+  async authStatus(): Promise<OpenAICodexAuthStatus & { accountId: string }> {
+    const accountId = (await this.accounts.overview()).selectedAccountId
+    return { ...await openAICodexAuthStatus(await this.accounts.store(accountId)), accountId }
   }
 
   /** Read current subscription limits without issuing a model request. */
-  async usage(): Promise<OpenAICodexUsage> {
-    const usage = await readOpenAICodexRateLimits(this.credentials, this.proxy.fetch)
-    await this.usageTracker.ledger.saveQuota(usage)
+  async usage(accountId?: string): Promise<OpenAICodexUsage> {
+    const store = await this.accounts.store(accountId)
+    const ledger = this.quotaLedger(store)
+    const usage = await readOpenAICodexRateLimits(store, this.proxy.fetch)
+    await ledger.saveQuota(usage)
     return usage
+  }
+
+  /** Quota caches follow the selected account; token analytics remain provider-wide. */
+  async latestQuota(): Promise<QuotaSnapshot[]> {
+    return this.quotaLedger(await this.accounts.store()).latestQuota()
+  }
+
+  private quotaLedger(store: OpenAICodexCredentialStore): CodexUsageLedger {
+    if (store.filename === this.credentials.filename) return this.usageTracker.ledger
+    let ledger = this.accountQuotaLedgers.get(store.filename)
+    if (ledger === undefined) {
+      ledger = new CodexUsageLedger(`${store.filename}.usage.sqlite3`)
+      this.accountQuotaLedgers.set(store.filename, ledger)
+    }
+    return ledger
   }
 
   imagePreferences(): ImageToolPreferences {
@@ -159,5 +182,7 @@ export class OpenAICodexService {
   async dispose(): Promise<void> {
     this.stopProxyWatch()
     await this.proxy.dispose()
+    for (const ledger of this.accountQuotaLedgers.values()) ledger.close()
+    this.accountQuotaLedgers.clear()
   }
 }

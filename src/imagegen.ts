@@ -135,6 +135,7 @@ export class OpenAICodexImageClient {
   constructor(
     credentials: OpenAICodexCredentialStore,
     private readonly requestFetch: typeof globalThis.fetch = globalThis.fetch,
+    private readonly resolveCredentials?: () => Promise<OpenAICodexCredentialStore>,
   ) {
     const models = createModels({ credentials })
     models.setProvider(openaiCodexProvider(requestFetch))
@@ -144,7 +145,14 @@ export class OpenAICodexImageClient {
   /** Send one generation or edit request and return the first PNG payload. */
   async generate(prompt: string, images: readonly string[], signal: AbortSignal): Promise<Uint8Array> {
     throwIfAborted(signal)
-    const auth = await abortable(this.models.getAuth(OPENAI_CODEX_PROVIDER), signal)
+    let models = this.models
+    if (this.resolveCredentials !== undefined) {
+      const credentials = await abortable(this.resolveCredentials(), signal)
+      const selectedModels = createModels({ credentials })
+      selectedModels.setProvider(openaiCodexProvider(this.requestFetch))
+      models = selectedModels
+    }
+    const auth = await abortable(models.getAuth(OPENAI_CODEX_PROVIDER), signal)
     const access = auth?.auth.apiKey
     if (access === undefined || access.length === 0) {
       throw new Error('OpenAI Codex image generation is signed out; run "dsh openai-codex login"')
@@ -328,8 +336,9 @@ export function imagegenTool(
   credentials: OpenAICodexCredentialStore,
   policy: ImageToolPolicy,
   requestFetch: typeof globalThis.fetch = globalThis.fetch,
+  resolveCredentials?: () => Promise<OpenAICodexCredentialStore>,
 ): ToolDefinition {
-  const client = new OpenAICodexImageClient(credentials, requestFetch)
+  const client = new OpenAICodexImageClient(credentials, requestFetch, resolveCredentials)
   return defineTool({
     name: IMAGEGEN_TOOL_NAME,
     description:

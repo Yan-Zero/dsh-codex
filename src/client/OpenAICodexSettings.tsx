@@ -1,6 +1,6 @@
 /** Plugin-owned OpenAI Codex account page inside the dsh Settings shell. */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import type { OpenAICodexUsage } from '../usage.ts'
 import type {
@@ -13,6 +13,13 @@ import type {
 } from '../tool-policy.ts'
 import type { OpenAICodexSettingsKey } from './locales.ts'
 import type { OpenAICodexProxyMode, ProxyPreferences } from '../proxy.ts'
+
+const ACCOUNTS_PATH = '/plugins/dsh-openai-codex/accounts'
+interface AccountsOverview {
+  selectedAccountId: string
+  autoSwitch: boolean
+  accounts: Array<{ id: string; name: string; authenticated: boolean; error?: string }>
+}
 
 const STATUS_PATH = '/plugins/dsh-openai-codex/auth/status'
 const LOCAL_STATUS_PATH = '/plugins/dsh-openai-codex/auth/local-status'
@@ -643,6 +650,54 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   if (t === undefined) throw new Error('OpenAI Codex settings requires its translation function')
   const [status, setStatus] = useState<AccountStatus>({ status: 'loading' })
   const [busy, setBusy] = useState(false)
+  const [accounts, setAccounts] = useState<AccountsOverview>()
+  const [accountsBusy, setAccountsBusy] = useState(false)
+  const [accountsError, setAccountsError] = useState<string>()
+  const [newAccountName, setNewAccountName] = useState('')
+  const [accountName, setAccountName] = useState('')
+  const accountId = accounts?.selectedAccountId
+  const accountsRequest = useRef(0)
+  const accountsUpdating = useRef(false)
+  const accountRef = useRef(accountId)
+  accountRef.current = accountId
+  const accountPath = useCallback((path: string) => accountId === undefined
+    ? path : `${path}?accountId=${encodeURIComponent(accountId)}`, [accountId])
+  const acceptAccounts = useCallback((value: AccountsOverview) => {
+    setAccounts(value)
+  }, [])
+  const selectedName = accounts?.accounts.find((account) => account.id === accountId)?.name ?? ''
+  useEffect(() => { setAccountName(selectedName) }, [accountId, selectedName])
+  useEffect(() => {
+    let active = true
+    const load = () => {
+      if (accountsUpdating.current) return
+      const request = ++accountsRequest.current
+      void jsonRequest<AccountsOverview>(ACCOUNTS_PATH).then((value) => {
+        if (active && request === accountsRequest.current) { acceptAccounts(value); setAccountsError(undefined) }
+      }, () => { if (active && request === accountsRequest.current) setAccountsError(t('accountsFailed')) })
+    }
+    load()
+    const onFocus = () => load()
+    window.addEventListener('focus', onFocus)
+    const timer = window.setInterval(load, 10_000)
+    return () => { active = false; window.clearInterval(timer); window.removeEventListener('focus', onFocus) }
+  }, [acceptAccounts, t])
+  const updateAccounts = async (patch: object, create = false) => {
+    ++accountsRequest.current
+    accountsUpdating.current = true
+    setAccountsBusy(true)
+    setAccountsError(undefined)
+    try {
+      let value = await jsonRequest<AccountsOverview>(ACCOUNTS_PATH, create ? 'POST' : 'PATCH', patch)
+      if (create) {
+        const added = value.accounts.find((account) => !accounts?.accounts.some((old) => old.id === account.id))
+        if (added) value = await jsonRequest<AccountsOverview>(ACCOUNTS_PATH, 'PATCH', { selectedAccountId: added.id })
+        setNewAccountName('')
+      }
+      acceptAccounts(value)
+    } catch { setAccountsError(t('accountsFailed')) }
+    finally { accountsUpdating.current = false; setAccountsBusy(false) }
+  }
   const [deviceChallenge, setDeviceChallenge] = useState<
     Extract<LoginChallenge, { method: 'device_code' }> | undefined
   >()
@@ -673,10 +728,12 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
 
   const refresh = useCallback(async () => {
     try {
-      const next = await jsonRequest<AccountStatus>(STATUS_PATH)
+      const next = await jsonRequest<AccountStatus>(accountPath(STATUS_PATH))
+      if (accountRef.current !== accountId) return
       setStatus(next)
       if (next.status === 'signed-in') setDeviceChallenge(undefined)
     } catch (error: unknown) {
+      if (accountRef.current !== accountId) return
       const message = error instanceof Error ? error.message : t('requestFailed')
       setStatus((current) =>
         current.status === 'signed-in'
@@ -686,11 +743,14 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
             : { status: 'error', message },
       )
     }
-  }, [t])
+  }, [t, accountPath, accountId])
 
   useEffect(() => {
+    setStatus({ status: 'loading' })
+    setDeviceChallenge(undefined)
+    setBusy(false)
     let active = true
-    void jsonRequest<LocalAccountStatus>(LOCAL_STATUS_PATH)
+    void jsonRequest<LocalAccountStatus>(accountPath(LOCAL_STATUS_PATH))
       .then(
         (local) => {
           if (!active) return
@@ -710,7 +770,7 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
     return () => {
       active = false
     }
-  }, [refresh])
+  }, [refresh, accountPath])
   useEffect(() => {
     void jsonRequest<ImageToolPreferences>(IMAGE_TOOLS_PATH).then(
       (value) => {
@@ -803,9 +863,10 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
     setStatus({ status: 'signing-in' })
     try {
       const challenge = await jsonRequest<LoginChallenge>(
-        method === 'browser' ? LOGIN_PATH : DEVICE_LOGIN_PATH,
+        accountPath(method === 'browser' ? LOGIN_PATH : DEVICE_LOGIN_PATH),
         'POST',
       )
+      if (accountRef.current !== accountId) { popup?.close(); return }
       if (challenge.method !== method) throw new Error('OpenAI Codex returned the wrong sign-in challenge')
       if (challenge.method === 'device_code') {
         setDeviceChallenge(challenge)
@@ -818,6 +879,7 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
       popup.location.replace(challenge.url)
     } catch (error: unknown) {
       popup?.close()
+      if (accountRef.current !== accountId) return
       setStatus(
         error instanceof AccountRequestError && error.code === 'remote-web-origin-not-trusted'
           ? { status: 'remote-web-origin-not-trusted' }
@@ -827,23 +889,25 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
             },
       )
     } finally {
-      setBusy(false)
+      if (accountRef.current === accountId) setBusy(false)
     }
   }
 
   const signOut = async (): Promise<void> => {
     setBusy(true)
     try {
-      await jsonRequest<{ ok: true }>(LOGOUT_PATH, 'POST')
+      await jsonRequest<{ ok: true }>(accountPath(LOGOUT_PATH), 'POST')
+      if (accountRef.current !== accountId) return
       setDeviceChallenge(undefined)
       setStatus({ status: 'signed-out' })
     } catch (error: unknown) {
+      if (accountRef.current !== accountId) return
       setStatus({
         status: 'error',
         message: error instanceof Error ? error.message : t('requestFailed'),
       })
     } finally {
-      setBusy(false)
+      if (accountRef.current === accountId) setBusy(false)
     }
   }
 
@@ -992,6 +1056,40 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
           {t('title')}
         </h2>
         <p style={{ ...bodyStyle, marginTop: 6 }}>{t('intro')}</p>
+      </div>
+      <div style={cardStyle}>
+        <h3 style={quotaTitleStyle}>{t('accounts')}</h3>
+        <p style={bodyStyle}>{t('accountsHint')}</p>
+        <label style={toggleCopyStyle}>
+          <span>{t('selectedAccount')}</span>
+          <select aria-label={t('selectedAccount')} style={selectStyle} value={accountId ?? ''}
+            disabled={accounts === undefined || accountsBusy || busy}
+            onChange={(event) => { void updateAccounts({ selectedAccountId: event.currentTarget.value }) }}>
+            {accounts?.accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
+          </select>
+        </label>
+        <div style={rowStyle}>
+          <input aria-label={t('accountName')} style={proxyInputStyle} value={accountName} maxLength={64}
+            disabled={accounts === undefined || accountsBusy}
+            onChange={(event) => setAccountName(event.currentTarget.value)} />
+          <button type="button" style={buttonStyle} disabled={accounts === undefined || accountsBusy || !accountName.trim()}
+            onClick={() => { void updateAccounts({ accountId, name: accountName.trim() }) }}>{t('renameAccount')}</button>
+        </div>
+        <div style={rowStyle}>
+          <input aria-label={t('newAccountName')} placeholder={t('newAccountName')} style={proxyInputStyle}
+            value={newAccountName} maxLength={64} disabled={accounts === undefined || accountsBusy || busy}
+            onChange={(event) => setNewAccountName(event.currentTarget.value)} />
+          <button type="button" style={buttonStyle} disabled={accounts === undefined || accountsBusy || busy || !newAccountName.trim()}
+            onClick={() => { void updateAccounts({ name: newAccountName.trim() }, true) }}>{t('addAccount')}</button>
+        </div>
+        <div style={toggleRowStyle}>
+          <span style={toggleCopyStyle}><span style={statusStyle}>{t('autoSwitchAccounts')}</span>
+            <span style={bodyStyle}>{t('autoSwitchAccountsHint')}</span></span>
+          <PreferenceToggle label={t('autoSwitchAccounts')} checked={accounts?.autoSwitch ?? false}
+            disabled={accounts === undefined || accountsBusy}
+            onChange={(autoSwitch) => { void updateAccounts({ autoSwitch }) }} />
+        </div>
+        {accountsError === undefined ? null : <p style={errorStyle} role="alert">{accountsError}</p>}
       </div>
       <div style={cardStyle}>
         <div style={rowStyle}>

@@ -29,6 +29,18 @@ The **LLM Usage** surface counts tokens returned by DSH's normalized stream for 
 OpenAI Codex account quota remains available separately on the account page and through `/codex usage`; it is not mixed into session token analytics.
 
 
+## Multiple accounts
+
+Use **Settings → OpenAI Codex → Accounts** in DSH to add a named account, then complete browser or device-code login using the existing controls. The existing login remains the default account. Select the account to use, rename it, or sign out of that account without replacing another account's credentials.
+
+Automatic switching on quota exhaustion is off by default. When enabled, a Codex model request may try other signed-in accounts in insertion order only after an explicit quota-exhaustion response and before emitting content. Each account is tried at most once; successful fallback updates the selection. Generic rate limits, network failures, invalid authentication, and partially emitted responses do not trigger switching. Changing the selection or disabling the option during a request prevents subsequent fallback attempts.
+
+Selection applies to DSH instances sharing this credential configuration: new requests use the selected account, while in-flight requests retain their account. Search, image tools, and quota queries also follow selection; automatic retries apply to Codex model requests. Credentials and quota caches are isolated per account, while local token history remains provider-wide. Each new account requires its own OAuth authorization.
+
+Native Codex compaction checkpoints remain bound to their original account. Switching such a conversation to another account is rejected with a prompt to switch back or start a new conversation. Visible history is preserved for ordinary account switching; account-private replay metadata is not forwarded to other accounts.
+
+The existing credential file stays in place. Account metadata is stored alongside it with an `.accounts.json` suffix; new credential files live in the adjacent `.accounts/` directory with owner-only permissions. Up to 20 named accounts are supported. Never commit these credential files.
+
 ## Install
 
 Install the prebuilt `v0.3.0` release archive into the selected dsh profile:

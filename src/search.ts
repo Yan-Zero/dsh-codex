@@ -77,6 +77,7 @@ export interface OpenAICodexSearchRequestRecord {
 export interface OpenAICodexSearchProviderOptions {
   /** Shared persistent OAuth store. */
   readonly credentials: OpenAICodexCredentialStore
+  readonly resolveCredentials?: () => Promise<OpenAICodexCredentialStore>
   /** Request transport used after credentials have been resolved. */
   readonly fetch?: typeof globalThis.fetch
   /** Model sent to the standalone search endpoint. */
@@ -268,7 +269,14 @@ export class OpenAICodexSearchProvider implements WebSearchProvider {
     throwIfSearchAborted(signal)
     let auth
     try {
-      auth = await abortable(this.models.getAuth(OPENAI_CODEX_PROVIDER), signal)
+      let models = this.models
+      if (this.options.resolveCredentials !== undefined) {
+        const credentials = await abortable(this.options.resolveCredentials(), signal)
+        const selectedModels = createModels({ credentials })
+        selectedModels.setProvider(openaiCodexProvider(this.options.fetch))
+        models = selectedModels
+      }
+      auth = await abortable(models.getAuth(OPENAI_CODEX_PROVIDER), signal)
     } catch (error: unknown) {
       throwIfSearchAborted(signal)
       if (isAbortError(error)) throw searchAborted(signal, error)

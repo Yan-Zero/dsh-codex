@@ -4,6 +4,7 @@
  * @module dsh-codex
  */
 
+import { withAccountRouting, withQuotaDetectionFetch } from './account-routing.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import { randomUUID } from 'node:crypto'
 import z from '@deepseek-ai/schemastery'
@@ -262,25 +263,28 @@ export function apply(ctx: Context, config: Config): void {
   ctx.inject(['settings'], (settingsCtx) => {
     service.attachSettings(settingsCtx)
   })
+  const quotaFetch = withQuotaDetectionFetch(service.proxy.fetch)
+  const accountAdapter = (accountStore: typeof credentials) => createOpenAICodexAdapter(
+    accountStore,
+    () => ctx.get('attachments'),
+    () => imageTools.responseApiSnapshot(),
+    fastMode,
+    () => imageTools.modelCatalogSnapshot().models,
+    usageTracker,
+    () => imageTools.contextWindowSnapshot().contextWindow,
+    () => imageTools.contextWindowSnapshot().overrideSparkContextWindow,
+    quotaFetch,
+    () => imageTools.fastModeSnapshot().fastModeDefault,
+    modelProvider,
+  )
   ctx.llm.registerAdapter(
     [OPENAI_CODEX_PROVIDER],
-    createOpenAICodexAdapter(
-      credentials,
-      () => ctx.get('attachments'),
-      () => imageTools.responseApiSnapshot(),
-      fastMode,
-      () => imageTools.modelCatalogSnapshot().models,
-      usageTracker,
-      () => imageTools.contextWindowSnapshot().contextWindow,
-      () => imageTools.contextWindowSnapshot().overrideSparkContextWindow,
-      service.proxy.fetch,
-      () => imageTools.fastModeSnapshot().fastModeDefault,
-      modelProvider,
-    ),
+    withAccountRouting(accountAdapter(credentials), service.accounts, accountAdapter),
   )
   ctx.web.registerSearchProvider(
     new OpenAICodexSearchProvider({
       credentials,
+      resolveCredentials: () => service.accounts.store(),
       fetch: service.proxy.fetch,
       model: config.searchModel ?? DEFAULT_OPENAI_CODEX_SEARCH_MODEL,
       mode: config.searchMode ?? DEFAULT_OPENAI_CODEX_SEARCH_MODE,
@@ -293,7 +297,7 @@ export function apply(ctx: Context, config: Config): void {
     }),
   )
   ctx.inject(['webServer'], (webCtx) => {
-    registerOpenAICodexAuthRoutes(webCtx, credentials, undefined, fastMode, imageTools, service, service.proxy.fetch, () => service.proxy.apply())
+    registerOpenAICodexAuthRoutes(webCtx, credentials, undefined, fastMode, imageTools, service, service.proxy.fetch, () => service.proxy.apply(), service.accounts)
     registerOpenAICodexUsageRoutes(webCtx, service)
   })
   ctx.inject(['agents'], (agentCtx) => {
@@ -308,7 +312,7 @@ export function apply(ctx: Context, config: Config): void {
     })
   })
   ctx.inject(['tools', 'fs', 'attachments'], (toolCtx) => {
-    toolCtx.tools.register(imagegenTool(toolCtx, credentials, imageTools, service.proxy.fetch))
+    toolCtx.tools.register(imagegenTool(toolCtx, credentials, imageTools, service.proxy.fetch, () => service.accounts.store()))
   })
   ctx.inject(['tools', 'fs', 'attachments', 'agents'], (toolCtx) => {
     installReadImageEnhancement(toolCtx, imageTools)
