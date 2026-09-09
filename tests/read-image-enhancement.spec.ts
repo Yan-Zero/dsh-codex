@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Context } from '@deepseek-ai/cordis'
+import { Context, CordisError } from '@deepseek-ai/cordis'
 import LocalAttachmentStore from '@deepseek-ai/dsh-attachment-local'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import { CallId, LlmRuntime } from '@deepseek-ai/dsh-llm'
@@ -177,6 +177,56 @@ describe('read_image enhancement', () => {
     expect(root.tools.get('read_image', agent as never)?.description).toContain('HTTP(S) URL')
     cleanup?.()
     expect(root.tools.get('read_image', agent as never)).toBe(second)
+  })
+
+  it('does not recreate the scoped shadow while the agent context unloads', () => {
+    const root = {} as Context
+    const inherited = baseReadImage(root)
+    let agentActive = true
+    let scoped: ReturnType<typeof enhancedReadImageTool> | undefined
+    let toolsChanged: (() => void) | undefined
+    let disposeScoped: (() => void) | undefined
+    let registrations = 0
+    const agent = {
+      id: 'unloading-agent',
+      ctx: {
+        tools: {
+          register(definition: ReturnType<typeof enhancedReadImageTool>) {
+            if (!agentActive) throw new CordisError('INACTIVE_EFFECT')
+            registrations += 1
+            scoped = definition
+            let disposed = false
+            return disposeScoped = () => {
+              if (disposed) return
+              disposed = true
+              scoped = undefined
+              toolsChanged?.()
+            }
+          },
+        },
+      },
+    }
+    Object.assign(root, {
+      tools: {
+        get: (_name: string, scope?: object) => scope === agent ? scoped ?? inherited : undefined,
+      },
+      agents: {
+        list: () => [agent],
+        get: (id: string) => id === agent.id ? agent : undefined,
+      },
+      on: (name: string, listener: () => void) => {
+        if (name === 'tools/change') toolsChanged = listener
+        return () => undefined
+      },
+      effect: (effect: () => () => void) => effect(),
+    })
+
+    installReadImageEnhancement(root, new ImageToolPolicy())
+    expect(registrations).toBe(1)
+
+    agentActive = false
+    expect(() => { disposeScoped?.() }).not.toThrow()
+    expect(registrations).toBe(1)
   })
 
   it('advertises separate local-path and HTTP(S) URL inputs', async () => {
