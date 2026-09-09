@@ -1,6 +1,6 @@
 /** Optional HTTP(S) input for Harness's existing `read_image` tool. */
 
-import type { Context } from '@deepseek-ai/cordis'
+import { CordisError, type Context } from '@deepseek-ai/cordis'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -198,7 +198,13 @@ export function installReadImageEnhancement(
     // layer; registering into agent.ctx then shadows either form uniformly.
     const original = ctx.tools.get(READ_IMAGE_TOOL_NAME, agent)
     if (original === undefined) return
-    const dispose = agent.ctx.tools.register(enhancedReadImageTool(ctx, original, publicHttpRuntime))
+    let dispose: () => void
+    try {
+      dispose = agent.ctx.tools.register(enhancedReadImageTool(ctx, original, publicHttpRuntime))
+    } catch (error: unknown) {
+      if (error instanceof CordisError && error.code === 'INACTIVE_EFFECT') return
+      throw error
+    }
     installed.set(agent, { original, dispose })
   }
 
