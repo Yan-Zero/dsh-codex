@@ -262,6 +262,7 @@ type ImageCompatibleResolvedPiAiProviderProfile =
     maxRequestImageBytes: number;
     requestImagePixelBudget: number;
     requestImageMaxBytes: number;
+    modelErrors: ReadonlyMap<string, string>;
   };
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -543,6 +544,7 @@ export function createOpenAICodexAdapter(
       requestImageMaxBytes: OPENAI_CODEX_PROMPT_IMAGE_INPUT_GUARD_BYTES,
       retryPolicy: OPENAI_CODEX_RETRY_POLICY,
       configuredMaxTokens: new Map(),
+      modelErrors: new Map(),
       piProvider: responses.wrap(configuredProvider),
     };
     resolvedContextWindow = nextContextWindow;
