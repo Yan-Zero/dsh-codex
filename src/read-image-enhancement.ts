@@ -1,6 +1,6 @@
 /** Optional HTTP(S) input for Harness's existing `read_image` tool. */
 
-import { CordisError, type Context } from '@deepseek-ai/cordis'
+import type { Context } from '@deepseek-ai/cordis'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -168,6 +168,25 @@ interface ScopedEnhancement {
   readonly dispose: () => void
 }
 
+/**
+ * Whether one thrown value is Cordis's refusal to create an effect on a
+ * disposed scope.
+ *
+ * The public error code is judged structurally on purpose: when the plugin's
+ * `@deepseek-ai/cordis` and the running Host's resolve to different installation
+ * copies, the two `CordisError` classes differ, `instanceof` is false for the
+ * Host's refusal, and this benign case would escape as a real error.
+ * @param error - the value thrown by `agent.ctx.tools.register`.
+ * @returns true when the value is the inactive-scope refusal.
+ */
+function isInactiveEffect(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { code?: unknown }).code === 'INACTIVE_EFFECT'
+  )
+}
+
 /** Keep an enhanced `read_image` shadow on every live agent while the setting is enabled. */
 export function installReadImageEnhancement(
   ctx: Context,
@@ -202,7 +221,7 @@ export function installReadImageEnhancement(
     try {
       dispose = agent.ctx.tools.register(enhancedReadImageTool(ctx, original, publicHttpRuntime))
     } catch (error: unknown) {
-      if (error instanceof CordisError && error.code === 'INACTIVE_EFFECT') return
+      if (isInactiveEffect(error)) return
       throw error
     }
     installed.set(agent, { original, dispose })

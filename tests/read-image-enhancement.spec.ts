@@ -229,6 +229,41 @@ describe('read_image enhancement', () => {
     expect(registrations).toBe(1)
   })
 
+  it('treats a foreign INACTIVE_EFFECT refusal as the same disposed-scope case', () => {
+    const root = {} as Context
+    const inherited = baseReadImage(root)
+    let registrations = 0
+    const agent = {
+      id: 'agent-with-foreign-cordis-copy',
+      ctx: {
+        tools: {
+          register() {
+            registrations += 1
+            // A duplicated @deepseek-ai/cordis copy in the same process raises its
+            // own class, so the guard has to judge the public error code.
+            throw Object.assign(new Error('cannot create effect on inactive context'), {
+              code: 'INACTIVE_EFFECT',
+            })
+          },
+        },
+      },
+    }
+    Object.assign(root, {
+      tools: {
+        get: (_name: string, scope?: object) => scope === agent ? inherited : undefined,
+      },
+      agents: {
+        list: () => [agent],
+        get: (id: string) => id === agent.id ? agent : undefined,
+      },
+      on: () => () => undefined,
+      effect: (effect: () => () => void) => effect(),
+    })
+
+    expect(() => installReadImageEnhancement(root, new ImageToolPolicy())).not.toThrow()
+    expect(registrations).toBe(1)
+  })
+
   it('advertises separate local-path and HTTP(S) URL inputs', async () => {
     const context = await setup()
     const schema = context.tools.schemas().find(tool => tool.name === 'read_image')
