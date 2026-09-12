@@ -46,9 +46,13 @@ Live settings persist two independent switches. `modifyReadImage` adds or remove
 
 The bundle registers a provider for dsh's existing `web_search` tool. It uses the Codex standalone search endpoint with the same refreshable OAuth credential, maps structured text results to normalized HTTP(S) citations, and supports cached, indexed, and live modes. The endpoint is fixed so profile configuration cannot redirect the bearer token.
 
-Before dispatch, the provider records the exact resolved, secret-free `{ endpoint, body }` request as `web/openai-codex-search-llm-request`. This dedicated event belongs to the plugin; it is declaration-merged into `SessionEventMap` and registered with the running session vocabulary when the plugin loads. The registration remains installed for the process lifetime so hot reload cannot make an already-written session unreadable.
+Before dispatch, the provider appends the exact resolved, secret-free `{ endpoint, body }` request to the plugin-owned record `$DSH_HOME/openai-codex-search-requests.jsonl`; one rotated generation is kept beside the live file so the record stays bounded, and a failed append is reported on stderr without failing the search.
 
-The plugin never writes the discontinued generic `web/search-model-request` event. A session containing the dedicated Codex event requires this plugin to be loaded because the request is model-visible history and is intentionally not ignorable.
+The record is deliberately **not** written into the Session log. A Session's event vocabulary is generated from the Harness repository (`KNOWN_SESSION_EVENT_TYPES`), so a plugin-owned event type is unknown to every reader that does not have this plugin's runtime registration — a different installation, a different profile, an uninstalled plugin, or a duplicated `@deepseek-ai/dsh-session` copy in the same process. One such event makes the read path refuse the whole Session (`SessionFormatUnsupportedError`), which is too high a price for an audit record that resume does not depend on.
+
+For Sessions written by earlier releases, which do contain `web/openai-codex-search-llm-request`, the plugin still adds that retired name to the running vocabulary for reads, so those logs keep loading while the plugin is installed. The name and that registration can be deleted once no Session written by those releases can still be loaded.
+
+The plugin never writes the discontinued generic `web/search-model-request` event.
 
 ## Composition
 

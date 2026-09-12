@@ -141,7 +141,7 @@ bundle 会为新建 agent 选择 `openai-codex` / `gpt-5.6-sol`，并选择 Code
 | `searchContextSize` | `medium` | `low`、`medium`、`high` |
 | `searchMaxOutputTokens` | `10000` | 正整数 |
 
-每个已经解析默认值且不含凭据的辅助请求，都会在发送前记录为专用的 `web/openai-codex-search-llm-request` 会话事件。该事件由本插件拥有并注册，不需要通用搜索事件或 dsh fork。
+每个已经解析默认值且不含凭据的辅助请求，都会在发送前追加到插件自有的记录文件 `$DSH_HOME/openai-codex-search-requests.jsonl`（每个请求一行 JSON，旁边保留一代轮转文件）。记录刻意不写入会话日志：会话事件词汇由 Harness 仓库生成，插件自有事件类型对任何没有本插件运行时注册的读取方都是未知的，含该类型的会话会整份被拒绝读取。早期版本写入的 `web/openai-codex-search-llm-request` 名称仍为读取而注册，因此那些会话继续可以加载。
 
 ## Responses API 实验功能
 

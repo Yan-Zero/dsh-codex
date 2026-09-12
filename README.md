@@ -141,7 +141,7 @@ Configure the `llm-openai-codex` row in a profile patch:
 | `searchContextSize` | `medium` | `low`, `medium`, `high` |
 | `searchMaxOutputTokens` | `10000` | positive integer |
 
-Each resolved, secret-free auxiliary request is recorded before dispatch as the dedicated `web/openai-codex-search-llm-request` session event. The event is owned and registered by this plugin; no generic search event or dsh fork is required.
+Each resolved, secret-free auxiliary request is appended before dispatch to this plugin's own record, `$DSH_HOME/openai-codex-search-requests.jsonl` (one JSON line per request, one rotated generation kept beside it). The Session log is deliberately left out of it: a Session's event vocabulary is generated from the Harness repository, so a plugin-owned event type is unknown to every reader without this plugin's runtime registration, and a Session containing one is refused wholesale on a cold read. The retired `web/openai-codex-search-llm-request` event name stays registered for reads so Sessions written by earlier releases keep loading.
 
 ## Responses API experiments
 
