@@ -46,9 +46,13 @@ Codex 模型从 provider 目录继承其声明的输入模态。现有 dsh Web �
 
 bundle 为 dsh 现有的 `web_search` 工具注册提供方。它使用 Codex 独立搜索端点与同一份可刷新 OAuth 凭据，把结构化文本结果转换为规范化的 HTTP(S) 引用，并支持 cached、indexed 和 live 模式。端点固定，profile 配置无法把 bearer token 重定向到其他地址。
 
-每次发送前，提供方都会把已经解析默认值且不含凭据的 `{ endpoint, body }` 精确记录为 `web/openai-codex-search-llm-request`。这个专用事件归插件所有：它通过声明合并加入 `SessionEventMap`，并在插件加载时注册到当前进程的 session 事件词汇。注册会保留到进程结束，避免热重载使已经写入的 session 突然无法读取。
+每次发送前，提供方都会把已经解析默认值且不含凭据的 `{ endpoint, body }` 追加到插件自有的记录文件 `$DSH_HOME/openai-codex-search-requests.jsonl`；旁边保留一代轮转文件，使记录体积有界；写入失败只在 stderr 报告，不会让搜索失败。
 
-插件绝不会写入已停用的通用 `web/search-model-request` 事件。包含 Codex 专用事件的 session 必须在本插件已加载时读取，因为该请求属于模型可见历史，不能标记为可忽略。
+记录刻意**不**写进会话日志。会话事件词汇由 Harness 仓库生成（`KNOWN_SESSION_EVENT_TYPES`），因此插件自有事件类型对任何没有本插件运行时注册的读取方都是未知的——另一套安装、另一个 profile、插件已卸载，或同一进程内出现重复的 `@deepseek-ai/dsh-session` 模块副本。只要有一个这类事件，读取路径就会整份拒绝该会话（`SessionFormatUnsupportedError`），而 resume 并不依赖这条审计记录，代价过高。
+
+对于早期版本写入、确实包含 `web/openai-codex-search-llm-request` 的会话，插件仍会为读取把该旧名称注册进运行时词汇，使这些日志在插件已安装时继续可加载。等不再有由那些版本写入、仍可能被加载的会话之后，可以删除该名称与这段注册。
+
+插件绝不会写入已停用的通用 `web/search-model-request` 事件。
 
 ## 组合
 

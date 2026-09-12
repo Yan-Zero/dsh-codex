@@ -1,4 +1,5 @@
-import { mkdtemp, realpath, rm } from 'node:fs/promises'
+import { readFile, mkdtemp, realpath, rm } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -224,7 +225,11 @@ describe('OpenAI Codex composite plugin', () => {
       expires: Date.now() + 3_600_000,
       accountId: 'plugin-account',
     }))
-    const fetchMock = vi.fn(async () => jsonResponse(searchPayload))
+    let recordPresentAtDispatch = false
+    const fetchMock = vi.fn(async () => {
+      recordPresentAtDispatch = existsSync(OpenAICodex.openAICodexSearchRequestLogPath())
+      return jsonResponse(searchPayload)
+    })
     vi.stubGlobal('fetch', fetchMock)
     const ctx = new Context()
     context = ctx
@@ -250,26 +255,34 @@ describe('OpenAI Codex composite plugin', () => {
     })
     expect(KNOWN_SESSION_EVENT_TYPES.has(OpenAICodex.OPENAI_CODEX_SEARCH_MODEL_REQUEST_EVENT)).toBe(true)
     expect(KNOWN_SESSION_EVENT_TYPES.has('web/search-model-request')).toBe(false)
-    expect(append).toHaveBeenCalledOnce()
-    expect(append).toHaveBeenCalledWith(
-      OpenAICodex.OPENAI_CODEX_SEARCH_MODEL_REQUEST_EVENT,
-      {
-        endpoint: OpenAICodex.OPENAI_CODEX_SEARCH_URL,
-        body: {
-          id: 'session-codex-search',
-          model: 'gpt-search-plugin',
-          input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'q' }] }],
-          commands: { search_query: [{ q: 'q' }] },
-          settings: {
-            search_context_size: 'high',
-            allowed_callers: ['direct'],
-            external_web_access: true,
-          },
-          max_output_tokens: 321,
+    // The Session log stays free of plugin-owned events: the record is written to
+    // the plugin-owned file beside the Session instead.
+    expect(append).not.toHaveBeenCalled()
+    const recordPath = OpenAICodex.openAICodexSearchRequestLogPath()
+    expect(recordPath.startsWith(root)).toBe(true)
+    const records = (await readFile(recordPath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({
+      endpoint: OpenAICodex.OPENAI_CODEX_SEARCH_URL,
+      body: {
+        id: 'session-codex-search',
+        model: 'gpt-search-plugin',
+        input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'q' }] }],
+        commands: { search_query: [{ q: 'q' }] },
+        settings: {
+          search_context_size: 'high',
+          allowed_callers: ['direct'],
+          external_web_access: true,
         },
+        max_output_tokens: 321,
       },
-    )
-    expect(append.mock.invocationCallOrder[0]).toBeLessThan(fetchMock.mock.invocationCallOrder[0] ?? 0)
+    })
+    expect(typeof records[0].time).toBe('number')
+    // Recording still happens before the request leaves the process.
+    expect(recordPresentAtDispatch).toBe(true)
     await fiber.dispose()
     expect(KNOWN_SESSION_EVENT_TYPES.has(OpenAICodex.OPENAI_CODEX_SEARCH_MODEL_REQUEST_EVENT)).toBe(true)
     await expect(ctx.web.search({ query: 'q' }))
