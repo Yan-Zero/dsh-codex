@@ -55,7 +55,15 @@ export class OpenAICodexService {
 
   constructor(options: OpenAICodexServiceOptions) {
     this.credentials = new OpenAICodexCredentialStore(options.credentialFile);
-    this.policy = new ImageToolPolicy(options, options.modelCatalog);
+    // Only preferences belong in the settings composition base: `modelCatalog`
+    // is a live thunk and `credentialFile` is not a preference, and either one
+    // reaching the descriptor makes settings.describe() fail to materialize.
+    const {
+      modelCatalog,
+      credentialFile: _credentialFile,
+      ...preferences
+    } = options;
+    this.policy = new ImageToolPolicy(preferences, modelCatalog);
     this.proxy = new OpenAICodexProxyTransport(() =>
       this.policy.proxySnapshot()
     );
