@@ -1,0 +1,91 @@
+name: Release
+
+# Publishes an installable tarball for a release candidate or a release, so a
+# fork (or the maintainer, before npm is ready) can hand out
+#   dsh plugin --profile web add <release asset url>
+# without waiting for a publishable version. The npm release stays owned by
+# publish.yml; this workflow only builds and attaches the artifact.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to pack, with or without a leading v (for example 0.2.10-rc.1)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Resolve the version to pack
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            raw="${{ inputs.version }}"
+          else
+            raw="$GITHUB_REF_NAME"
+          fi
+          version="${raw#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Version '$version' is not a release or release-candidate semver" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$version" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.21.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: pnpm --config.minimum-release-age=0 install --frozen-lockfile
+      - name: Stamp the requested version into the package
+        run: pnpm version "${{ steps.version.outputs.version }}" --no-git-tag-version
+      - run: pnpm run check
+      - run: pnpm --config.minimum-release-age=0 pack
+
+      - name: Keep the packed tarball as a workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: dsh-codex-${{ steps.version.outputs.version }}
+          path: dsh-codex-*.tgz
+          if-no-files-found: error
+
+      - name: Publish the GitHub release with the installable tarball
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v${{ steps.version.outputs.version }}"
+          prerelease="${{ steps.version.outputs.prerelease }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dsh-codex-*.tgz --clobber
+            exit 0
+          fi
+          args=(--title "$tag" --generate-notes)
+          if [[ "$prerelease" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$tag" dsh-codex-*.tgz "${args[@]}"
