@@ -52,7 +52,7 @@ const HELP = [
   "  /codex logout",
   "  /codex usage",
   "  /codex config",
-  "  /codex set <read-image|imagegen-other-models|websocket-context|native-compaction|spark-context-window> <on|off>",
+  "  /codex set <backend-fallback|read-image|imagegen-other-models|websocket-context|native-compaction|spark-context-window> <on|off>",
 ].join("\n");
 
 function translatedNode(
@@ -93,6 +93,11 @@ const CODEX_ACTIONS: readonly TuiSubcommandNode[] = [
 ];
 
 const CODEX_SETTINGS: readonly TuiSubcommandNode[] = [
+  translatedNode(
+    "backend-fallback",
+    "Follow model recovery authorized by OpenAI",
+    "使用 OpenAI 后端授权的模型回退"
+  ),
   translatedNode(
     "read-image",
     "Enhance read_image with HTTP(S) input",
@@ -360,6 +365,7 @@ function formatConfig(service: OpenAICodexService): string {
   const contextWindow = service.contextWindowPreferences();
   const catalog = service.modelCatalogSettings();
   const proxy = service.proxyPreferences();
+  const fallback = service.modelFallbackPreferences();
   const enabledModels = new Set(catalog.models);
   const models = catalog.availableModels.flatMap((model) => [
     "",
@@ -369,6 +375,7 @@ function formatConfig(service: OpenAICodexService): string {
     `  enabled: ${enabledModels.has(model.id) ? "on" : "off"}`,
   ]);
   return [
+    `backend-fallback: ${fallback.automaticModelFallback ? "on" : "off"}`,
     `read-image: ${image.modifyReadImage ? "on" : "off"}`,
     `imagegen-other-models: ${image.shareImagegenWithOtherModels ? "on" : "off"}`,
     `websocket-context: ${responses.useWebSocketContextReuse ? "on" : "off"}`,
@@ -387,6 +394,11 @@ async function updateSetting(
   enabled: boolean
 ): Promise<void> {
   switch (key) {
+    case "backend-fallback":
+      await service.updateModelFallbackPreferences({
+        automaticModelFallback: enabled,
+      });
+      return;
     case "read-image":
       await service.updateImagePreferences({ modifyReadImage: enabled });
       return;

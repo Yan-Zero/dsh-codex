@@ -44,6 +44,13 @@ export const en = {
   fastModeDefaultHint:
     "When enabled, every conversation uses 1.5× speed with faster quota consumption, without toggling the per-conversation ⚡ switch.",
   fastModeSettingsFailed: "Fast Mode settings could not be saved.",
+  modelFallback: "Automatic model fallback",
+  modelFallbackIntro:
+    "Keep a conversation moving when OpenAI authorizes another model for this account.",
+  automaticModelFallback: "Use backend-authorized fallback",
+  automaticModelFallbackHint:
+    "Off by default. The actual fallback is prepared and recorded by dsh; image input stays enabled only on a compatible replacement, and imagegen continues to use gpt-image-2. Without a compatible fallback, the original quota error is preserved.",
+  modelFallbackSettingsFailed: "Model fallback settings could not be saved.",
   requestFailed: "The OpenAI Codex account request failed.",
   remoteOriginTitle: "Browser origin is not trusted",
   remoteOriginDescription:
@@ -176,6 +183,13 @@ export const zh: { [Key in OpenAICodexSettingsKey]: string } = {
   fastModeDefaultHint:
     "开启后所有会话默认使用 1.5 倍速，额度消耗更快，无需逐会话点击 ⚡ 开关。",
   fastModeSettingsFailed: "无法保存 Fast Mode 设置。",
+  modelFallback: "自动模型回退",
+  modelFallbackIntro:
+    "当 OpenAI 明确为当前账号授权其他模型时，让会话自动继续。",
+  automaticModelFallback: "使用后端授权的回退模型",
+  automaticModelFallbackHint:
+    "默认关闭。dsh 会准备并记录实际使用的回退模型；只有兼容替代模型才会继续接收图片，imagegen 仍使用 gpt-image-2。没有兼容回退时保留原始额度错误。",
+  modelFallbackSettingsFailed: "无法保存模型回退设置。",
   requestFailed: "OpenAI Codex 账户请求失败。",
   remoteOriginTitle: "浏览器来源尚未受信任",
   remoteOriginDescription:

@@ -29,6 +29,7 @@ function fakeService(): OpenAICodexService {
     proxyMode: "off" as const,
     proxyUrl: "",
   };
+  let modelFallbackPreferences = { automaticModelFallback: false };
   return {
     authStatus: vi.fn(async () => ({
       authenticated: true,
@@ -51,6 +52,11 @@ function fakeService(): OpenAICodexService {
       return { ...imagePreferences };
     }),
     responsePreferences: vi.fn(() => ({ ...responsePreferences })),
+    modelFallbackPreferences: vi.fn(() => ({ ...modelFallbackPreferences })),
+    updateModelFallbackPreferences: vi.fn(async (patch) => {
+      modelFallbackPreferences = { ...modelFallbackPreferences, ...patch };
+      return { ...modelFallbackPreferences };
+    }),
     contextWindowPreferences: vi.fn(() => ({ ...contextWindowPreferences })),
     updateContextWindowPreferences: vi.fn(async (patch) => {
       contextWindowPreferences = { ...contextWindowPreferences, ...patch };
@@ -150,6 +156,7 @@ describe("UI-neutral command with optional dsh-tui completion", () => {
     expect(
       commandTree.children(["codex", "set"]).map((item) => item.name)
     ).toEqual([
+      "backend-fallback",
       "read-image",
       "imagegen-other-models",
       "websocket-context",
@@ -179,6 +186,7 @@ describe("UI-neutral command with optional dsh-tui completion", () => {
       text: expect.stringContaining("read-image: on"),
     });
     expect(config.text).toContain("spark-context-window: off");
+    expect(config.text).toContain("backend-fallback: off");
     expect(config.text).toContain(
       [
         "model: GPT-5.3 Codex Spark",
@@ -212,6 +220,15 @@ describe("UI-neutral command with optional dsh-tui completion", () => {
     });
     expect(service.updateContextWindowPreferences).toHaveBeenCalledWith({
       overrideSparkContextWindow: true,
+    });
+    await expect(
+      definition.handler({ rawInput: " set backend-fallback on" } as never)
+    ).resolves.toMatchObject({
+      kind: "success",
+      text: expect.stringContaining("backend-fallback: on"),
+    });
+    expect(service.updateModelFallbackPreferences).toHaveBeenCalledWith({
+      automaticModelFallback: true,
     });
     expect(ctx.get("openAICodexTui")).toEqual({});
   });

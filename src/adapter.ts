@@ -35,13 +35,16 @@ import { OpenAICodexModelCatalog } from "./model-catalog.ts";
 
 const GPT_5_3_CODEX_SPARK = "gpt-5.3-codex-spark";
 const GPT_6_ASTRA = "gpt-6-astra";
+const GPT_5_6_LUNA = "gpt-5.6-luna";
+/** Backend-authorized Luna Reserve route; deliberately hidden from discovery. */
+export const OPENAI_CODEX_LUNA_RESERVE_MODEL = "gpt-reserve";
 
 const OPENAI_CODEX_MODEL_ORDER = new Map<string, number>(
   [
     GPT_6_ASTRA,
     "gpt-5.6-sol",
     "gpt-5.6-terra",
-    "gpt-5.6-luna",
+    GPT_5_6_LUNA,
     GPT_5_3_CODEX_SPARK,
     "gpt-5.5",
     "gpt-5.4",
@@ -69,11 +72,48 @@ function withOpenAICodexModelOrder(provider: Provider): Provider {
   };
 }
 
+/**
+ * Make the official hidden Reserve route exactly resolvable without advertising
+ * it for manual selection. Codex borrows Luna's model capabilities for Reserve.
+ */
+function withOpenAICodexLunaReserve(provider: Provider): Provider {
+  const getModels = provider.getModels;
+  let sourceModels: ReturnType<Provider["getModels"]> | undefined;
+  let reserveModels: ReturnType<Provider["getModels"]> | undefined;
+  return {
+    ...provider,
+    getModels() {
+      const models = getModels.call(provider);
+      if (models === sourceModels && reserveModels !== undefined)
+        return reserveModels;
+      if (models.some((model) => model.id === OPENAI_CODEX_LUNA_RESERVE_MODEL))
+        return models;
+      const luna = models.find((model) => model.id === GPT_5_6_LUNA);
+      const next = luna === undefined
+        ? models
+        : [
+            ...models,
+            {
+              ...luna,
+              id: OPENAI_CODEX_LUNA_RESERVE_MODEL,
+              name: "Luna Reserve",
+            },
+          ];
+      sourceModels = models;
+      reserveModels = next;
+      return next;
+    },
+  };
+}
+
 /** Keep bundled models as a fallback and discover new releases from Codex metadata. */
 export function createOpenAICodexModelProvider(requestFetch?: typeof globalThis.fetch): Provider {
   const provider = withOpenAICodexModelOrder(openaiCodexProvider(requestFetch));
   const catalog = new OpenAICodexModelCatalog(provider.getModels());
-  return { ...provider, getModels: () => catalog.getModels() };
+  return withOpenAICodexLunaReserve({
+    ...provider,
+    getModels: () => catalog.getModels(),
+  });
 }
 
 /** Return a detached copy of the current Codex model catalog for settings. */
@@ -82,6 +122,7 @@ export function openAICodexModelCatalog(
 ): readonly ModelCatalogEntry[] {
   return provider
     .getModels()
+    .filter((model) => model.id !== OPENAI_CODEX_LUNA_RESERVE_MODEL)
     .map((model) => ({
       id: model.id,
       name: model.name,
@@ -304,6 +345,7 @@ export function withOpenAICodexFastMode(
       const enabled =
         provider.id === OPENAI_CODEX_PROVIDER &&
         model.provider === OPENAI_CODEX_PROVIDER &&
+        model.id !== OPENAI_CODEX_LUNA_RESERVE_MODEL &&
         (fastModeDefault?.() === true ||
           fastMode?.isEnabled(options?.sessionId) === true);
       if (!enabled) return streamSimple.call(provider, model, context, options);
@@ -336,7 +378,9 @@ function withOpenAICodexContextWindow(
       return getModels
         .call(provider)
         .map((model) =>
-          model.id === GPT_5_3_CODEX_SPARK && !overrideSparkContextWindow
+          model.id === OPENAI_CODEX_LUNA_RESERVE_MODEL
+            ? model
+            : model.id === GPT_5_3_CODEX_SPARK && !overrideSparkContextWindow
             ? model
             : { ...model, contextWindow }
         );
@@ -394,7 +438,9 @@ class OpenAICodexAdapter extends PiAiAdapter {
   }
 
   override async listModels(provider: string) {
-    const models = await super.listModels(provider);
+    const models = (await super.listModels(provider)).filter(
+      (model) => model.id !== OPENAI_CODEX_LUNA_RESERVE_MODEL
+    );
     const visibleModelIds = this.visibleModelIds?.();
     if (visibleModelIds === undefined) return models;
     const visible = new Set(visibleModelIds);

@@ -12,6 +12,7 @@ import {
   OPENAI_CODEX_AUTH_STATUS_PATH,
   OPENAI_CODEX_CONTEXT_WINDOW_SETTINGS_PATH,
   OPENAI_CODEX_MODEL_CATALOG_SETTINGS_PATH,
+  OPENAI_CODEX_MODEL_FALLBACK_SETTINGS_PATH,
   OPENAI_CODEX_PROXY_SETTINGS_PATH,
   REMOTE_WEB_ORIGIN_NOT_TRUSTED,
   registerOpenAICodexAuthRoutes,
@@ -205,6 +206,41 @@ describe('OpenAI Codex Web OAuth boundary', () => {
     expect(postResponse.observed.status).toBe(200)
     expect(updateModelCatalog).toHaveBeenCalledWith({ models: ['gpt-5.6-sol'] })
     expect(JSON.parse(postResponse.observed.body ?? 'null').models).toEqual(['gpt-5.6-sol'])
+  })
+
+  it('serves and validates the automatic model fallback toggle', async () => {
+    let automaticModelFallback = false
+    const preferences = {
+      modelFallbackSnapshot: vi.fn(() => ({ automaticModelFallback })),
+      updateModelFallback: vi.fn(async (patch: { automaticModelFallback?: boolean }) => {
+        if (patch.automaticModelFallback !== undefined) {
+          automaticModelFallback = patch.automaticModelFallback
+        }
+        return { automaticModelFallback }
+      }),
+    } as unknown as ImageToolPolicy
+    const route = captureRoutes(emptyTrustedOrigins, preferences)
+      .find(candidate => candidate.path === OPENAI_CODEX_MODEL_FALLBACK_SETTINGS_PATH)
+    if (route === undefined) throw new Error('model fallback settings route was not registered')
+
+    const getResponse = response()
+    await route.handler(request({}), getResponse)
+    expect(JSON.parse(getResponse.observed.body ?? 'null')).toEqual({ automaticModelFallback: false })
+
+    const postResponse = response()
+    await route.handler(request({
+      method: 'POST',
+      body: JSON.stringify({ automaticModelFallback: true }),
+    }), postResponse)
+    expect(postResponse.observed.status).toBe(200)
+    expect(automaticModelFallback).toBe(true)
+
+    const invalidResponse = response()
+    await route.handler(request({
+      method: 'POST',
+      body: JSON.stringify({ automaticModelFallback: 'yes' }),
+    }), invalidResponse)
+    expect(invalidResponse.observed.status).toBe(400)
   })
 
   it('serves, updates, resets, and validates the context-window override', async () => {

@@ -50,6 +50,7 @@ describe("OpenAI Codex settings model catalog", () => {
     let contextWindow: number | null = null;
     let overrideSparkContextWindow = false;
     let fastModeDefault = false;
+    let automaticModelFallback = false;
     let proxy = { proxyMode: "off", proxyUrl: "" };
     const fetchMock = vi.fn(
       async (
@@ -78,6 +79,16 @@ describe("OpenAI Codex settings model catalog", () => {
               fastModeDefault = patch.fastModeDefault;
           }
           return json({ fastModeDefault });
+        }
+        if (path.endsWith("/model-fallback")) {
+          if (init?.method === "POST") {
+            const patch = JSON.parse(String(init.body)) as Partial<{
+              automaticModelFallback: boolean;
+            }>;
+            if (patch.automaticModelFallback !== undefined)
+              automaticModelFallback = patch.automaticModelFallback;
+          }
+          return json({ automaticModelFallback });
         }
         if (path.endsWith("/proxy")) {
           if (init?.method === "POST") {
@@ -230,6 +241,25 @@ describe("OpenAI Codex settings model catalog", () => {
     );
     expect(JSON.parse(String(fastModePost?.[1]?.body))).toEqual({
       fastModeDefault: true,
+    });
+
+    const fallbackToggle = await screen.findByRole<HTMLButtonElement>(
+      "switch",
+      { name: en.automaticModelFallback }
+    );
+    expect(fallbackToggle.getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByText(en.automaticModelFallbackHint)).toBeDefined();
+    fireEvent.click(fallbackToggle);
+    await waitFor(() => {
+      expect(automaticModelFallback).toBe(true);
+      expect(fallbackToggle.getAttribute("aria-checked")).toBe("true");
+    });
+    const fallbackPost = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        String(input).endsWith("/model-fallback") && init?.method === "POST"
+    );
+    expect(JSON.parse(String(fallbackPost?.[1]?.body))).toEqual({
+      automaticModelFallback: true,
     });
 
     fireEvent.change(capacity, { target: { value: "1.0001" } });

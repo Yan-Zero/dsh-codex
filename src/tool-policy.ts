@@ -50,6 +50,12 @@ export interface FastModePreferences {
   fastModeDefault: boolean;
 }
 
+/** Server-authorized model recovery behavior. */
+export interface ModelFallbackPreferences {
+  /** Follow a fallback explicitly authorized by the current account response. */
+  automaticModelFallback: boolean;
+}
+
 /** Browser projection containing both available and currently visible models. */
 export interface ModelCatalogSettings extends ModelCatalogPreferences {
   availableModels: ModelCatalogEntry[];
@@ -62,6 +68,7 @@ interface OpenAICodexPreferences
     ModelCatalogPreferences,
     ContextWindowPreferences,
     FastModePreferences,
+    ModelFallbackPreferences,
     ProxyPreferences {
   /** Migration-only key written by the unreleased store:true experiment. */
   useStatefulResponses: boolean;
@@ -90,6 +97,11 @@ export const DEFAULT_FAST_MODE_PREFERENCES: FastModePreferences = {
   fastModeDefault: false,
 };
 
+/** Never change the selected request route until the user opts in. */
+export const DEFAULT_MODEL_FALLBACK_PREFERENCES: ModelFallbackPreferences = {
+  automaticModelFallback: false,
+};
+
 const NAMESPACE = "openai-codex" as SettingsNamespace;
 
 function preferenceSchema(
@@ -112,6 +124,7 @@ function preferenceSchema(
     proxyUrl: z.string().default(""),
     models: z.array(z.string()).default([...defaultModels]),
     fastModeDefault: z.boolean().default(false),
+    automaticModelFallback: z.boolean().default(false),
   });
 }
 
@@ -142,6 +155,7 @@ export class ImageToolPolicy {
       ...DEFAULT_RESPONSE_API_PREFERENCES,
       ...DEFAULT_CONTEXT_WINDOW_PREFERENCES,
       ...DEFAULT_FAST_MODE_PREFERENCES,
+      ...DEFAULT_MODEL_FALLBACK_PREFERENCES,
       ...DEFAULT_PROXY_PREFERENCES,
       useStatefulResponses: false,
       ...base,
@@ -264,6 +278,24 @@ export class ImageToolPolicy {
     await this.scope.update(patch);
     this.replace(this.scope.get());
     return this.fastModeSnapshot();
+  }
+
+  /** Return whether backend-authorized automatic model recovery is enabled. */
+  modelFallbackSnapshot(): ModelFallbackPreferences {
+    return {
+      automaticModelFallback: this.current.automaticModelFallback,
+    };
+  }
+
+  /** Persist the automatic model fallback toggle. */
+  async updateModelFallback(
+    patch: Partial<ModelFallbackPreferences>
+  ): Promise<ModelFallbackPreferences> {
+    if (this.scope === undefined)
+      throw new Error("OpenAI Codex settings service is unavailable");
+    await this.scope.update(patch);
+    this.replace(this.scope.get());
+    return this.modelFallbackSnapshot();
   }
 
   /** Return the live provider proxy mode and explicit URL. */

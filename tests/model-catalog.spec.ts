@@ -97,6 +97,7 @@ describe("Codex model discovery", () => {
         "gpt-5.4-mini",
         "gpt-future-b",
         "gpt-future-a",
+        "gpt-reserve",
       ]);
   });
 

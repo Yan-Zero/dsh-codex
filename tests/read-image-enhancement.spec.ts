@@ -303,6 +303,23 @@ describe('read_image enhancement', () => {
     expect(get).toHaveBeenCalledOnce()
   })
 
+  it('keeps enhanced image reads available on the hidden Luna Reserve route', async () => {
+    const get = vi.fn(async () => ({ status: 200, data: new Uint8Array(PNG_1X1) }))
+    const context = await setup({
+      resolve: async () => [{ address: '93.184.216.34', family: 4 }],
+      get,
+    })
+
+    const result = await readImage(
+      context,
+      { url: 'https://images.example/pixel' },
+      OpenAICodex.OPENAI_CODEX_LUNA_RESERVE_MODEL,
+    )
+
+    expect(result.isError).toBe(false)
+    expect(result.content.some(block => block.type === 'image')).toBe(true)
+  })
+
   it('requires exactly one input source', async () => {
     const context = await setup()
 

@@ -35,6 +35,7 @@ import type {
   ImageToolPolicy,
   ImageToolPreferences,
   ModelCatalogPreferences,
+  ModelFallbackPreferences,
   ResponseApiPreferences,
 } from "./tool-policy.ts";
 import type { ProxyPreferences } from "./proxy.ts";
@@ -61,6 +62,9 @@ export const OPENAI_CODEX_CONTEXT_WINDOW_SETTINGS_PATH =
 /** Plugin-owned Fast Mode default endpoint consumed by its browser half. */
 export const OPENAI_CODEX_FAST_MODE_SETTINGS_PATH =
   "/plugins/dsh-openai-codex/fast-mode-default";
+/** Plugin-owned backend model fallback endpoint consumed by its browser half. */
+export const OPENAI_CODEX_MODEL_FALLBACK_SETTINGS_PATH =
+  "/plugins/dsh-openai-codex/model-fallback";
 /** Plugin-owned proxy preference endpoint consumed by its browser half. */
 export const OPENAI_CODEX_PROXY_SETTINGS_PATH =
   "/plugins/dsh-openai-codex/proxy";
@@ -100,6 +104,7 @@ export interface OpenAICodexWebAuthOptions {
   signInTimeoutMs?: number;
   requestFetch?: typeof globalThis.fetch;
   beforeNetworkRequest?: () => Promise<void>;
+  readUsage?: () => Promise<OpenAICodexUsage>;
 }
 
 /** Redact provider diagnostics before they cross to the browser. */
@@ -147,6 +152,7 @@ export class OpenAICodexWebAuth {
   private readonly signInTimeoutMs: number;
   private readonly requestFetch: typeof globalThis.fetch;
   private readonly beforeNetworkRequest: (() => Promise<void>) | undefined;
+  private readonly readUsage: () => Promise<OpenAICodexUsage>;
 
   constructor(
     private readonly store: OpenAICodexCredentialStore,
@@ -158,6 +164,8 @@ export class OpenAICodexWebAuth {
       options.signInTimeoutMs ?? OPENAI_CODEX_SIGN_IN_TIMEOUT_MS;
     this.requestFetch = options.requestFetch ?? globalThis.fetch;
     this.beforeNetworkRequest = options.beforeNetworkRequest;
+    this.readUsage = options.readUsage ?? (() =>
+      readOpenAICodexRateLimits(this.store, this.requestFetch));
     if (
       !Number.isFinite(this.challengeTimeoutMs) ||
       this.challengeTimeoutMs <= 0
@@ -313,7 +321,7 @@ export class OpenAICodexWebAuth {
     try {
       return {
         status: "signed-in",
-        usage: await readOpenAICodexRateLimits(this.store, this.requestFetch),
+        usage: await this.readUsage(),
       };
     } catch (error: unknown) {
       if (isOpenAICodexReauthRequiredError(error)) {
@@ -714,6 +722,21 @@ function fastModeSettingsPatch(
   return patch;
 }
 
+function modelFallbackSettingsPatch(
+  value: Record<string, unknown>
+): Partial<ModelFallbackPreferences> {
+  if (
+    Object.keys(value).some((key) => key !== "automaticModelFallback")
+  ) {
+    throw new TypeError("request contains an unknown model fallback setting");
+  }
+  const automaticModelFallback = value["automaticModelFallback"];
+  if (typeof automaticModelFallback !== "boolean") {
+    throw new TypeError("automaticModelFallback must be a boolean");
+  }
+  return { automaticModelFallback };
+}
+
 function proxyPreferencePatch(
   value: Record<string, unknown>
 ): Partial<ProxyPreferences> {
@@ -755,6 +778,7 @@ interface ProxySettingsController {
   updateProxyPreferences(
     patch: Partial<ProxyPreferences>
   ): Promise<ProxyPreferences>;
+  usage?(forceRefresh?: boolean): Promise<OpenAICodexUsage>;
 }
 
 /** Register the plugin-owned OAuth routes when the Web server is composed. */
@@ -771,6 +795,9 @@ export function registerOpenAICodexAuthRoutes(
   const auth = new OpenAICodexWebAuth(store, {
     ...(requestFetch === undefined ? {} : { requestFetch }),
     ...(beforeNetworkRequest === undefined ? {} : { beforeNetworkRequest }),
+    ...(proxySettings?.usage === undefined
+      ? {}
+      : { readUsage: () => proxySettings.usage!() }),
   });
   const storedFilename = (
     store as OpenAICodexCredentialStore & { filename?: unknown }
@@ -981,6 +1008,28 @@ export function registerOpenAICodexAuthRoutes(
                     200,
                     await imageTools.updateFastMode(
                       fastModeSettingsPatch(await readSettingsBody(req))
+                    )
+                  );
+                } catch (error: unknown) {
+                  return json(res, 400, { error: safeMessage(error) });
+                }
+              },
+            }),
+            ctx.webServer.register({
+              kind: "exact",
+              path: OPENAI_CODEX_MODEL_FALLBACK_SETTINGS_PATH,
+              handler: async (req, res) => {
+                if (!(await authorize(req, res))) return;
+                if (req.method === "GET")
+                  return json(res, 200, imageTools.modelFallbackSnapshot());
+                if (req.method !== "POST")
+                  return json(res, 405, { error: "method not allowed" });
+                try {
+                  return json(
+                    res,
+                    200,
+                    await imageTools.updateModelFallback(
+                      modelFallbackSettingsPatch(await readSettingsBody(req))
                     )
                   );
                 } catch (error: unknown) {
