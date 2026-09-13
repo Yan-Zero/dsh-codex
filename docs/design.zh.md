@@ -10,7 +10,7 @@ Status: implemented
 
 ## 认证
 
-插件把 OAuth 端点、PKCE／device code 行为、account id 提取、token 刷新和 Codex 请求认证交给 dsh 基础 bundle 提供的 pi-ai Codex provider。用户可以从插件的设置页面或 `dsh-openai-codex` 可执行文件启动同一套登录生命周期。Web 认证路由默认信任回环地址上的同源请求；远端页面只有在设备所有者把完整 origin 加入独立 allowlist 后才可访问。路由返回 `no-store` JSON，且绝不暴露 token。账号页面会在不发送模型请求的情况下读取固定的 ChatGPT Codex usage 端点，把服务端用量转换为剩余百分比进度条；只有响应包含 credit 或 workspace limit 数值时才显示精确额度。
+插件把 OAuth 端点、PKCE／device code 行为、account id 提取、token 刷新和 Codex 请求认证交给 dsh 基础 bundle 提供的 pi-ai Codex provider。用户可以从插件的设置页面或 profile 内的 `dsh-codex` 可执行文件启动同一套登录生命周期。Web 认证路由默认信任回环地址上的同源请求；远端页面只有在设备所有者把完整 origin 加入独立 allowlist 后才可访问。路由返回 `no-store` JSON，且绝不暴露 token。账号页面会在不发送模型请求的情况下读取固定的 ChatGPT Codex usage 端点，把服务端用量转换为剩余百分比进度条；只有响应包含 credit 或 workspace limit 数值时才显示精确额度。
 
 凭据以带版本的 JSON 文档存储在 `$DSH_HOME/.openai-codex-auth.json`。文件采用原子写入，跨进程锁覆盖登录、刷新和登出。该存储有意与 `~/.codex/auth.json` 分离；如果两个独立写入的客户端共享会轮换的 refresh token，其中任一方都可能使另一方的凭据失效。
 
@@ -46,9 +46,9 @@ Codex 模型从 provider 目录继承其声明的输入模态。现有 dsh Web �
 
 bundle 为 dsh 现有的 `web_search` 工具注册提供方。它使用 Codex 独立搜索端点与同一份可刷新 OAuth 凭据，把结构化文本结果转换为规范化的 HTTP(S) 引用，并支持 cached、indexed 和 live 模式。端点固定，profile 配置无法把 bearer token 重定向到其他地址。
 
-每次发送前，提供方都会把已经解析默认值且不含凭据的 `{ endpoint, body }` 精确记录为 `web/openai-codex-search-llm-request`。这个专用事件归插件所有：它通过声明合并加入 `SessionEventMap`，并在插件加载时注册到当前进程的 session 事件词汇。注册会保留到进程结束，避免热重载使已经写入的 session 突然无法读取。
+0.3.0 之前的版本把解析后的请求记录为 `web/openai-codex-search-llm-request`。DSH 历史格式迁移所用的事件清单在构建时冻结，因此不带 `ignorable: true` 的外部事件无法通过迁移。0.3.0 不再生成该事件；旧名称只为同 generation 读取继续注册。`repair-session` 会验证受影响的历史 payload，在官方格式目录重映射 Session 时换入保持事件数量不变的内部标记，随后把它恢复为带 `ignorable: true` 的原事件，校验当前产物，并独占发布新的当前 generation，全程不修改源文件。
 
-插件绝不会写入已停用的通用 `web/search-model-request` 事件。包含 Codex 专用事件的 session 必须在本插件已加载时读取，因为该请求属于模型可见历史，不能标记为可忽略。
+插件既不写入已停用的通用 `web/search-model-request` 事件，也不创建私有搜索请求 sidecar。Harness 的 `tool/call` 和 `tool/result` 继续构成持久搜索历史。
 
 ## 组合
 

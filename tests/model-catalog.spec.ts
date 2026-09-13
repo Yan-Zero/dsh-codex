@@ -40,16 +40,19 @@ describe("Codex model discovery", () => {
       id: "gpt-6-astra", name: "GPT-6-Astra", contextWindow: 272_000,
       maxTokens: 128_000, input: ["text", "image"],
       baseUrl: "https://chatgpt.com/backend-api", provider: "openai-codex",
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       thinkingLevelMap: { minimal: "low", medium: null, max: "max" },
     });
+    expect(astraModel?.cost).toEqual(bundled.find(model => model.id === "gpt-6-astra")?.cost);
     expect(astraModel?.headers).toBeUndefined();
     expect(models.find((model) => model.id === "gpt-future-model"))
-      .toMatchObject({ id: "gpt-future-model", input: ["text"] });
+      .toMatchObject({
+        id: "gpt-future-model", input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      });
     expect(models.slice(0, bundled.length).map((model) => model.id))
       .toEqual(bundled.map((model) => model.id));
     expect(models.slice(bundled.length).map((model) => model.id))
-      .toEqual(["gpt-6-astra", "gpt-future-model"]);
+      .toEqual(["gpt-future-model"]);
     expect(models.some(model => model.id === "gpt-5.4")).toBe(true);
   });
 

@@ -2,6 +2,8 @@
 
 English | [中文](README.zh.md)
 
+**[Migration guide: repair Sessions created by dsh-codex versions before 0.3.0](docs/session-repair.md)**
+
 Use a ChatGPT subscription in [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) through OpenAI's Codex sign-in flow—no OpenAI Platform API key required and no dsh source patch required.
 
 `dsh-codex` is an independent dsh bundle. It adds:
@@ -32,16 +34,16 @@ From a DeepSeek Harness source checkout, use `pnpm dsh plugin --profile web add 
 
 Open **Settings → OpenAI Codex → Sign in with ChatGPT**. The plugin opens OpenAI's authorization page and completes the localhost callback. The account page shows live Codex quota bars and exact remaining percentages; exact credit balances or workspace limits appear only when the account API supplies them.
 
-Loopback Web pages are trusted automatically. If dsh runs on another machine, the account page shows the exact origin command that must be approved on the dsh host, for example `dsh plugin --profile web exec dsh-openai-codex trust-origin http://host:port`. The allowlist is exact-origin, stored separately from OAuth credentials, and can be inspected or revoked with `trusted-origins` and `untrust-origin`.
+Loopback Web pages are trusted automatically. If dsh runs on another machine, the account page shows the exact origin command that must be approved on the dsh host, for example `dsh plugin --profile web exec dsh-codex trust-origin http://host:port`. The allowlist is exact-origin, stored separately from OAuth credentials, and can be inspected or revoked with `trusted-origins` and `untrust-origin`.
 
 The CLI remains available for terminal and headless installations:
 
 ```sh
-dsh plugin --profile web exec dsh-openai-codex login
-dsh plugin --profile web exec dsh-openai-codex login --device-code
-dsh plugin --profile web exec dsh-openai-codex status
-dsh plugin --profile web exec dsh-openai-codex doctor --json
-dsh plugin --profile web exec dsh-openai-codex logout
+dsh plugin --profile web exec dsh-codex login
+dsh plugin --profile web exec dsh-codex login --device-code
+dsh plugin --profile web exec dsh-codex status
+dsh plugin --profile web exec dsh-codex doctor --json
+dsh plugin --profile web exec dsh-codex logout
 ```
 
 For `dsh-tui`, install the bundle into the same profile:
@@ -141,7 +143,9 @@ Configure the `llm-openai-codex` row in a profile patch:
 | `searchContextSize` | `medium` | `low`, `medium`, `high` |
 | `searchMaxOutputTokens` | `10000` | positive integer |
 
-Each resolved, secret-free auxiliary request is recorded before dispatch as the dedicated `web/openai-codex-search-llm-request` session event. The event is owned and registered by this plugin; no generic search event or dsh fork is required.
+dsh-codex 0.3.0 no longer writes the retired `web/openai-codex-search-llm-request` event. Earlier releases wrote that external event without an ignorable envelope marker, so a later Harness format migration can refuse the otherwise intact Session. Ordinary `web_search` calls and results remain durable through Harness's existing `tool/call` and `tool/result` events.
+
+Affected users should follow the **[historical Session repair guide](docs/session-repair.md)**. The command is dry-run by default, preserves the source generation, and requires explicit `--apply` after dsh is stopped.
 
 ## Responses API experiments
 
@@ -171,7 +175,7 @@ Explicit shared files use in-process serialization, with no `.lock` or refresh-i
 
 ## Compatibility notes
 
-- This branch targets the coherent published DSH `0.1.1-rc.2` plugin surfaces. Process-wide proxy mode composes with the official `dsh-http-proxy` library when a newer Harness provides it and uses a reversible compatibility dispatcher otherwise. It uses `@earendil-works/pi-ai` `0.84.4` and migrates earlier pi-ai replay envelopes while reading history so existing reasoning/tool metadata remains usable after upgrades.
+- Version 0.3.0 targets the coherent DSH `0.1.5-rc.2` plugin surfaces and uses its official `dsh-http-proxy` implementation. It uses `@earendil-works/pi-ai` `0.85.1` and still migrates earlier pi-ai replay envelopes while reading history so existing reasoning/tool metadata remains usable after upgrades.
 - The plugin runs on released dsh plugin surfaces and does not require a modified Harness checkout. It can generate attachments and save local output when installed alone.
 - ChatGPT plan eligibility, model access, quotas, and backend behavior are controlled by OpenAI and may change.
 - The Codex endpoint does not enforce the ordinary Responses `max_output_tokens` field. Compaction works, but its configured summary cap cannot be imposed server-side on this route.

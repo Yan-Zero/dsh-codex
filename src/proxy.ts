@@ -3,11 +3,10 @@
 import {
   EnvHttpProxyAgent,
   fetch as undiciFetch,
-  getGlobalDispatcher,
   ProxyAgent,
-  setGlobalDispatcher,
 } from "undici";
 import type { Dispatcher } from "undici";
+import { installProxyFromEnvironment } from "@deepseek-ai/dsh-http-proxy";
 
 export type OpenAICodexProxyMode = "off" | "scoped" | "global";
 
@@ -85,27 +84,6 @@ function createScopedDispatcher(proxyUrl: string): Dispatcher {
     : new EnvHttpProxyAgent();
 }
 
-function createFallbackGlobalDispatcher(proxyUrl: string): Dispatcher {
-  const explicit = configuredProxyUrl(proxyUrl);
-  const inheritedNoProxy =
-    process.env.no_proxy?.trim() || process.env.NO_PROXY?.trim();
-  const noProxy = [
-    inheritedNoProxy,
-    "localhost",
-    "127.0.0.1",
-    "::1",
-    "0.0.0.0",
-  ]
-    .filter((value): value is string => value !== undefined && value.length > 0)
-    .join(",");
-  return new EnvHttpProxyAgent({
-    ...(explicit.length === 0
-      ? {}
-      : { httpProxy: explicit, httpsProxy: explicit }),
-    noProxy,
-  });
-}
-
 function globalProxyEnvironment(proxyUrl: string): {
   get(name: string): { value: string } | undefined;
 } {
@@ -128,54 +106,10 @@ function globalProxyEnvironment(proxyUrl: string): {
 type ProxyEnvironment = ReturnType<typeof globalProxyEnvironment>;
 type ProxyDisposer = () => Promise<void>;
 
-interface HarnessProxyModule {
-  installProxyFromEnvironment?: (
-    environment: ProxyEnvironment,
-    report: (message: string) => void
-  ) => Promise<ProxyDisposer>;
-}
-
-const HARNESS_PROXY_MODULE = "@deepseek-ai/dsh-http-proxy";
-
-function moduleIsUnavailable(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    error.code === "ERR_MODULE_NOT_FOUND" &&
-    error.message.includes(HARNESS_PROXY_MODULE)
-  );
-}
-
-async function installFallbackGlobalProxy(
-  proxyUrl: string
-): Promise<ProxyDisposer> {
-  const previous = getGlobalDispatcher();
-  const dispatcher = createFallbackGlobalDispatcher(proxyUrl);
-  setGlobalDispatcher(dispatcher);
-  return async () => {
-    if (getGlobalDispatcher() === dispatcher) {
-      setGlobalDispatcher(previous);
-    }
-    await dispatcher.close();
-  };
-}
-
 async function installHarnessGlobalProxy(
   proxyUrl: string
 ): Promise<ProxyDisposer> {
-  let loaded: HarnessProxyModule;
-  try {
-    // DSH 0.1.3 owns this process-wide policy. Keep the import optional while
-    // the plugin still supports the published 0.1.1 line that predates it.
-    loaded = (await import(HARNESS_PROXY_MODULE)) as HarnessProxyModule;
-  } catch (error) {
-    if (!moduleIsUnavailable(error)) throw error;
-    return await installFallbackGlobalProxy(proxyUrl);
-  }
-  if (loaded.installProxyFromEnvironment === undefined) {
-    return await installFallbackGlobalProxy(proxyUrl);
-  }
-  return await loaded.installProxyFromEnvironment(
+  return await installProxyFromEnvironment(
     globalProxyEnvironment(proxyUrl),
     (message) => {
       process.stderr.write(`[dsh-codex] ${message}\n`);

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context, CordisError } from '@deepseek-ai/cordis'
 import LocalAttachmentStore from '@deepseek-ai/dsh-attachment-local'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
-import { CallId, LlmRuntime } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { ToolCallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { defineTool } from '@deepseek-ai/dsh-tools'
 import WebRuntime from '@deepseek-ai/dsh-web'
@@ -118,7 +118,7 @@ async function readImage(
 ) {
   return context.tools.execute({
     signal,
-    callId: CallId(`read-image-${++callCounter}`),
+    callId: ToolCallId(`read-image-${++callCounter}`),
     name: OpenAICodex.READ_IMAGE_TOOL_NAME,
     arguments: arguments_,
     agent: agentOn(model) as never,

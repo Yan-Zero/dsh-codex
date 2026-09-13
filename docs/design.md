@@ -10,7 +10,7 @@ English | [中文](design.zh.md)
 
 ## Authentication
 
-The plugin delegates OAuth endpoints, PKCE/device-code behavior, account-id extraction, token refresh, and Codex request authentication to the pi-ai Codex provider supplied by dsh's base bundle. Users can start the same login lifecycle from the plugin's Settings section or its `dsh-openai-codex` executable. Web auth routes trust loopback same-origin requests by default and admit remote pages only after their exact origin is added to a separate owner-controlled allowlist. They return `no-store` JSON and never expose tokens. The account page reads the fixed ChatGPT Codex usage endpoint without issuing a model request, converts server-reported usage into remaining-percentage bars, and includes exact credit or workspace-limit amounts only when those fields are present.
+The plugin delegates OAuth endpoints, PKCE/device-code behavior, account-id extraction, token refresh, and Codex request authentication to the pi-ai Codex provider supplied by dsh's base bundle. Users can start the same login lifecycle from the plugin's Settings section or its profile-local `dsh-codex` executable. Web auth routes trust loopback same-origin requests by default and admit remote pages only after their exact origin is added to a separate owner-controlled allowlist. They return `no-store` JSON and never expose tokens. The account page reads the fixed ChatGPT Codex usage endpoint without issuing a model request, converts server-reported usage into remaining-percentage bars, and includes exact credit or workspace-limit amounts only when those fields are present.
 
 Credentials are stored as a versioned JSON document at `$DSH_HOME/.openai-codex-auth.json`. Writes are atomic and a cross-process lock covers login, refresh, and logout. This store is intentionally separate from `~/.codex/auth.json`; sharing a rotating refresh token between independently writing clients would make either client able to invalidate the other.
 
@@ -46,9 +46,9 @@ Live settings persist two independent switches. `modifyReadImage` adds or remove
 
 The bundle registers a provider for dsh's existing `web_search` tool. It uses the Codex standalone search endpoint with the same refreshable OAuth credential, maps structured text results to normalized HTTP(S) citations, and supports cached, indexed, and live modes. The endpoint is fixed so profile configuration cannot redirect the bearer token.
 
-Before dispatch, the provider records the exact resolved, secret-free `{ endpoint, body }` request as `web/openai-codex-search-llm-request`. This dedicated event belongs to the plugin; it is declaration-merged into `SessionEventMap` and registered with the running session vocabulary when the plugin loads. The registration remains installed for the process lifetime so hot reload cannot make an already-written session unreadable.
+Versions before 0.3.0 recorded the resolved request as `web/openai-codex-search-llm-request`. An external event written without `ignorable: true` cannot cross DSH's historical format migrations whose event inventory is frozen at build time, so 0.3.0 stops producing it. The retired name remains registered only for same-generation reads. `repair-session` validates an affected historical payload, substitutes a cardinality-preserving internal marker while the official format catalog remaps the Session, restores the original event with `ignorable: true`, validates the current artifact, and exclusively publishes a new current generation without changing its source.
 
-The plugin never writes the discontinued generic `web/search-model-request` event. A session containing the dedicated Codex event requires this plugin to be loaded because the request is model-visible history and is intentionally not ignorable.
+The plugin writes neither the discontinued generic `web/search-model-request` event nor a private search-request sidecar. Harness's `tool/call` and `tool/result` remain the durable search history.
 
 ## Composition
 

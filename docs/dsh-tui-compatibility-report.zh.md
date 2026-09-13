@@ -92,7 +92,7 @@ host 入口没有 Web 平台限制。`src/index.ts` 会注册：
 
 `dsh-tui/src/screens/Chat.tsx:774-787` 的 `/login` 只查看 `DEEPSEEK_API_KEY` 和 `DEEPSEEK_BASE_URL`，`/logout` 也只提示删除该环境变量。切换到 Codex 模型不会改变这两个命令的行为。
 
-`dsh-codex` 已提供独立的 `dsh-openai-codex login|logout|status`，但尚未向 DSH command registry 注册 `/codex` 一类的命令。因此 TUI 内找不到 ChatGPT 登录、登出、额度与实验开关。
+`dsh-codex` 已提供 profile 内的 `dsh-codex login|logout|status`，但尚未向 DSH command registry 注册 `/codex` 一类的命令。因此 TUI 内找不到 ChatGPT 登录、登出、额度与实验开关。
 
 ### 5. 图片能力在模型侧可用，在终端显示侧丢失
 
@@ -126,7 +126,7 @@ dsh plugin --profile dsh-tui add link:E:/source/ai/dsh/openai-codex
 
 ```powershell
 dsh --profile dsh-tui --dump-config
-dsh plugin --profile dsh-tui exec dsh-openai-codex status
+dsh plugin --profile dsh-tui exec dsh-codex status
 ```
 
 验收条件：

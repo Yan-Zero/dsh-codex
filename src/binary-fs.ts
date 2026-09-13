@@ -163,7 +163,7 @@ async function writeLocalBytes(
   })
 }
 
-/** Publish bytes in the active world, with a self-contained local fallback for released DSH versions. */
+/** Publish bytes locally or through a backend that implements the still-optional binary writer. */
 export async function writeWorkspaceBytes(
   ctx: Context,
   exec: ToolExecution,

@@ -2,6 +2,8 @@
 
 [English](README.md) | 中文
 
+**[迁移指南：修复 dsh-codex 0.3.0 之前版本写入的历史 Session](docs/session-repair.zh.md)**
+
 通过 OpenAI Codex 登录流程，在 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 中使用 ChatGPT 订阅：无需 OpenAI Platform API Key，也无需修改 dsh 源码。
 
 `dsh-codex` 是一个独立的 dsh bundle，提供：
@@ -32,16 +34,16 @@ dsh web
 
 打开 **设置 → OpenAI Codex → 使用 ChatGPT 登录**。插件会打开 OpenAI 授权页面，并通过 localhost 回调完成登录。账号页面会显示实时 Codex 额度进度条与精确剩余百分比；只有账号接口提供信用余额或工作区限额时，才会一并显示精确数值。
 
-回环地址上的 Web 页面会自动受信任。若 dsh 运行在另一台机器上，账号页面会显示需要在 dsh 主机执行的精确 origin 授权命令，例如 `dsh plugin --profile web exec dsh-openai-codex trust-origin http://host:port`。allowlist 按完整 origin 匹配，与 OAuth 凭据分开保存，并可通过 `trusted-origins` 和 `untrust-origin` 查看或撤销。
+回环地址上的 Web 页面会自动受信任。若 dsh 运行在另一台机器上，账号页面会显示需要在 dsh 主机执行的精确 origin 授权命令，例如 `dsh plugin --profile web exec dsh-codex trust-origin http://host:port`。allowlist 按完整 origin 匹配，与 OAuth 凭据分开保存，并可通过 `trusted-origins` 和 `untrust-origin` 查看或撤销。
 
 终端和无界面环境仍可使用 CLI：
 
 ```sh
-dsh plugin --profile web exec dsh-openai-codex login
-dsh plugin --profile web exec dsh-openai-codex login --device-code
-dsh plugin --profile web exec dsh-openai-codex status
-dsh plugin --profile web exec dsh-openai-codex doctor --json
-dsh plugin --profile web exec dsh-openai-codex logout
+dsh plugin --profile web exec dsh-codex login
+dsh plugin --profile web exec dsh-codex login --device-code
+dsh plugin --profile web exec dsh-codex status
+dsh plugin --profile web exec dsh-codex doctor --json
+dsh plugin --profile web exec dsh-codex logout
 ```
 
 在 `dsh-tui` 中使用时，把 bundle 安装到同一个 profile：
@@ -141,7 +143,9 @@ bundle 会为新建 agent 选择 `openai-codex` / `gpt-5.6-sol`，并选择 Code
 | `searchContextSize` | `medium` | `low`、`medium`、`high` |
 | `searchMaxOutputTokens` | `10000` | 正整数 |
 
-每个已经解析默认值且不含凭据的辅助请求，都会在发送前记录为专用的 `web/openai-codex-search-llm-request` 会话事件。该事件由本插件拥有并注册，不需要通用搜索事件或 dsh fork。
+dsh-codex 0.3.0 不再写入已停用的 `web/openai-codex-search-llm-request` 事件。早期版本写入此外部事件时没有可忽略信封标记，后续 Harness 格式迁移可能因此拒绝原本完整的 Session。普通 `web_search` 调用与结果仍通过 Harness 现有的 `tool/call` 和 `tool/result` 事件持久化。
+
+受影响的用户应按**[历史 Session 修复指南](docs/session-repair.zh.md)**操作。命令默认只做 dry-run，保留源 generation，并要求停止 dsh 后显式传入 `--apply`。
 
 ## Responses API 实验功能
 
@@ -171,7 +175,7 @@ dsh 登录默认与 Codex CLI／Desktop 相互独立：
 
 ## 兼容性说明
 
-- 本分支面向成套发布的 DSH `0.1.1-rc.2` 插件表层。较新 Harness 提供正式 `dsh-http-proxy` 库时，全局代理模式会与其组合；旧版则使用可恢复的兼容 dispatcher。同时使用 `@earendil-works/pi-ai` `0.84.4`，adapter 会在读取历史时迁移旧版 pi-ai replay envelope，因此升级后已有 reasoning／tool 元数据仍可继续使用。
+- 0.3.0 面向成套发布的 DSH `0.1.5-rc.2` 插件表层，并使用其正式的 `dsh-http-proxy` 实现。同时使用 `@earendil-works/pi-ai` `0.85.1`；adapter 仍会在读取历史时迁移旧版 pi-ai replay envelope，因此升级后已有 reasoning／tool 元数据可继续使用。
 - 插件只使用已发布的 dsh 插件表层，不要求修改版 Harness checkout。单独安装时即可生成附件并保存本地输出。
 - ChatGPT 套餐资格、模型权限、配额及后端行为由 OpenAI 控制，可能发生变化。
 - Codex 端点不执行普通 Responses 的 `max_output_tokens` 字段。压缩可以工作，但该路由无法在服务端落实配置的摘要上限。

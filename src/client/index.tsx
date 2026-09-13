@@ -1,12 +1,16 @@
 /** Browser half: OpenAI Codex account management inside dsh Settings. */
 
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
-import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type {} from '@deepseek-ai/dsh-api-remotes/client'
+import type {} from '@deepseek-ai/dsh-api-session-controller/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-tool/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-model-selection/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import { OpenAICodexSettings } from './OpenAICodexSettings.tsx'
@@ -30,7 +34,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 /** Stable browser-plugin name. */
 export const name = 'dsh-codex-client'
 /** Client services required by the settings contribution. */
-export const inject = ['slots', 'locale', 'sessions']
+export const inject = ['slots', 'locale', 'sessions', 'remote', 'remote.session']
 
 /** Register account copy and the OpenAI Codex settings page. */
 export function apply(ctx: ClientContext): void {
@@ -78,7 +82,7 @@ export function apply(ctx: ClientContext): void {
       t,
     }),
   }, ImagegenToolView))
-  ctx.inject(['slots', 'modelDirectories'], scope => {
+  ctx.inject(['slots', 'modelDirectories', 'remote', 'remote.session'], scope => {
     scope.slots.inject('conversation.input.right', () => scope.slots.register({
       name: 'conversation.input.right',
       id: 'openai-codex-fast-mode',

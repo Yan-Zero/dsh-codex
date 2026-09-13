@@ -726,7 +726,7 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   const [proxyBusy, setProxyBusy] = useState(false);
   const [proxyError, setProxyError] = useState<string | undefined>();
   const [proxySaved, setProxySaved] = useState(false);
-  const trustedOriginCommand = `dsh plugin --profile web exec dsh-openai-codex trust-origin ${window.location.origin}`;
+  const trustedOriginCommand = `dsh plugin --profile web exec dsh-codex trust-origin ${window.location.origin}`;
 
   const refresh = useCallback(async () => {
     try {

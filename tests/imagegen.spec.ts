@@ -6,10 +6,11 @@ import { Context } from '@deepseek-ai/cordis'
 import LocalAttachmentStore from '@deepseek-ai/dsh-attachment-local'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import SandboxedFileSystem from '@deepseek-ai/dsh-fs-sandbox'
-import { CallId, createUserMessage, LlmRuntime } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { createUserMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { Message } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import SandboxPolicyService from '@deepseek-ai/dsh-sandbox-policy'
+import SessionProjectionRuntime from '@deepseek-ai/dsh-session-projection'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import WebRuntime from '@deepseek-ai/dsh-web'
 import * as OpenAICodex from '../src/index.ts'
@@ -63,6 +64,7 @@ async function setup(
   if (sandboxMode === undefined) {
     await ctx.plugin(LocalFileSystem, { cwd: workspace })
   } else {
+    await ctx.plugin(SessionProjectionRuntime)
     await ctx.plugin(SandboxPolicyService, { mode: sandboxMode, workspaceRoot: workspace })
     await ctx.plugin(SandboxedFileSystem, { cwd: workspace })
   }
@@ -83,6 +85,9 @@ function agent(
     session: {
       id: 'imagegen-session',
       events: [],
+      inheritedEventCount: 0,
+      seq: 0,
+      snapshotEvents: () => [],
       header: { cwd: workspace },
       deriveMessages: () => messages,
       requestHeader: () => ({ config: { provider, model } }),
@@ -100,7 +105,7 @@ async function generate(
 ) {
   return ctx.tools.execute({
     signal,
-    callId: CallId(`imagegen-${++callCounter}`),
+    callId: ToolCallId(`imagegen-${++callCounter}`),
     name: OpenAICodex.IMAGEGEN_TOOL_NAME,
     arguments: args,
     agent: agent(messages, model, provider) as never,

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Standalone credential CLI for the optional OpenAI Codex bundle. */
+/** Profile-local maintenance CLI for the optional OpenAI Codex bundle. */
 
 import { spawn } from 'node:child_process'
 import { realpathSync } from 'node:fs'
@@ -16,7 +16,7 @@ import {
 import { CODEX_CONNECT_VERSION } from './doctor.ts'
 import { normalizeTrustedOrigin, OpenAICodexTrustedOriginsStore } from './trusted-origins.ts'
 
-type Action = 'doctor' | 'login' | 'logout' | 'status' | 'trust-origin' | 'trusted-origins' | 'untrust-origin'
+type Action = 'doctor' | 'login' | 'logout' | 'repair-session' | 'status' | 'trust-origin' | 'trusted-origins' | 'untrust-origin'
 type DiagnosticReport = Awaited<ReturnType<typeof diagnoseOpenAICodex>>
 
 const JSON_SCHEMA_VERSION = 1
@@ -94,20 +94,23 @@ async function answerPrompt(
 /** Print the standalone command help. */
 function printHelp(): void {
   process.stdout.write([
-    'Usage: dsh-openai-codex <doctor|login|logout|status> [--device-code|--json]',
-    '       dsh-openai-codex trust-origin <origin>',
-    '       dsh-openai-codex trusted-origins [--json]',
-    '       dsh-openai-codex untrust-origin <origin>',
+    'Usage: dsh plugin --profile <name> exec dsh-codex <doctor|login|logout|status> [--device-code|--json]',
+    '       dsh plugin --profile <name> exec dsh-codex repair-session [file-or-directory] [--apply] [--json]',
+    '       dsh plugin --profile <name> exec dsh-codex trust-origin <origin>',
+    '       dsh plugin --profile <name> exec dsh-codex trusted-origins [--json]',
+    '       dsh plugin --profile <name> exec dsh-codex untrust-origin <origin>',
     '',
     '  doctor         inspect secret-free runtime and OAuth file metadata',
     '  login          sign in with a separate ChatGPT OAuth session',
     '  logout         remove the dsh credential without changing ~/.codex',
+    '  repair-session scan $DSH_HOME/sessions, a directory, or one generation for retired Codex search events',
     '  status         report non-secret dsh credential state',
     '  trust-origin   allow one exact browser origin to reach Web OAuth routes',
     '  trusted-origins list the currently allowed browser origins',
     '  untrust-origin remove one exact browser origin from the allowlist',
     '  --device-code  use headless device-code login (login only)',
-    '  --json         emit one secret-free JSON document (doctor/status/trusted-origins only)',
+    '  --apply        publish the repaired current generation (repair-session only; stop dsh first)',
+    '  --json         emit one machine-readable JSON document where supported',
     '',
   ].join('\n'))
 }
@@ -150,22 +153,28 @@ export async function run(argv: readonly string[]): Promise<number> {
     return 0
   }
   const [rawAction, ...flags] = argv
-  const actions: readonly Action[] = ['doctor', 'login', 'logout', 'status', 'trust-origin', 'trusted-origins', 'untrust-origin']
+  const actions: readonly Action[] = ['doctor', 'login', 'logout', 'repair-session', 'status', 'trust-origin', 'trusted-origins', 'untrust-origin']
   if (!actions.includes(rawAction as Action)) {
-    process.stderr.write(`dsh-openai-codex: expected doctor, login, logout, status, trust-origin, trusted-origins, or untrust-origin; got ${JSON.stringify(rawAction)}\n`)
+    process.stderr.write(`dsh-codex: expected doctor, login, logout, repair-session, status, trust-origin, trusted-origins, or untrust-origin; got ${JSON.stringify(rawAction)}\n`)
     return 1
   }
   const action = rawAction as Action
-  const originArgument = action === 'trust-origin' || action === 'untrust-origin' ? flags[0] : undefined
-  const optionFlags = action === 'trust-origin' || action === 'untrust-origin' ? flags.slice(1) : flags
+  const requiresArgument = action === 'trust-origin' || action === 'untrust-origin'
+  const acceptsArgument = requiresArgument || action === 'repair-session'
+  const positional = acceptsArgument ? flags.filter(flag => !flag.startsWith('--')) : []
+  const argument = positional[0]
+  const optionFlags = acceptsArgument ? flags.filter(flag => flag.startsWith('--')) : flags
   const deviceCode = optionFlags.includes('--device-code')
   const jsonOutput = optionFlags.includes('--json')
-  const unknown = optionFlags.filter(flag => flag !== '--device-code' && flag !== '--json')
+  const applyRepair = optionFlags.includes('--apply')
+  const unknown = optionFlags.filter(flag => flag !== '--device-code' && flag !== '--json' && flag !== '--apply')
   if (unknown.length > 0
     || (deviceCode && action !== 'login')
+    || (applyRepair && action !== 'repair-session')
     || (jsonOutput && (action === 'login' || action === 'logout' || deviceCode))
-    || ((action === 'trust-origin' || action === 'untrust-origin') && (originArgument === undefined || optionFlags.length !== 0))) {
-    process.stderr.write(`dsh-openai-codex: invalid options for ${action}: ${flags.join(' ')}\n`)
+    || positional.length > 1
+    || (requiresArgument && (argument === undefined || optionFlags.length !== 0))) {
+    process.stderr.write(`dsh-codex: invalid options for ${action}: ${flags.join(' ')}\n`)
     return 1
   }
   try {
@@ -221,20 +230,33 @@ export async function run(argv: readonly string[]): Promise<number> {
         return 0
       }
       case 'trust-origin': {
-        if (originArgument === undefined) return 1
-        const normalized = normalizeTrustedOrigin(originArgument)
-        const origins = await new OpenAICodexTrustedOriginsStore().trust(originArgument)
+        if (argument === undefined) return 1
+        const normalized = normalizeTrustedOrigin(argument)
+        const origins = await new OpenAICodexTrustedOriginsStore().trust(argument)
         process.stdout.write(`Trusted browser origin: ${normalized}\n`)
         process.stdout.write(`Trusted origins: ${origins.join(', ') || '(none)'}\n`)
         return 0
       }
       case 'untrust-origin': {
-        if (originArgument === undefined) return 1
-        const normalized = normalizeTrustedOrigin(originArgument)
-        const origins = await new OpenAICodexTrustedOriginsStore().untrust(originArgument)
+        if (argument === undefined) return 1
+        const normalized = normalizeTrustedOrigin(argument)
+        const origins = await new OpenAICodexTrustedOriginsStore().untrust(argument)
         process.stdout.write(`Untrusted browser origin: ${normalized}\n`)
         process.stdout.write(`Trusted origins: ${origins.join(', ') || '(none)'}\n`)
         return 0
+      }
+      case 'repair-session': {
+        const { repairOpenAICodexSessions } = await import('./session-repair.ts')
+        const result = await repairOpenAICodexSessions(argument, applyRepair)
+        if (jsonOutput) printJson({ schemaVersion: JSON_SCHEMA_VERSION, ...result })
+        else {
+          const verb = result.applied ? 'Repaired' : 'Repair preview'
+          process.stdout.write(`${verb}: scanned ${result.scannedSessions} Session(s); ${result.matchedSessions} matched, ${result.repairedEvents} retired event(s), ${result.currentSessions} current, ${result.unaffectedSessions} unaffected, ${result.failures.length} failed.\n`)
+          for (const item of result.results) process.stdout.write(`${result.applied ? 'Published' : 'Would publish'} ${item.target} (source: ${item.source}).\n`)
+          for (const failure of result.failures) process.stderr.write(`Failed ${failure.source}: ${failure.error}\n`)
+          if (!result.applied && result.matchedSessions > 0) process.stdout.write('Stop dsh, then repeat with --apply.\n')
+        }
+        return result.failures.length === 0 ? 0 : 1
       }
       case 'logout':
         await logoutOpenAICodex()
@@ -255,7 +277,7 @@ export async function run(argv: readonly string[]): Promise<number> {
       }
     }
   } catch (error: unknown) {
-    process.stderr.write(`dsh-openai-codex: ${action} failed: ${safeMessage(error)}\n`)
+    process.stderr.write(`dsh-codex: ${action} failed: ${safeMessage(error)}\n`)
     return 1
   }
 }

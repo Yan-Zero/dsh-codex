@@ -27,7 +27,6 @@ import { FastModeRegistry } from "./fast-mode.ts";
 import { assertNoOpenAICodexProviderConflict } from "./doctor.ts";
 import {
   installOpenAICodexSearchEvent,
-  recordOpenAICodexSearchRequest,
 } from "./search-event.ts";
 
 export { READ_IMAGE_TOOL_NAME } from "./read-image-enhancement.ts";
@@ -70,7 +69,6 @@ export type {
 export {
   installOpenAICodexSearchEvent,
   OPENAI_CODEX_SEARCH_MODEL_REQUEST_EVENT,
-  recordOpenAICodexSearchRequest,
 } from "./search-event.ts";
 import {
   DEFAULT_OPENAI_CODEX_SEARCH_CONTEXT_SIZE,
@@ -284,9 +282,6 @@ export function apply(ctx: Context, config: Config): void {
         String(
           ctx.get("agents")?.currentInitiator()?.session.id ?? randomUUID()
         ),
-      recordRequest: (request) => {
-        recordOpenAICodexSearchRequest(ctx, request);
-      },
     })
   );
   ctx.inject(["webServer"], (webCtx) =>
