@@ -258,6 +258,18 @@ describe('imagegen', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('keeps image generation available on the backend-authorized Luna Reserve route', async () => {
+    const ctx = await setup({ shareImagegenWithOtherModels: false })
+    const fetchMock = successfulFetch()
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await generate(ctx, { prompt: 'A tiny pixel' }, [], OpenAICodex.OPENAI_CODEX_LUNA_RESERVE_MODEL)
+
+    expect(result.isError).toBe(false)
+    expect(result.content.some(block => block.type === 'image')).toBe(true)
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
   it('keeps the attachment but refuses output_path under a read-only filesystem policy', async () => {
     const ctx = await setup({}, 'read-only')
     vi.stubGlobal('fetch', successfulFetch())

@@ -9,6 +9,7 @@ import type {
   ImageToolPreferences,
   ModelCatalogEntry,
   ModelCatalogSettings,
+  ModelFallbackPreferences,
   ResponseApiPreferences,
 } from "../tool-policy.ts";
 import type { OpenAICodexSettingsKey } from "./locales.ts";
@@ -25,6 +26,8 @@ const RESPONSE_API_PATH = "/plugins/dsh-openai-codex/response-api";
 const MODEL_CATALOG_PATH = "/plugins/dsh-openai-codex/models";
 const CONTEXT_WINDOW_PATH = "/plugins/dsh-openai-codex/context-window";
 const FAST_MODE_SETTINGS_PATH = "/plugins/dsh-openai-codex/fast-mode-default";
+const MODEL_FALLBACK_SETTINGS_PATH =
+  "/plugins/dsh-openai-codex/model-fallback";
 const PROXY_PATH = "/plugins/dsh-openai-codex/proxy";
 const POLL_INTERVAL_MS = 1_000;
 const USAGE_POLL_INTERVAL_MS = 60_000;
@@ -721,6 +724,13 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   const [fastMode, setFastMode] = useState<FastModePreferences | undefined>();
   const [fastModeBusy, setFastModeBusy] = useState(false);
   const [fastModeError, setFastModeError] = useState<string | undefined>();
+  const [modelFallback, setModelFallback] = useState<
+    ModelFallbackPreferences | undefined
+  >();
+  const [modelFallbackBusy, setModelFallbackBusy] = useState(false);
+  const [modelFallbackError, setModelFallbackError] = useState<
+    string | undefined
+  >();
   const [proxy, setProxy] = useState<ProxyPreferences | undefined>();
   const [proxyDraft, setProxyDraft] = useState("");
   const [proxyBusy, setProxyBusy] = useState(false);
@@ -801,6 +811,19 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
       },
       () => {
         setFastModeError(t("fastModeSettingsFailed"));
+      }
+    );
+  }, [t]);
+  useEffect(() => {
+    void jsonRequest<ModelFallbackPreferences>(
+      MODEL_FALLBACK_SETTINGS_PATH
+    ).then(
+      (value) => {
+        setModelFallback(value);
+        setModelFallbackError(undefined);
+      },
+      () => {
+        setModelFallbackError(t("modelFallbackSettingsFailed"));
       }
     );
   }, [t]);
@@ -1025,6 +1048,26 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
     }
   };
 
+  const updateModelFallback = async (
+    patch: Partial<ModelFallbackPreferences>
+  ): Promise<void> => {
+    setModelFallbackBusy(true);
+    setModelFallbackError(undefined);
+    try {
+      setModelFallback(
+        await jsonRequest<ModelFallbackPreferences>(
+          MODEL_FALLBACK_SETTINGS_PATH,
+          "POST",
+          patch
+        )
+      );
+    } catch {
+      setModelFallbackError(t("modelFallbackSettingsFailed"));
+    } finally {
+      setModelFallbackBusy(false);
+    }
+  };
+
   const copyTrustedOriginCommand = async (): Promise<void> => {
     setCopyFailed(false);
     try {
@@ -1128,6 +1171,31 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
             t={t}
           />
         ) : null}
+      </div>
+      <div style={cardStyle}>
+        <div>
+          <h3 style={quotaTitleStyle}>{t("modelFallback")}</h3>
+          <p style={{ ...bodyStyle, marginTop: 5 }}>
+            {t("modelFallbackIntro")}
+          </p>
+        </div>
+        <div style={toggleRowStyle}>
+          <span style={toggleCopyStyle}>
+            <span style={statusStyle}>{t("automaticModelFallback")}</span>
+            <span style={bodyStyle}>{t("automaticModelFallbackHint")}</span>
+          </span>
+          <PreferenceToggle
+            label={t("automaticModelFallback")}
+            disabled={modelFallback === undefined || modelFallbackBusy}
+            checked={modelFallback?.automaticModelFallback ?? false}
+            onChange={(checked) => {
+              void updateModelFallback({ automaticModelFallback: checked });
+            }}
+          />
+        </div>
+        {modelFallbackError === undefined ? null : (
+          <p style={errorStyle}>{modelFallbackError}</p>
+        )}
       </div>
       <div style={cardStyle}>
         <div>

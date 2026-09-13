@@ -11,6 +11,7 @@ import {
   OPENAI_CODEX_HIGH_DETAIL_MAX_PATCHES,
   OPENAI_CODEX_HIGH_DETAIL_MAX_DIMENSION,
   OPENAI_CODEX_IMAGE_PATCH_SIZE,
+  OPENAI_CODEX_LUNA_RESERVE_MODEL,
   OPENAI_CODEX_PROMPT_IMAGE_INPUT_GUARD_BYTES,
   OPENAI_CODEX_REQUEST_IMAGE_PIXEL_BUDGET,
   OPENAI_CODEX_RETRY_POLICY,
@@ -23,6 +24,7 @@ describe("OpenAI Codex adapter policy", () => {
     expect(Config({}).models).toBeUndefined();
     expect(Config({}).contextWindow).toBeUndefined();
     expect(Config({}).overrideSparkContextWindow).toBe(false);
+    expect(Config({}).automaticModelFallback).toBe(false);
     expect(Config({}).proxyMode).toBe("off");
     expect(Config({}).proxyUrl).toBe("");
     expect(
@@ -189,6 +191,37 @@ describe("OpenAI Codex adapter policy", () => {
     });
   });
 
+  it("keeps Luna Reserve hidden while borrowing Luna's image and reasoning capabilities", async () => {
+    const adapter = createOpenAICodexAdapter(
+      {} as OpenAICodexCredentialStore,
+      () => undefined,
+      () => ({ useWebSocketContextReuse: false, useNativeCompaction: false })
+    );
+
+    expect(
+      (await adapter.listModels(OPENAI_CODEX_PROVIDER)).some(
+        (model) => model.id === OPENAI_CODEX_LUNA_RESERVE_MODEL
+      )
+    ).toBe(false);
+    const [luna, reserve] = await Promise.all([
+      adapter.resolveModel(OPENAI_CODEX_PROVIDER, "gpt-5.6-luna"),
+      adapter.resolveModel(
+        OPENAI_CODEX_PROVIDER,
+        OPENAI_CODEX_LUNA_RESERVE_MODEL
+      ),
+    ]);
+    expect(reserve).toMatchObject({
+      id: OPENAI_CODEX_LUNA_RESERVE_MODEL,
+      name: "Luna Reserve",
+      inputModalities: expect.arrayContaining(["text", "image"]),
+      context: luna.context,
+      reasoning: luna.reasoning,
+    });
+    expect(openAICodexModelCatalog().some(
+      (model) => model.id === OPENAI_CODEX_LUNA_RESERVE_MODEL
+    )).toBe(false);
+  });
+
   it("rotates snapshot-consistent profiles when the client-side capacity changes", async () => {
     let contextWindow: number | null = null;
     let overrideSparkContextWindow = false;
@@ -252,6 +285,14 @@ describe("OpenAI Codex adapter policy", () => {
       adapter.resolveModel(OPENAI_CODEX_PROVIDER, "gpt-5.3-codex-spark")
     ).resolves.toMatchObject({
       context: { contextWindow: 128_000 },
+    });
+    await expect(
+      adapter.resolveModel(
+        OPENAI_CODEX_PROVIDER,
+        OPENAI_CODEX_LUNA_RESERVE_MODEL
+      )
+    ).resolves.toMatchObject({
+      context: { contextWindow: 272_000 },
     });
 
     overrideSparkContextWindow = true;

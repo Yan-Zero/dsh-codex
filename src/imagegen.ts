@@ -183,7 +183,7 @@ export class OpenAICodexImageClient {
         ? `OpenAI Codex image request failed (HTTP ${response.status})`
         : `OpenAI Codex image request failed (HTTP ${response.status}): ${detail}`
       throw new Error(response.status === 401 || response.status === 403
-        ? `${message}; run "dsh openai-codex login" again`
+        ? `${message}; run "dsh plugin --profile web exec dsh-codex login" again`
         : message)
     }
     if (!isRecord(payload) || !Array.isArray(payload['data'])) {

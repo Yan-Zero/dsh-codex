@@ -18,6 +18,7 @@ import type {
   ImageToolPreferences,
   ModelCatalogEntry,
   ModelCatalogSettings,
+  ModelFallbackPreferences,
   ResponseApiPreferences,
 } from "./tool-policy.ts";
 import { readOpenAICodexRateLimits } from "./usage.ts";
@@ -37,6 +38,7 @@ export interface OpenAICodexServiceOptions
     ResponseApiPreferences,
     ContextWindowPreferences,
     FastModePreferences,
+    ModelFallbackPreferences,
     ProxyPreferences {
   credentialFile?: string;
   models?: string[];
@@ -52,6 +54,10 @@ export class OpenAICodexService {
   readonly policy: ImageToolPolicy;
   readonly proxy: OpenAICodexProxyTransport;
   private readonly stopProxyWatch: () => void;
+  private usageCache:
+    | { expiresAt: number; request: Promise<OpenAICodexUsage> }
+    | undefined;
+  private lastUsage: OpenAICodexUsage | undefined;
 
   constructor(options: OpenAICodexServiceOptions) {
     this.credentials = new OpenAICodexCredentialStore(options.credentialFile);
@@ -89,12 +95,16 @@ export class OpenAICodexService {
   /** Start the provider-native OAuth lifecycle. */
   async login(interaction: AuthInteraction): Promise<void> {
     await this.proxy.apply();
-    return await loginOpenAICodex(interaction, this.credentials, this.proxy.fetch);
+    await loginOpenAICodex(interaction, this.credentials, this.proxy.fetch);
+    this.usageCache = undefined;
+    this.lastUsage = undefined;
   }
 
   /** Clear the selected credential; explicit shared files affect their other consumers too. */
-  logout(): Promise<void> {
-    return logoutOpenAICodex(this.credentials);
+  async logout(): Promise<void> {
+    await logoutOpenAICodex(this.credentials);
+    this.usageCache = undefined;
+    this.lastUsage = undefined;
   }
 
   /** Read non-secret authentication metadata. */
@@ -103,8 +113,34 @@ export class OpenAICodexService {
   }
 
   /** Read current subscription limits without issuing a model request. */
-  usage(): Promise<OpenAICodexUsage> {
-    return readOpenAICodexRateLimits(this.credentials, this.proxy.fetch);
+  async usage(forceRefresh = false): Promise<OpenAICodexUsage> {
+    const now = Date.now();
+    if (
+      !forceRefresh &&
+      this.usageCache !== undefined &&
+      this.usageCache.expiresAt > now
+    ) {
+      return await this.usageCache.request;
+    }
+    const request = readOpenAICodexRateLimits(
+      this.credentials,
+      this.proxy.fetch
+    );
+    this.usageCache = { expiresAt: now + 15_000, request };
+    try {
+      const usage = await request;
+      if (this.usageCache?.request === request) this.lastUsage = usage;
+      return usage;
+    } catch (error: unknown) {
+      if (this.usageCache?.request === request) this.usageCache = undefined;
+      if (forceRefresh) this.lastUsage = undefined;
+      throw error;
+    }
+  }
+
+  /** Last successful account snapshot, used without delaying a healthy model request. */
+  usageSnapshot(): OpenAICodexUsage | undefined {
+    return this.lastUsage;
   }
 
   imagePreferences(): ImageToolPreferences {
@@ -145,6 +181,16 @@ export class OpenAICodexService {
     patch: Partial<FastModePreferences>
   ): Promise<FastModePreferences> {
     return this.policy.updateFastMode(patch);
+  }
+
+  modelFallbackPreferences(): ModelFallbackPreferences {
+    return this.policy.modelFallbackSnapshot();
+  }
+
+  updateModelFallbackPreferences(
+    patch: Partial<ModelFallbackPreferences>
+  ): Promise<ModelFallbackPreferences> {
+    return this.policy.updateModelFallback(patch);
   }
 
   modelCatalogSettings(): ModelCatalogSettings {

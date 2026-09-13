@@ -76,13 +76,20 @@ export interface OpenAICodexIndividualLimit {
   readonly remainingPercent: number
 }
 
-/** Backend-owned model fallback instructions returned when a selected model is blocked. */
-export interface OpenAICodexRateLimitUpsell {
-  /** Model whose current allowance is exhausted. */
-  readonly blockedModelSlug?: string
-  /** Ordered replacement models selected by the backend. */
-  readonly fallbackModelSlugs: readonly string[]
-}
+/** Backend-owned model recovery instructions understood by the current Codex client. */
+export type OpenAICodexRateLimitUpsell =
+  | {
+      readonly kind: 'luna-reserve'
+      /** Optional model whose current allowance is exhausted. */
+      readonly blockedModelSlug?: string
+    }
+  | {
+      readonly kind: 'model-recovery'
+      /** Exact model whose current allowance is exhausted. */
+      readonly blockedModelSlug: string
+      /** Ordered replacement models selected by the backend. */
+      readonly fallbackModelSlugs: readonly string[]
+    }
 
 /** Secret-free quota projection returned to the browser. */
 export interface OpenAICodexUsage {
@@ -192,24 +199,36 @@ function parseIndividualLimit(value: unknown): OpenAICodexIndividualLimit | unde
 function boundedSlug(value: unknown, field: string): string | undefined {
   if (value === undefined || value === null) return undefined
   if (typeof value !== 'string' || value.trim().length === 0 || value.length > 256
-    || value.split('').some(character => character.charCodeAt(0) < 0x20)) {
+    || /\p{Cc}/u.test(value)) {
     throw new Error(`OpenAI Codex returned an invalid ${field}`)
   }
   return value
 }
 
-/** Preserve only the backend fields needed for automatic model recovery. */
+/** Preserve only the known backend fields needed for automatic model recovery. */
 function parseRateLimitUpsell(value: unknown): OpenAICodexRateLimitUpsell | undefined {
   if (value === undefined || value === null) return undefined
   if (!isRecord(value)) return undefined
+  const bannerType = value['banner_type']
+  if (bannerType !== 'luna_reserve' && bannerType !== 'model_recovery') return undefined
   const fallbackModelSlugs = value['fallback_model_slugs']
-  if (!Array.isArray(fallbackModelSlugs) || fallbackModelSlugs.length > 16) return undefined
   try {
     const blockedModelSlug = boundedSlug(value['blocked_model_slug'], 'blocked model slug')
+    if (bannerType === 'luna_reserve') {
+      return {
+        kind: 'luna-reserve',
+        ...blockedModelSlug === undefined ? {} : { blockedModelSlug },
+      }
+    }
+    if (blockedModelSlug === undefined
+      || !Array.isArray(fallbackModelSlugs)
+      || fallbackModelSlugs.length === 0
+      || fallbackModelSlugs.length > 16) return undefined
     const fallback = fallbackModelSlugs.map(slug => boundedSlug(slug, 'fallback model slug'))
     if (fallback.some(slug => slug === undefined)) return undefined
     return {
-      ...blockedModelSlug === undefined ? {} : { blockedModelSlug },
+      kind: 'model-recovery',
+      blockedModelSlug,
       fallbackModelSlugs: fallback as string[],
     }
   } catch {

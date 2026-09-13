@@ -24,6 +24,7 @@ import { installReadImageEnhancement } from "./read-image-enhancement.ts";
 import { imagegenTool } from "./imagegen.ts";
 import { ImageToolPolicy } from "./tool-policy.ts";
 import { FastModeRegistry } from "./fast-mode.ts";
+import { installOpenAICodexModelFallback } from "./model-fallback.ts";
 import { assertNoOpenAICodexProviderConflict } from "./doctor.ts";
 import {
   installOpenAICodexSearchEvent,
@@ -41,12 +42,14 @@ export {
   DEFAULT_CONTEXT_WINDOW_PREFERENCES,
   DEFAULT_FAST_MODE_PREFERENCES,
   DEFAULT_IMAGE_TOOL_PREFERENCES,
+  DEFAULT_MODEL_FALLBACK_PREFERENCES,
   DEFAULT_RESPONSE_API_PREFERENCES,
   ImageToolPolicy,
 } from "./tool-policy.ts";
 export type {
   ContextWindowPreferences,
   FastModePreferences,
+  ModelFallbackPreferences,
   ImageToolPreferences,
   ResponseApiPreferences,
 } from "./tool-policy.ts";
@@ -112,6 +115,12 @@ export {
   OPENAI_CODEX_FAST_MODE_MAX_SESSION_ID_LENGTH,
 } from "./fast-mode.ts";
 export { OPENAI_CODEX_FAST_MODE_PATH } from "./fast-mode-paths.ts";
+export {
+  installOpenAICodexModelFallback,
+  openAICodexFallbackCandidates,
+  resolveOpenAICodexFallback,
+} from "./model-fallback.ts";
+export { OPENAI_CODEX_LUNA_RESERVE_MODEL } from "./adapter.ts";
 
 export {
   loginOpenAICodex,
@@ -177,6 +186,8 @@ export interface Config {
   useNativeCompaction?: boolean;
   /** Force the priority service tier on every Codex session. */
   fastModeDefault?: boolean;
+  /** Follow only model recovery explicitly authorized by the account backend. */
+  automaticModelFallback?: boolean;
   /** How this plugin applies its proxy URL. */
   proxyMode?: OpenAICodexProxyMode;
   /** HTTP(S) proxy URL; empty uses the launch environment. */
@@ -208,6 +219,7 @@ export const Config: z<Config> = z.object({
   useWebSocketContextReuse: z.boolean().default(false),
   useNativeCompaction: z.boolean().default(false),
   fastModeDefault: z.boolean().default(false),
+  automaticModelFallback: z.boolean().default(false),
   proxyMode: z
     .union(["off", "scoped", "global"] as const)
     .default(DEFAULT_PROXY_PREFERENCES.proxyMode),
@@ -234,6 +246,7 @@ export function apply(ctx: Context, config: Config): void {
     useWebSocketContextReuse: config.useWebSocketContextReuse ?? false,
     useNativeCompaction: config.useNativeCompaction ?? false,
     fastModeDefault: config.fastModeDefault ?? false,
+    automaticModelFallback: config.automaticModelFallback ?? false,
     proxyMode: config.proxyMode ?? DEFAULT_PROXY_PREFERENCES.proxyMode,
     proxyUrl: config.proxyUrl ?? DEFAULT_PROXY_PREFERENCES.proxyUrl,
   });
@@ -267,6 +280,10 @@ export function apply(ctx: Context, config: Config): void {
       () => imageTools.fastModeSnapshot().fastModeDefault,
       modelProvider
     )
+  );
+  ctx.effect(
+    () => installOpenAICodexModelFallback(ctx, service),
+    "dsh-openai-codex: backend model fallback"
   );
   ctx.web.registerSearchProvider(
     new OpenAICodexSearchProvider({

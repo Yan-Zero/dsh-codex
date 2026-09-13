@@ -107,15 +107,26 @@ describe('OpenAI Codex usage', () => {
         primary_window: { used_percent: 100, limit_window_seconds: 18_000 },
       },
       rate_limit_upsell: {
-        banner_type: 'selected_model_limit_reached',
+        banner_type: 'model_recovery',
         blocked_model_slug: 'gpt-5.6-sol',
         fallback_model_slugs: ['gpt-5.6-luna', 'gpt-5.6-terra'],
         title: 'server-owned copy',
       },
     }).rateLimitUpsell).toEqual({
+      kind: 'model-recovery',
       blockedModelSlug: 'gpt-5.6-sol',
       fallbackModelSlugs: ['gpt-5.6-luna', 'gpt-5.6-terra'],
     })
+  })
+
+  it('recognizes Luna Reserve without inventing a fallback list', () => {
+    expect(parseOpenAICodexUsage({
+      rate_limit_upsell: {
+        banner_type: 'luna_reserve',
+        presentation: 'dismissible',
+        title: 'server-owned copy',
+      },
+    }).rateLimitUpsell).toEqual({ kind: 'luna-reserve' })
   })
 
   it('ignores unsupported backend fallback shapes while retaining quota data', () => {
@@ -123,7 +134,11 @@ describe('OpenAI Codex usage', () => {
       rate_limit: {
         primary_window: { used_percent: 10, limit_window_seconds: 18_000 },
       },
-      rate_limit_upsell: { fallback_model_slugs: ['gpt-5.6-luna', 42] },
+      rate_limit_upsell: {
+        banner_type: 'model_recovery',
+        blocked_model_slug: 'gpt-5.6-sol',
+        fallback_model_slugs: ['gpt-5.6-luna', 42],
+      },
     })
     expect(parsed.rateLimits[0]?.windows[0]?.remainingPercent).toBe(90)
     expect(parsed.rateLimitUpsell).toBeUndefined()

@@ -39,6 +39,7 @@ function serviceOptions() {
     contextWindow: null,
     overrideSparkContextWindow: false,
     fastModeDefault: false,
+    automaticModelFallback: false,
     proxyMode: 'off' as const,
     proxyUrl: '',
     credentialFile: resolve('fixture-auth.json'),

@@ -12,6 +12,7 @@ const preferences = {
   contextWindow: null,
   overrideSparkContextWindow: false,
   fastModeDefault: false,
+  automaticModelFallback: false,
   proxyMode: 'off' as const,
   proxyUrl: '',
   modelCatalog: [],

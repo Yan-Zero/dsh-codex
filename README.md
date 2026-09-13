@@ -17,6 +17,7 @@ Use a ChatGPT subscription in [DeepSeek Harness](https://github.com/deepseek-ai/
 - an `imagegen` tool backed by `gpt-image-2`, with workspace or conversation reference images and automatic workspace output
 - browser image input through dsh's existing paste and drop controls
 - a per-conversation Fast Mode switch and compact weekly quota indicator in the Web composer
+- optional backend-authorized model recovery, including hidden Luna Reserve routing
 - a three-scope HTTP(S) proxy control for Codex-only or process-wide routing
 
 ChatGPT subscription authentication and usage-based OpenAI API access are different products. This plugin uses the ChatGPT Codex backend only; it does not turn a subscription into a general-purpose OpenAI API credential.
@@ -52,11 +53,13 @@ For `dsh-tui`, install the bundle into the same profile:
 dsh plugin --profile dsh-tui add dsh-codex
 ```
 
-After restarting the TUI, `/model` lists the `openai-codex` catalog. With no explicit route or saved selection, the TUI adopts the bundle's `gpt-5.6-sol` default. Use `/codex status|login|logout|usage|config` for the account and live settings; the four boolean settings can be changed with `/codex set <read-image|imagegen-other-models|websocket-context|native-compaction> <on|off>`. Browser login shares the same dsh credential file used by the Web profile.
+After restarting the TUI, `/model` lists the `openai-codex` catalog. With no explicit route or saved selection, the TUI adopts the bundle's `gpt-5.6-sol` default. Use `/codex status|login|logout|usage|config` for the account and live settings; `/codex set backend-fallback on|off` controls automatic model recovery, while the remaining switches are listed by `/codex set`. Browser login shares the same dsh credential file used by the Web profile.
 
 Codex, Claude Code, and other automation agents should follow [INSTALL.md](INSTALL.md). It is a complete, idempotent runbook and does not require reading this repository's source or design notes.
 
 The bundle selects `openai-codex` / `gpt-5.6-sol` for new agents and selects the Codex search provider. A model already saved in dsh settings still takes precedence; the model picker can select any other Codex model visible to the signed-in account.
+
+Automatic model fallback is off by default. When enabled under **Settings → OpenAI Codex**, the plugin follows only a recovery instruction returned by OpenAI for the current account. Ordinary recovery uses the backend's ordered replacement list; a `luna_reserve` instruction resolves the official hidden `gpt-reserve` route with Luna's context, reasoning, and image capabilities. The decision happens before dsh prepares the retry, so the actual model, context budget, image admission, and Session request header agree. A vision route never falls back to a text-only replacement, keeping attachments, `read_image`, and `imagegen` available. If no compatible fallback exists—or the usage refresh fails—the original quota failure continues through Harness's normal retry path. `imagegen` remains independent and follows Codex's current fixed `gpt-image-2` model.
 
 ## Model catalog
 

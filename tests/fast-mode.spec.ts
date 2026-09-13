@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { AssistantMessageEventStream, Context as PiContext, Model, Provider, SimpleStreamOptions } from '@earendil-works/pi-ai'
-import { withOpenAICodexFastMode } from '../src/adapter.ts'
+import { OPENAI_CODEX_LUNA_RESERVE_MODEL, withOpenAICodexFastMode } from '../src/adapter.ts'
 import {
   FastModeRegistry,
   OPENAI_CODEX_FAST_MODE_MAX_SESSION_ID_LENGTH,
@@ -31,8 +31,8 @@ function providerFixture(id = 'openai-codex'): {
   }
 }
 
-function model(provider: string): Model<'openai-codex-responses'> {
-  return { provider, id: 'gpt-5', name: 'GPT-5', api: 'openai-codex-responses', contextWindow: 1, input: ['text'] } as unknown as Model<'openai-codex-responses'>
+function model(provider: string, id = 'gpt-5'): Model<'openai-codex-responses'> {
+  return { provider, id, name: 'GPT-5', api: 'openai-codex-responses', contextWindow: 1, input: ['text'] } as unknown as Model<'openai-codex-responses'>
 }
 
 describe('OpenAI Codex Fast Mode registry', () => {
@@ -104,6 +104,16 @@ describe('OpenAI Codex Fast Mode adapter boundary', () => {
     const wrapped = withOpenAICodexFastMode(fixture.provider, registry)
     wrapped.streamSimple(model('other-provider'), {} as PiContext, { sessionId: 'session-a' })
     expect(fixture.streamSimple).toHaveBeenCalledWith(expect.anything(), expect.anything(), { sessionId: 'session-a' })
+  })
+
+  it('does not spend the priority tier on Luna Reserve recovery requests', () => {
+    const fixture = providerFixture()
+    const registry = new FastModeRegistry()
+    registry.set('session-a', true)
+    const wrapped = withOpenAICodexFastMode(fixture.provider, registry, () => true)
+    const options: SimpleStreamOptions = { sessionId: 'session-a' }
+    wrapped.streamSimple(model('openai-codex', OPENAI_CODEX_LUNA_RESERVE_MODEL), {} as PiContext, options)
+    expect(fixture.streamSimple).toHaveBeenLastCalledWith(expect.anything(), expect.anything(), options)
   })
 
   it('adds priority for any session while the Fast Mode default is forced on', async () => {
