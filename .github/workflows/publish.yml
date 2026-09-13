@@ -2,11 +2,13 @@ name: Publish to npm
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
+    paths:
+      - package.json
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 concurrency:
@@ -19,22 +21,120 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Verify tag matches package version
+        with:
+          fetch-depth: 0
+      - name: Detect a package version change
+        id: version
         shell: bash
         run: |
+          set -euo pipefail
+          before="${{ github.event.before }}"
           version="$(node -p "require('./package.json').version")"
-          if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
-            echo "Tag $GITHUB_REF_NAME does not match package version $version" >&2
-            exit 1
+          if [[ "$before" =~ ^0+$ ]] || ! git cat-file -e "${before}:package.json"; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No previous package.json is available; skipping automatic release."
+            exit 0
+          fi
+          previous="$(git show "${before}:package.json" | node -e "let text=''; process.stdin.setEncoding('utf8'); process.stdin.on('data', chunk => text += chunk); process.stdin.on('end', () => process.stdout.write(JSON.parse(text).version))")"
+          if [[ "$version" == "$previous" ]]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Package version remains $version; skipping automatic release."
+            exit 0
+          fi
+          tag="v$version"
+          if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
+            target="$(git rev-list -n 1 "$tag")"
+            if [[ "$target" != "$GITHUB_SHA" ]]; then
+              echo "Tag $tag already points to $target instead of $GITHUB_SHA" >&2
+              exit 1
+            fi
+            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [[ "$version" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
       - uses: pnpm/action-setup@v4
+        if: steps.version.outputs.changed == 'true'
         with:
           version: 11.21.0
       - uses: actions/setup-node@v6
+        if: steps.version.outputs.changed == 'true'
         with:
           node-version: '24'
           registry-url: https://registry.npmjs.org/
           package-manager-cache: false
-      - run: pnpm --config.minimum-release-age=0 install --frozen-lockfile
-      - run: pnpm run check
-      - run: npm publish
+      - if: steps.version.outputs.changed == 'true'
+        run: pnpm --config.minimum-release-age=0 install --frozen-lockfile
+      - if: steps.version.outputs.changed == 'true'
+        run: pnpm run check
+      - if: steps.version.outputs.changed == 'true'
+        run: pnpm --config.minimum-release-age=0 pack
+      - name: Keep the installable tarball as a workflow artifact
+        if: steps.version.outputs.changed == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: dsh-codex-${{ steps.version.outputs.version }}
+          path: dsh-codex-*.tgz
+          if-no-files-found: error
+      - name: Inspect the npm release state
+        if: steps.version.outputs.changed == 'true'
+        id: npm
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          tarballs=(dsh-codex-*.tgz)
+          if [[ "${#tarballs[@]}" -ne 1 ]]; then
+            echo "Expected exactly one packed tarball" >&2
+            exit 1
+          fi
+          package="$(node -p "require('./package.json').name")"
+          version="${{ steps.version.outputs.version }}"
+          local_integrity="$(node -e "const { createHash } = require('node:crypto'); const { readFileSync } = require('node:fs'); process.stdout.write('sha512-' + createHash('sha512').update(readFileSync(process.argv[1])).digest('base64'))" "${tarballs[0]}")"
+          if registry_integrity="$(npm view "$package@$version" dist.integrity 2>/dev/null)" && [[ -n "$registry_integrity" ]]; then
+            if [[ "$registry_integrity" != "$local_integrity" ]]; then
+              echo "$package@$version already exists with different package bytes" >&2
+              exit 1
+            fi
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish the packed artifact to npm
+        if: steps.version.outputs.changed == 'true' && steps.npm.outputs.published != 'true'
+        run: npm publish dsh-codex-*.tgz
+      - name: Create the release tag
+        if: steps.version.outputs.changed == 'true' && steps.version.outputs.tag_exists != 'true'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git tag --annotate "$TAG" --message "Release $TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
+      - name: Attach the installable tarball to the GitHub release
+        if: steps.version.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dsh-codex-*.tgz --clobber
+            exit 0
+          fi
+          args=(--title "$TAG" --generate-notes --verify-tag)
+          if [[ "${{ steps.version.outputs.prerelease }}" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$TAG" dsh-codex-*.tgz "${args[@]}"
