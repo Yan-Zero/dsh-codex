@@ -9,6 +9,11 @@ const mocked = vi.hoisted(() => ({
   logout: vi.fn(),
   authPath: vi.fn(() => '/Users/fixture/.dsh/openai-codex-auth.json'),
   authStatus: vi.fn(),
+  repairSessions: vi.fn(),
+}))
+
+vi.mock('../src/session-repair.ts', () => ({
+  repairOpenAICodexSessions: mocked.repairSessions,
 }))
 
 vi.mock('../src/index.ts', () => ({
@@ -68,9 +73,10 @@ describe('dsh-codex CLI', () => {
       return true
     })
     await expect(run(['--help'])).resolves.toBe(0)
-    expect(output).toContain('Usage: dsh-openai-codex <doctor|login|logout|status>')
-    expect(output).toContain('dsh-openai-codex trust-origin <origin>')
-    expect(output).toContain('dsh-openai-codex trusted-origins [--json]')
+    expect(output).toContain('dsh plugin --profile <name> exec dsh-codex <doctor|login|logout|status>')
+    expect(output).toContain('exec dsh-codex trust-origin <origin>')
+    expect(output).toContain('exec dsh-codex trusted-origins [--json]')
+    expect(output).toContain('exec dsh-codex repair-session [file-or-directory] [--apply] [--json]')
     expect(output).toContain('doctor         inspect secret-free')
   })
 
@@ -81,8 +87,44 @@ describe('dsh-codex CLI', () => {
       return true
     })
     await expect(run(['doctor', '--device-code'])).resolves.toBe(1)
-    expect(output).toMatch(/^dsh-openai-codex:/)
+    expect(output).toMatch(/^dsh-codex:/)
     expect(output).not.toContain('dsh-codex-connect:')
+  })
+
+  it('previews the default tree and explicitly applies a selected Session path', async () => {
+    mocked.repairSessions.mockImplementation(async (root: string | undefined, applied: boolean) => ({
+      root: root ?? '/home/.dsh/sessions',
+      mode: root === undefined ? 'directory' : 'file',
+      applied,
+      scannedSessions: root === undefined ? 12 : 1,
+      currentSessions: root === undefined ? 8 : 0,
+      unaffectedSessions: root === undefined ? 3 : 0,
+      matchedSessions: 1,
+      repairedEvents: 2,
+      results: [{
+        source: root ?? '/home/.dsh/sessions/project/session.jsonl.zstd',
+        target: '/sessions/session.v3.jsonl.zstd',
+        sourceVersion: 0,
+        targetVersion: 3,
+        sessionId: 'session-1',
+        repairedEvents: 2,
+        applied,
+      }],
+      failures: [],
+    }))
+    let output = ''
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      output += String(chunk)
+      return true
+    })
+
+    await expect(run(['repair-session'])).resolves.toBe(0)
+    expect(mocked.repairSessions).toHaveBeenLastCalledWith(undefined, false)
+    expect(output).toContain('Repair preview: scanned 12 Session(s); 1 matched, 2 retired event(s)')
+    output = ''
+    await expect(run(['repair-session', '/sessions/session.jsonl.zstd', '--apply', '--json'])).resolves.toBe(0)
+    expect(mocked.repairSessions).toHaveBeenLastCalledWith('/sessions/session.jsonl.zstd', true)
+    expect(JSON.parse(output)).toMatchObject({ schemaVersion: 1, applied: true, repairedEvents: 2 })
   })
 
   it('emits one secret-free JSON document for doctor', async () => {
@@ -105,9 +147,9 @@ describe('dsh-codex CLI', () => {
         status: 'compatible',
         node: { supported: '^22.19.0 || >=24.0.0', installed: 'v22.19.0', status: 'compatible' },
         packages: {
-          '@deepseek-ai/dsh-llm': { supported: '0.1.1-rc.2', installed: '0.1.1-rc.2', status: 'compatible' },
-          '@deepseek-ai/dsh-llm-pi-ai': { supported: '0.1.1-rc.2', installed: '0.1.1-rc.2', status: 'compatible' },
-          '@earendil-works/pi-ai': { supported: '0.84.4', installed: '0.84.4', status: 'compatible' },
+          '@deepseek-ai/dsh-llm': { supported: '0.1.5-rc.2', installed: '0.1.5-rc.2', status: 'compatible' },
+          '@deepseek-ai/dsh-llm-pi-ai': { supported: '0.1.5-rc.2', installed: '0.1.5-rc.2', status: 'compatible' },
+          '@earendil-works/pi-ai': { supported: '0.85.1', installed: '0.85.1', status: 'compatible' },
         },
       },
       hints: ['Safe diagnostic hint'],
@@ -169,9 +211,9 @@ describe('dsh-codex CLI', () => {
         status: 'incompatible',
         node: { supported: '^22.19.0 || >=24.0.0', installed: 'v22.19.0', status: 'compatible' },
         packages: {
-          '@deepseek-ai/dsh-llm': { supported: '0.1.1-rc.2', installed: '0.1.0-rc.6', status: 'incompatible' },
-          '@deepseek-ai/dsh-llm-pi-ai': { supported: '0.1.1-rc.2', installed: '0.1.0-rc.6', status: 'incompatible' },
-          '@earendil-works/pi-ai': { supported: '0.84.4', installed: '0.84.4', status: 'compatible' },
+          '@deepseek-ai/dsh-llm': { supported: '0.1.5-rc.2', installed: '0.1.0-rc.6', status: 'incompatible' },
+          '@deepseek-ai/dsh-llm-pi-ai': { supported: '0.1.5-rc.2', installed: '0.1.0-rc.6', status: 'incompatible' },
+          '@earendil-works/pi-ai': { supported: '0.85.1', installed: '0.84.4', status: 'incompatible' },
         },
       },
       hints: ['Compatibility mismatch'],
@@ -230,6 +272,7 @@ describe('dsh-codex CLI', () => {
     ['doctor', '--device-code'],
     ['status', '--device-code'],
     ['login', '--device-code', '--json'],
+    ['status', '--apply'],
   ] as const)('rejects unsupported flags for %s', async (...argv) => {
     let output = ''
     vi.spyOn(process.stderr, 'write').mockImplementation((chunk: string | Uint8Array) => {
@@ -238,6 +281,6 @@ describe('dsh-codex CLI', () => {
     })
 
     await expect(run(argv)).resolves.toBe(1)
-    expect(output).toMatch(/^dsh-openai-codex: invalid options for /)
+    expect(output).toMatch(/^dsh-codex: invalid options for /)
   })
 })

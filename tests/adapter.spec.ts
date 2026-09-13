@@ -278,7 +278,7 @@ describe("OpenAI Codex adapter policy", () => {
     ]);
     expect(catalog.find((model) => model.id === "gpt-6-astra")).toMatchObject({
       name: "GPT-6 Astra",
-      contextWindow: 1_050_000,
+      contextWindow: 272_000,
     });
     expect(catalog.find((model) => model.id === "gpt-5.6-sol")).toMatchObject({
       contextWindow: 272_000,

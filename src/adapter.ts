@@ -49,42 +49,13 @@ const OPENAI_CODEX_MODEL_ORDER = new Map<string, number>(
   ].map((id, index) => [id, index])
 );
 
-/** Add Codex models released ahead of pi-ai's generated catalog, then order newest first. */
-function withOpenAICodexModelAdditions(provider: Provider): Provider {
+/** Present the current pi-ai Codex catalog in product order. */
+function withOpenAICodexModelOrder(provider: Provider): Provider {
   const getModels = provider.getModels;
   return {
     ...provider,
     getModels() {
-      const models = [...getModels.call(provider)];
-      if (!models.some((model) => model.id === GPT_6_ASTRA)) {
-        const template =
-          models.find((model) => model.id === "gpt-5.6-sol") ?? models[0];
-        if (template !== undefined) {
-          models.push({
-            ...template,
-            id: GPT_6_ASTRA,
-            name: "GPT-6 Astra",
-            contextWindow: 1_050_000,
-            maxTokens: 128_000,
-            cost: {
-              input: 10,
-              output: 50,
-              cacheRead: 1,
-              cacheWrite: 12.5,
-              tiers: [
-                {
-                  inputTokensAbove: 272_000,
-                  input: 20,
-                  output: 75,
-                  cacheRead: 2,
-                  cacheWrite: 25,
-                },
-              ],
-            },
-          });
-        }
-      }
-      return models
+      return [...getModels.call(provider)]
         .map((model, index) => ({ model, index }))
         .sort((left, right) => {
           const leftOrder =
@@ -100,7 +71,7 @@ function withOpenAICodexModelAdditions(provider: Provider): Provider {
 
 /** Keep bundled models as a fallback and discover new releases from Codex metadata. */
 export function createOpenAICodexModelProvider(requestFetch?: typeof globalThis.fetch): Provider {
-  const provider = withOpenAICodexModelAdditions(openaiCodexProvider(requestFetch));
+  const provider = withOpenAICodexModelOrder(openaiCodexProvider(requestFetch));
   const catalog = new OpenAICodexModelCatalog(provider.getModels());
   return { ...provider, getModels: () => catalog.getModels() };
 }
@@ -251,19 +222,6 @@ const OPENAI_CODEX_AUTH_CONTEXT: AuthContext = {
     return false;
   },
 };
-
-/**
- * Image-policy fields added to resolved pi-ai profiles after the oldest DSH
- * version this plugin still compiles against. Keeping the compatibility shape
- * local lets one build serve both that baseline and current runtimes.
- */
-type ImageCompatibleResolvedPiAiProviderProfile =
-  ResolvedPiAiProviderProfile & {
-    maxRequestImageBytes: number;
-    requestImagePixelBudget: number;
-    requestImageMaxBytes: number;
-    modelErrors: ReadonlyMap<string, string>;
-  };
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -529,7 +487,7 @@ export function createOpenAICodexAdapter(
       nextContextWindow,
       nextOverrideSparkContextWindow
     );
-    const profile: ImageCompatibleResolvedPiAiProviderProfile = {
+    const profile: ResolvedPiAiProviderProfile = {
       provider: OPENAI_CODEX_PROVIDER,
       displayName: "OpenAI Codex",
       streamIdleTimeoutMs: OPENAI_CODEX_STREAM_IDLE_TIMEOUT_MS,

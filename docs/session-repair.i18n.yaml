@@ -1,0 +1,4 @@
+# Bilingual-pair consistency record for the Session repair guide. Re-record with:
+#   git hash-object docs/session-repair.md docs/session-repair.zh.md
+session-repair.md: 49d9b3c9f10163bc7aa6590389c8e0150a841252
+session-repair.zh.md: b435935ca8e8a85dded14c0e7538431ac83cac2d

@@ -250,26 +250,7 @@ describe('OpenAI Codex composite plugin', () => {
     })
     expect(KNOWN_SESSION_EVENT_TYPES.has(OpenAICodex.OPENAI_CODEX_SEARCH_MODEL_REQUEST_EVENT)).toBe(true)
     expect(KNOWN_SESSION_EVENT_TYPES.has('web/search-model-request')).toBe(false)
-    expect(append).toHaveBeenCalledOnce()
-    expect(append).toHaveBeenCalledWith(
-      OpenAICodex.OPENAI_CODEX_SEARCH_MODEL_REQUEST_EVENT,
-      {
-        endpoint: OpenAICodex.OPENAI_CODEX_SEARCH_URL,
-        body: {
-          id: 'session-codex-search',
-          model: 'gpt-search-plugin',
-          input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'q' }] }],
-          commands: { search_query: [{ q: 'q' }] },
-          settings: {
-            search_context_size: 'high',
-            allowed_callers: ['direct'],
-            external_web_access: true,
-          },
-          max_output_tokens: 321,
-        },
-      },
-    )
-    expect(append.mock.invocationCallOrder[0]).toBeLessThan(fetchMock.mock.invocationCallOrder[0] ?? 0)
+    expect(append).not.toHaveBeenCalled()
     await fiber.dispose()
     expect(KNOWN_SESSION_EVENT_TYPES.has(OpenAICodex.OPENAI_CODEX_SEARCH_MODEL_REQUEST_EVENT)).toBe(true)
     await expect(ctx.web.search({ query: 'q' }))

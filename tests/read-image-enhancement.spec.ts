@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context, CordisError } from '@deepseek-ai/cordis'
 import LocalAttachmentStore from '@deepseek-ai/dsh-attachment-local'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
-import { CallId, LlmRuntime } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { ToolCallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { defineTool } from '@deepseek-ai/dsh-tools'
 import WebRuntime from '@deepseek-ai/dsh-web'
@@ -118,7 +118,7 @@ async function readImage(
 ) {
   return context.tools.execute({
     signal,
-    callId: CallId(`read-image-${++callCounter}`),
+    callId: ToolCallId(`read-image-${++callCounter}`),
     name: OpenAICodex.READ_IMAGE_TOOL_NAME,
     arguments: arguments_,
     agent: agentOn(model) as never,
@@ -226,6 +226,41 @@ describe('read_image enhancement', () => {
 
     agentActive = false
     expect(() => { disposeScoped?.() }).not.toThrow()
+    expect(registrations).toBe(1)
+  })
+
+  it('treats a foreign INACTIVE_EFFECT refusal as the same disposed-scope case', () => {
+    const root = {} as Context
+    const inherited = baseReadImage(root)
+    let registrations = 0
+    const agent = {
+      id: 'agent-with-foreign-cordis-copy',
+      ctx: {
+        tools: {
+          register() {
+            registrations += 1
+            // A duplicated @deepseek-ai/cordis copy in the same process raises its
+            // own class, so the guard has to judge the public error code.
+            throw Object.assign(new Error('cannot create effect on inactive context'), {
+              code: 'INACTIVE_EFFECT',
+            })
+          },
+        },
+      },
+    }
+    Object.assign(root, {
+      tools: {
+        get: (_name: string, scope?: object) => scope === agent ? inherited : undefined,
+      },
+      agents: {
+        list: () => [agent],
+        get: (id: string) => id === agent.id ? agent : undefined,
+      },
+      on: () => () => undefined,
+      effect: (effect: () => () => void) => effect(),
+    })
+
+    expect(() => installReadImageEnhancement(root, new ImageToolPolicy())).not.toThrow()
     expect(registrations).toBe(1)
   })
 

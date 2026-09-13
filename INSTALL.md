@@ -87,19 +87,19 @@ Stop and report the exact diagnostic if composition fails. Do not start OAuth wh
 Check non-secret status:
 
 ```sh
-dsh plugin --profile web exec dsh-openai-codex status
+dsh plugin --profile web exec dsh-codex status
 ```
 
 If it reports `signed in`, do not start another login. If signed out and an interactive terminal is available, run:
 
 ```sh
-dsh plugin --profile web exec dsh-openai-codex login
+dsh plugin --profile web exec dsh-codex login
 ```
 
 The command opens OpenAI's page and waits for its localhost callback. Tell the user to approve the page and keep waiting for completion. Never ask the user to paste a token. If the host cannot open a browser, use:
 
 ```sh
-dsh plugin --profile web exec dsh-openai-codex login --device-code
+dsh plugin --profile web exec dsh-codex login --device-code
 ```
 
 For a local Web profile, the equivalent path is **Settings → OpenAI Codex → Sign in with ChatGPT**. Do not require both GUI and CLI login. After approval, rerun `status` and require `signed in`.
@@ -159,5 +159,5 @@ dsh plugin --profile web remove dsh-codex
 Remove only the `llm-openai-codex` row from the profile patch. Credential deletion is separate and requires explicit authorization:
 
 ```sh
-dsh plugin --profile web exec dsh-openai-codex logout
+dsh plugin --profile web exec dsh-codex logout
 ```

@@ -1,7 +1,7 @@
 import type { OAuthCredential } from '@earendil-works/pi-ai'
 import { openaiCodexProvider as piOpenaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-codex'
 
-// Match pi-ai 0.84.4's Codex OAuth client and refresh grant. Keep login UI,
+// Match pi-ai 0.85.1's Codex OAuth client and refresh grant. Keep login UI,
 // cancellation, auth resolution and expiry scheduling owned by pi-ai.
 const TOKEN_URL = 'https://auth.openai.com/oauth/token'
 const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
