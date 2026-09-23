@@ -7,6 +7,7 @@ import type { OpenAICodexCredentialStore } from "../src/store.ts";
 import { OPENAI_CODEX_PROVIDER } from "../src/store.ts";
 import {
   createOpenAICodexAdapter,
+  createOpenAICodexModelProvider,
   openAICodexModelCatalog,
   OPENAI_CODEX_HIGH_DETAIL_MAX_PATCHES,
   OPENAI_CODEX_HIGH_DETAIL_MAX_DIMENSION,
@@ -16,6 +17,7 @@ import {
   OPENAI_CODEX_REQUEST_IMAGE_PIXEL_BUDGET,
   OPENAI_CODEX_RETRY_POLICY,
   openAICodexRequestImagePixelBudget,
+  withCurrentOpenAICodexModels,
 } from "../src/adapter.ts";
 import { Config } from "../src/index.ts";
 
@@ -309,6 +311,8 @@ describe("OpenAI Codex adapter policy", () => {
     const catalog = openAICodexModelCatalog();
     expect(catalog.map((model) => model.id)).toEqual([
       "gpt-6-astra",
+      "gpt-6-sol",
+      "gpt-6-luna",
       "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",
@@ -321,9 +325,58 @@ describe("OpenAI Codex adapter policy", () => {
       name: "GPT-6 Astra",
       contextWindow: 272_000,
     });
-    expect(catalog.find((model) => model.id === "gpt-5.6-sol")).toMatchObject({
+    expect(catalog.find((model) => model.id === "gpt-6-sol")).toMatchObject({
+      name: "GPT-6 Sol",
       contextWindow: 272_000,
     });
+    expect(catalog.find((model) => model.id === "gpt-6-luna")).toMatchObject({
+      name: "GPT-6 Luna",
+      contextWindow: 272_000,
+    });
+    const models = createOpenAICodexModelProvider().getModels();
+    expect(models.find((model) => model.id === "gpt-6-sol")).toMatchObject({
+      maxTokens: 128_000,
+      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+      thinkingLevelMap: { off: "none", low: "low", max: "max" },
+    });
+    expect(models.find((model) => model.id === "gpt-6-luna")).toMatchObject({
+      maxTokens: 128_000,
+      cost: { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
+      thinkingLevelMap: { off: "none", low: "low", max: "max" },
+    });
+  });
+
+  it("uses the current generation as a fallback when legacy templates disappear", () => {
+    const current = createOpenAICodexModelProvider();
+    const astra = current.getModels().find((model) => model.id === "gpt-6-astra");
+    expect(astra).toBeDefined();
+    const supplemented = withCurrentOpenAICodexModels({
+      ...current,
+      getModels: () => astra === undefined ? [] : [astra],
+    }).getModels();
+
+    expect(supplemented.map((model) => model.id)).toEqual([
+      "gpt-6-astra",
+      "gpt-6-sol",
+      "gpt-6-luna",
+    ]);
+    expect(withCurrentOpenAICodexModels({ ...current, getModels: () => [] }).getModels())
+      .toEqual([]);
+  });
+
+  it("keeps authoritative catalog entries when pi-ai gains the current models", () => {
+    const current = createOpenAICodexModelProvider();
+    const models = current.getModels().map((model) =>
+      model.id === "gpt-6-sol" ? { ...model, name: "Upstream GPT-6 Sol" } : model
+    );
+    const supplemented = withCurrentOpenAICodexModels({
+      ...current,
+      getModels: () => models,
+    }).getModels();
+
+    expect(supplemented.filter((model) => model.id === "gpt-6-sol")).toHaveLength(1);
+    expect(supplemented.find((model) => model.id === "gpt-6-sol")?.name)
+      .toBe("Upstream GPT-6 Sol");
   });
 
   it("advertises the full provider catalog when no model list is configured", async () => {
@@ -337,6 +390,8 @@ describe("OpenAI Codex adapter policy", () => {
     expect(models.map((model) => model.id)).toEqual(
       expect.arrayContaining([
         "gpt-6-astra",
+        "gpt-6-luna",
+        "gpt-6-sol",
         "gpt-5.4",
         "gpt-5.6-luna",
         "gpt-5.6-sol",

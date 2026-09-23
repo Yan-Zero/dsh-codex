@@ -35,6 +35,8 @@ import { OpenAICodexModelCatalog } from "./model-catalog.ts";
 
 const GPT_5_3_CODEX_SPARK = "gpt-5.3-codex-spark";
 const GPT_6_ASTRA = "gpt-6-astra";
+const GPT_6_SOL = "gpt-6-sol";
+const GPT_6_LUNA = "gpt-6-luna";
 const GPT_5_6_LUNA = "gpt-5.6-luna";
 /** Backend-authorized Luna Reserve route; deliberately hidden from discovery. */
 export const OPENAI_CODEX_LUNA_RESERVE_MODEL = "gpt-reserve";
@@ -42,6 +44,8 @@ export const OPENAI_CODEX_LUNA_RESERVE_MODEL = "gpt-reserve";
 const OPENAI_CODEX_MODEL_ORDER = new Map<string, number>(
   [
     GPT_6_ASTRA,
+    GPT_6_SOL,
+    GPT_6_LUNA,
     "gpt-5.6-sol",
     "gpt-5.6-terra",
     GPT_5_6_LUNA,
@@ -51,6 +55,85 @@ const OPENAI_CODEX_MODEL_ORDER = new Map<string, number>(
     "gpt-5.4-mini",
   ].map((id, index) => [id, index])
 );
+
+const CURRENT_CODEX_MODELS = [
+  {
+    id: GPT_6_SOL,
+    name: "GPT-6 Sol",
+    template: "gpt-5.6-sol",
+    cost: {
+      input: 2,
+      output: 10,
+      cacheRead: 0.2,
+      cacheWrite: 2.5,
+      tiers: [
+        {
+          inputTokensAbove: 272_000,
+          input: 4,
+          output: 15,
+          cacheRead: 0.4,
+          cacheWrite: 5,
+        },
+      ],
+    },
+  },
+  {
+    id: GPT_6_LUNA,
+    name: "GPT-6 Luna",
+    template: GPT_5_6_LUNA,
+    cost: {
+      input: 0.1,
+      output: 0.5,
+      cacheRead: 0.01,
+      cacheWrite: 0.125,
+      tiers: [
+        {
+          inputTokensAbove: 272_000,
+          input: 0.2,
+          output: 0.75,
+          cacheRead: 0.02,
+          cacheWrite: 0.25,
+        },
+      ],
+    },
+  },
+];
+
+/** Add current Codex releases missing from the compatible pi-ai catalog. */
+export function withCurrentOpenAICodexModels(provider: Provider): Provider {
+  const getModels = provider.getModels;
+  return {
+    ...provider,
+    getModels() {
+      const models = getModels.call(provider);
+      const known = new Set(models.map((model) => model.id));
+      const additions = CURRENT_CODEX_MODELS.flatMap((entry) => {
+        if (known.has(entry.id)) return [];
+        const template = models.find((model) => model.id === entry.template) ??
+          models.find((model) => model.id === GPT_6_ASTRA);
+        if (template === undefined) return [];
+        return [{
+          ...template,
+          id: entry.id,
+          name: entry.name,
+          cost: entry.cost,
+          contextWindow: 272_000,
+          maxTokens: 128_000,
+          thinkingLevelMap: {
+            off: "none",
+            minimal: "low",
+            low: "low",
+            medium: "medium",
+            high: "high",
+            xhigh: "xhigh",
+            max: "max",
+          },
+        }];
+      });
+      return additions.length === 0 ? models : [...models, ...additions];
+    },
+  };
+}
 
 /** Present the current pi-ai Codex catalog in product order. */
 function withOpenAICodexModelOrder(provider: Provider): Provider {
@@ -108,7 +191,9 @@ function withOpenAICodexLunaReserve(provider: Provider): Provider {
 
 /** Keep bundled models as a fallback and discover new releases from Codex metadata. */
 export function createOpenAICodexModelProvider(requestFetch?: typeof globalThis.fetch): Provider {
-  const provider = withOpenAICodexModelOrder(openaiCodexProvider(requestFetch));
+  const provider = withOpenAICodexModelOrder(
+    withCurrentOpenAICodexModels(openaiCodexProvider(requestFetch))
+  );
   const catalog = new OpenAICodexModelCatalog(provider.getModels());
   return withOpenAICodexLunaReserve({
     ...provider,
