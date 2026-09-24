@@ -39,6 +39,7 @@ import type {
   ResponseApiPreferences,
 } from "./tool-policy.ts";
 import type { ProxyPreferences } from "./proxy.ts";
+import { isOpenAICodexImageModel } from "./image-model.ts";
 
 export {
   OPENAI_CODEX_AUTH_LOGIN_PATH,
@@ -604,6 +605,7 @@ function imagePreferencePatch(
   const allowed = new Set<keyof ImageToolPreferences>([
     "modifyReadImage",
     "shareImagegenWithOtherModels",
+    "imageGenerationModel",
   ]);
   if (
     Object.keys(value).some(
@@ -613,11 +615,20 @@ function imagePreferencePatch(
     throw new TypeError("request contains an unknown image-tool setting");
   }
   const patch: Partial<ImageToolPreferences> = {};
-  for (const key of allowed) {
+  for (const key of [
+    "modifyReadImage",
+    "shareImagegenWithOtherModels",
+  ] as const) {
     if (value[key] === undefined) continue;
     if (typeof value[key] !== "boolean")
       throw new TypeError(`${key} must be a boolean`);
     patch[key] = value[key];
+  }
+  if (value["imageGenerationModel"] !== undefined) {
+    if (!isOpenAICodexImageModel(value["imageGenerationModel"])) {
+      throw new TypeError("imageGenerationModel is not a supported image model");
+    }
+    patch.imageGenerationModel = value["imageGenerationModel"];
   }
   return patch;
 }
@@ -651,7 +662,6 @@ function contextWindowPatch(
 ): Partial<ContextWindowPreferences> {
   const allowed = new Set<keyof ContextWindowPreferences>([
     "contextWindow",
-    "overrideSparkContextWindow",
   ]);
   if (
     Object.keys(value).some(
@@ -674,13 +684,6 @@ function contextWindowPatch(
       );
     }
     patch.contextWindow = contextWindow as number | null;
-  }
-  const overrideSparkContextWindow = value["overrideSparkContextWindow"];
-  if (overrideSparkContextWindow !== undefined) {
-    if (typeof overrideSparkContextWindow !== "boolean") {
-      throw new TypeError("overrideSparkContextWindow must be a boolean");
-    }
-    patch.overrideSparkContextWindow = overrideSparkContextWindow;
   }
   return patch;
 }

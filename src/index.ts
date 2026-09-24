@@ -4,7 +4,7 @@
  * @module dsh-codex
  */
 
-import type { Context } from "@deepseek-ai/cordis";
+import type { Context, Volatile } from "@deepseek-ai/cordis";
 import { randomUUID } from "node:crypto";
 import z from "@deepseek-ai/schemastery";
 import type {} from "@deepseek-ai/dsh-attachment";
@@ -14,6 +14,8 @@ import type {} from "@deepseek-ai/dsh-web";
 import type {} from "@deepseek-ai/dsh-host-webserver";
 import type {} from "@deepseek-ai/dsh-tools";
 import type {} from "@deepseek-ai/dsh-fs";
+import type {} from "@deepseek-ai/dsh-settings";
+import type {} from "@deepseek-ai/cordis-plugin-loader";
 import {
   createOpenAICodexAdapter,
   createOpenAICodexModelProvider,
@@ -89,6 +91,11 @@ import { OpenAICodexCredentialStore, OPENAI_CODEX_PROVIDER } from "./store.ts";
 import { OpenAICodexService } from "./service.ts";
 import { DEFAULT_PROXY_PREFERENCES } from "./proxy.ts";
 import type { OpenAICodexProxyMode } from "./proxy.ts";
+import {
+  DEFAULT_OPENAI_CODEX_IMAGE_MODEL,
+  OPENAI_CODEX_IMAGE_MODELS,
+} from "./image-model.ts";
+import type { OpenAICodexImageModel } from "./image-model.ts";
 
 export { OpenAICodexService } from "./service.ts";
 export type { OpenAICodexServiceOptions } from "./service.ts";
@@ -98,6 +105,12 @@ export {
   OpenAICodexProxyTransport,
 } from "./proxy.ts";
 export type { OpenAICodexProxyMode, ProxyPreferences } from "./proxy.ts";
+export {
+  DEFAULT_OPENAI_CODEX_IMAGE_MODEL,
+  OPENAI_CODEX_IMAGE_MODELS,
+  isOpenAICodexImageModel,
+} from "./image-model.ts";
+export type { OpenAICodexImageModel } from "./image-model.ts";
 
 export {
   assertNoOpenAICodexProviderConflict,
@@ -163,11 +176,9 @@ export interface Config {
   /** Absolute shared OAuth JSON path; omitted to retain independent dsh storage. */
   credentialFile?: string;
   /** Model ids advertised by the provider; omitted to advertise the full catalog. */
-  models?: string[] | undefined;
+  models?: string[];
   /** Client-side model context capacity in tokens; omitted to keep provider defaults. */
-  contextWindow?: number | undefined;
-  /** Apply the context-window override to GPT-5.3 Codex Spark as well. */
-  overrideSparkContextWindow?: boolean;
+  contextWindow?: number | null;
   /** Model used for auxiliary standalone searches. */
   searchModel?: string;
   /** Cached, indexed, or live web access. */
@@ -180,6 +191,8 @@ export interface Config {
   modifyReadImage?: boolean;
   /** Allow non-Codex vision models to call imagegen. */
   shareImagegenWithOtherModels?: boolean;
+  /** GPT Image backend used by imagegen. */
+  imageGenerationModel?: OpenAICodexImageModel;
   /** Reuse matching Codex context through the session's WebSocket connection. */
   useWebSocketContextReuse?: boolean;
   /** Use Codex V2 Responses compaction for Harness compaction calls. */
@@ -194,14 +207,13 @@ export interface Config {
   proxyUrl?: string;
 }
 
-export const Config: z<Config> = z.object({
-  credentialFile: z.string(),
-  models: z.union([z.const(undefined), z.array(z.string())]),
+export const Config = z.object({
+  credentialFile: z.union([z.const(undefined), z.string()]),
+  models: z.union([z.const(undefined), z.array(z.string())]).volatile(),
   contextWindow: z.union([
-    z.const(undefined),
+    z.const(null),
     z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER),
-  ]),
-  overrideSparkContextWindow: z.boolean().default(false),
+  ]).default(null).volatile(),
   searchModel: z.string().default(DEFAULT_OPENAI_CODEX_SEARCH_MODEL),
   searchMode: z
     .union(["cached", "indexed", "live"] as const)
@@ -214,16 +226,24 @@ export const Config: z<Config> = z.object({
     .step(1)
     .min(1)
     .default(DEFAULT_OPENAI_CODEX_SEARCH_MAX_OUTPUT_TOKENS),
-  modifyReadImage: z.boolean().default(true),
-  shareImagegenWithOtherModels: z.boolean().default(true),
-  useWebSocketContextReuse: z.boolean().default(false),
-  useNativeCompaction: z.boolean().default(false),
-  fastModeDefault: z.boolean().default(false),
-  automaticModelFallback: z.boolean().default(false),
+  modifyReadImage: z.boolean().default(true).volatile(),
+  shareImagegenWithOtherModels: z.boolean().default(true).volatile(),
+  imageGenerationModel: z
+    .union(OPENAI_CODEX_IMAGE_MODELS.map((model) => model.id) as [
+      OpenAICodexImageModel,
+      ...OpenAICodexImageModel[],
+    ])
+    .default(DEFAULT_OPENAI_CODEX_IMAGE_MODEL)
+    .volatile(),
+  useWebSocketContextReuse: z.boolean().default(false).volatile(),
+  useNativeCompaction: z.boolean().default(false).volatile(),
+  fastModeDefault: z.boolean().default(false).volatile(),
+  automaticModelFallback: z.boolean().default(false).volatile(),
   proxyMode: z
     .union(["off", "scoped", "global"] as const)
-    .default(DEFAULT_PROXY_PREFERENCES.proxyMode),
-  proxyUrl: z.string().default(DEFAULT_PROXY_PREFERENCES.proxyUrl),
+    .default(DEFAULT_PROXY_PREFERENCES.proxyMode)
+    .volatile(),
+  proxyUrl: z.string().default(DEFAULT_PROXY_PREFERENCES.proxyUrl).volatile(),
 });
 
 /**
@@ -232,23 +252,39 @@ export const Config: z<Config> = z.object({
  * @param ctx - plugin context carrying the LLM and web registries plus optional agent and attachment services.
  * @param config - standalone-search model, access mode, context size, and output budget.
  */
+function liveValue<T>(value: T | undefined, fallback: T): T {
+  const candidate = value as T | Volatile<T> | undefined;
+  if (
+    typeof candidate === "object" &&
+    candidate !== null &&
+    "get" in candidate &&
+    typeof candidate.get === "function"
+  ) {
+    return (candidate.get() ?? fallback) as T;
+  }
+  return (candidate ?? fallback) as T;
+}
+
 export function apply(ctx: Context, config: Config): void {
   installOpenAICodexSearchEvent();
   const modelProvider = createOpenAICodexModelProvider((input, init) => service.proxy.fetch(input, init));
+  const livePreferences = () => ({
+    models: [...liveValue(config.models, openAICodexModelCatalog(modelProvider).map((model) => model.id))],
+    contextWindow: liveValue(config.contextWindow, null),
+    modifyReadImage: liveValue(config.modifyReadImage, true),
+    shareImagegenWithOtherModels: liveValue(config.shareImagegenWithOtherModels, true),
+    imageGenerationModel: liveValue(config.imageGenerationModel, DEFAULT_OPENAI_CODEX_IMAGE_MODEL),
+    useWebSocketContextReuse: liveValue(config.useWebSocketContextReuse, false),
+    useNativeCompaction: liveValue(config.useNativeCompaction, false),
+    fastModeDefault: liveValue(config.fastModeDefault, false),
+    automaticModelFallback: liveValue(config.automaticModelFallback, false),
+    proxyMode: liveValue(config.proxyMode, DEFAULT_PROXY_PREFERENCES.proxyMode),
+    proxyUrl: liveValue(config.proxyUrl, DEFAULT_PROXY_PREFERENCES.proxyUrl),
+  });
   const service = new OpenAICodexService({
     ...(config.credentialFile === undefined ? {} : { credentialFile: config.credentialFile }),
-    ...(config.models === undefined ? {} : { models: config.models }),
-    contextWindow: config.contextWindow ?? null,
-    overrideSparkContextWindow: config.overrideSparkContextWindow ?? false,
     modelCatalog: () => openAICodexModelCatalog(modelProvider),
-    modifyReadImage: config.modifyReadImage ?? true,
-    shareImagegenWithOtherModels: config.shareImagegenWithOtherModels ?? true,
-    useWebSocketContextReuse: config.useWebSocketContextReuse ?? false,
-    useNativeCompaction: config.useNativeCompaction ?? false,
-    fastModeDefault: config.fastModeDefault ?? false,
-    automaticModelFallback: config.automaticModelFallback ?? false,
-    proxyMode: config.proxyMode ?? DEFAULT_PROXY_PREFERENCES.proxyMode,
-    proxyUrl: config.proxyUrl ?? DEFAULT_PROXY_PREFERENCES.proxyUrl,
+    ...livePreferences(),
   });
   const credentials = service.credentials;
   const imageTools = service.policy;
@@ -264,7 +300,13 @@ export function apply(ctx: Context, config: Config): void {
     "dsh-openai-codex: proxy transport"
   );
   ctx.inject(["settings"], (settingsCtx) => {
-    service.attachSettings(settingsCtx);
+    const namespace = (ctx.fiber as unknown as {
+      entry?: { options?: { id?: string } };
+    }).entry?.options?.id ?? name;
+    service.attachSettings(settingsCtx, namespace, ctx.fiber);
+  });
+  ctx.on("loader/volatile-update", () => {
+    service.refreshSettings(livePreferences());
   });
   ctx.llm.registerAdapter(
     [OPENAI_CODEX_PROVIDER],
@@ -275,7 +317,6 @@ export function apply(ctx: Context, config: Config): void {
       fastMode,
       () => imageTools.modelCatalogSnapshot().models,
       () => imageTools.contextWindowSnapshot().contextWindow,
-      () => imageTools.contextWindowSnapshot().overrideSparkContextWindow,
       service.proxy.fetch,
       () => imageTools.fastModeSnapshot().fastModeDefault,
       modelProvider

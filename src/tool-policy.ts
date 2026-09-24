@@ -1,21 +1,20 @@
-import type { Context } from "@deepseek-ai/cordis";
-import type {
-  SettingsNamespace,
-  SettingsScope,
-} from "@deepseek-ai/dsh-settings";
+import type { Context, Fiber } from "@deepseek-ai/cordis";
+import type {} from "@deepseek-ai/dsh-settings";
 import type { ToolExecution } from "@deepseek-ai/dsh-tools";
-import z from "@deepseek-ai/schemastery";
 import {
   DEFAULT_PROXY_PREFERENCES,
   normalizeProxyUrl,
 } from "./proxy.ts";
 import type { ProxyPreferences } from "./proxy.ts";
 import { OPENAI_CODEX_PROVIDER } from "./store.ts";
+import { DEFAULT_OPENAI_CODEX_IMAGE_MODEL } from "./image-model.ts";
+import type { OpenAICodexImageModel } from "./image-model.ts";
 
 /** User-controlled image-tool integration. */
 export interface ImageToolPreferences {
   modifyReadImage: boolean;
   shareImagegenWithOtherModels: boolean;
+  imageGenerationModel: OpenAICodexImageModel;
 }
 
 /** Experimental request behavior used only by the OpenAI Codex adapter. */
@@ -28,8 +27,6 @@ export interface ResponseApiPreferences {
 export interface ContextWindowPreferences {
   /** Tokens advertised to dsh, or null to keep each provider catalog default. */
   contextWindow: number | null;
-  /** Whether the global override also applies to GPT-5.3 Codex Spark. */
-  overrideSparkContextWindow: boolean;
 }
 
 /** One selectable model from the complete provider catalog. */
@@ -69,15 +66,13 @@ interface OpenAICodexPreferences
     ContextWindowPreferences,
     FastModePreferences,
     ModelFallbackPreferences,
-    ProxyPreferences {
-  /** Migration-only key written by the unreleased store:true experiment. */
-  useStatefulResponses: boolean;
-}
+    ProxyPreferences {}
 
 /** Defaults keep generic vision-model interoperability enabled. */
 export const DEFAULT_IMAGE_TOOL_PREFERENCES: ImageToolPreferences = {
   modifyReadImage: true,
   shareImagegenWithOtherModels: true,
+  imageGenerationModel: DEFAULT_OPENAI_CODEX_IMAGE_MODEL,
 };
 
 /** Conservative defaults preserve the established stateless Harness behavior. */
@@ -89,7 +84,6 @@ export const DEFAULT_RESPONSE_API_PREFERENCES: ResponseApiPreferences = {
 /** Keep provider-declared capacities until the owner opts into an override. */
 export const DEFAULT_CONTEXT_WINDOW_PREFERENCES: ContextWindowPreferences = {
   contextWindow: null,
-  overrideSparkContextWindow: false,
 };
 
 /** Keep Fast Mode a per-session opt-in until the owner forces it globally. */
@@ -102,36 +96,10 @@ export const DEFAULT_MODEL_FALLBACK_PREFERENCES: ModelFallbackPreferences = {
   automaticModelFallback: false,
 };
 
-const NAMESPACE = "openai-codex" as SettingsNamespace;
-
-function preferenceSchema(
-  defaultModels: readonly string[]
-): z<OpenAICodexPreferences> {
-  return z.object({
-    modifyReadImage: z.boolean().default(true),
-    shareImagegenWithOtherModels: z.boolean().default(true),
-    useWebSocketContextReuse: z.boolean().default(false),
-    useStatefulResponses: z.boolean().default(false),
-    useNativeCompaction: z.boolean().default(false),
-    contextWindow: z
-      .union([
-        z.const(null),
-        z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER),
-      ])
-      .default(null),
-    overrideSparkContextWindow: z.boolean().default(false),
-    proxyMode: z.union(["off", "scoped", "global"] as const).default("off"),
-    proxyUrl: z.string().default(""),
-    models: z.array(z.string()).default([...defaultModels]),
-    fastModeDefault: z.boolean().default(false),
-    automaticModelFallback: z.boolean().default(false),
-  });
-}
-
 /** Live policy shared by the host tools, Codex adapter, and settings HTTP surface. */
 export class ImageToolPolicy {
   private current: OpenAICodexPreferences;
-  private scope: SettingsScope<OpenAICodexPreferences> | undefined;
+  private persist: ((patch: Partial<OpenAICodexPreferences>) => Promise<void>) | undefined;
   private readonly imageWatchers = new Set<() => void>();
   private readonly proxyWatchers = new Set<() => void>();
   private readonly resolveModelCatalog: () => readonly ModelCatalogEntry[];
@@ -157,39 +125,36 @@ export class ImageToolPolicy {
       ...DEFAULT_FAST_MODE_PREFERENCES,
       ...DEFAULT_MODEL_FALLBACK_PREFERENCES,
       ...DEFAULT_PROXY_PREFERENCES,
-      useStatefulResponses: false,
       ...base,
       models: [...(
         base.models ?? this.modelCatalog.map((model) => model.id)
       )],
     };
-    if (
-      this.current.useStatefulResponses &&
-      base.useWebSocketContextReuse === undefined
-    ) {
-      this.current = { ...this.current, useWebSocketContextReuse: true };
-    }
   }
 
-  /** Register durable live settings when the active profile supplies ctx.settings. */
-  attach(ctx: Context): void {
-    const scope = ctx.settings.register(
-      NAMESPACE,
-      preferenceSchema(this.current.models),
-      { base: this.current, applies: "live" }
-    );
-    this.scope = scope;
-    this.replace(scope.get());
-    const unwatch = scope.watch((next) => {
-      this.replace(next);
-    });
+  /** Bind browser writes to this plugin entry's volatile Harness configuration. */
+  attach(ctx: Context, namespace: string, owner: Fiber): void {
+    const persist = async (patch: Partial<OpenAICodexPreferences>): Promise<void> => {
+      await ctx.settings.update(namespace, patch);
+      this.replace({ ...this.current, ...patch });
+    };
+    this.persist = persist;
+    ctx.effect(() => ctx.settings.configure({ auto: false }, owner));
     ctx.effect(
       () => () => {
-        unwatch();
-        if (this.scope === scope) this.scope = undefined;
+        if (this.persist === persist) this.persist = undefined;
       },
       "dsh-openai-codex: preferences"
     );
+  }
+
+  /** Apply values committed in place by Harness's volatile configuration path. */
+  refresh(base: Partial<OpenAICodexPreferences>): void {
+    this.replace({
+      ...this.current,
+      ...base,
+      models: [...(base.models ?? this.current.models)],
+    });
   }
 
   /** Return a detached settings projection for the browser. */
@@ -197,6 +162,7 @@ export class ImageToolPolicy {
     return {
       modifyReadImage: this.current.modifyReadImage,
       shareImagegenWithOtherModels: this.current.shareImagegenWithOtherModels,
+      imageGenerationModel: this.current.imageGenerationModel,
     };
   }
 
@@ -212,10 +178,7 @@ export class ImageToolPolicy {
   async update(
     patch: Partial<ImageToolPreferences>
   ): Promise<ImageToolPreferences> {
-    if (this.scope === undefined)
-      throw new Error("OpenAI Codex settings service is unavailable");
-    await this.scope.update(patch);
-    this.replace(this.scope.get());
+    await this.commit(patch);
     return this.snapshot();
   }
 
@@ -231,15 +194,7 @@ export class ImageToolPolicy {
   async updateResponseApi(
     patch: Partial<ResponseApiPreferences>
   ): Promise<ResponseApiPreferences> {
-    if (this.scope === undefined)
-      throw new Error("OpenAI Codex settings service is unavailable");
-    await this.scope.update({
-      ...patch,
-      ...(patch.useWebSocketContextReuse === undefined
-        ? {}
-        : { useStatefulResponses: false }),
-    });
-    this.replace(this.scope.get());
+    await this.commit(patch);
     return this.responseApiSnapshot();
   }
 
@@ -247,7 +202,6 @@ export class ImageToolPolicy {
   contextWindowSnapshot(): ContextWindowPreferences {
     return {
       contextWindow: this.current.contextWindow,
-      overrideSparkContextWindow: this.current.overrideSparkContextWindow,
     };
   }
 
@@ -255,10 +209,7 @@ export class ImageToolPolicy {
   async updateContextWindow(
     patch: Partial<ContextWindowPreferences>
   ): Promise<ContextWindowPreferences> {
-    if (this.scope === undefined)
-      throw new Error("OpenAI Codex settings service is unavailable");
-    await this.scope.update(patch);
-    this.replace(this.scope.get());
+    await this.commit(patch);
     return this.contextWindowSnapshot();
   }
 
@@ -273,10 +224,7 @@ export class ImageToolPolicy {
   async updateFastMode(
     patch: Partial<FastModePreferences>
   ): Promise<FastModePreferences> {
-    if (this.scope === undefined)
-      throw new Error("OpenAI Codex settings service is unavailable");
-    await this.scope.update(patch);
-    this.replace(this.scope.get());
+    await this.commit(patch);
     return this.fastModeSnapshot();
   }
 
@@ -291,10 +239,7 @@ export class ImageToolPolicy {
   async updateModelFallback(
     patch: Partial<ModelFallbackPreferences>
   ): Promise<ModelFallbackPreferences> {
-    if (this.scope === undefined)
-      throw new Error("OpenAI Codex settings service is unavailable");
-    await this.scope.update(patch);
-    this.replace(this.scope.get());
+    await this.commit(patch);
     return this.modelFallbackSnapshot();
   }
 
@@ -318,14 +263,11 @@ export class ImageToolPolicy {
   async updateProxy(
     patch: Partial<ProxyPreferences>
   ): Promise<ProxyPreferences> {
-    if (this.scope === undefined)
-      throw new Error("OpenAI Codex settings service is unavailable");
     const normalized =
       patch.proxyUrl === undefined
         ? patch
         : { ...patch, proxyUrl: normalizeProxyUrl(patch.proxyUrl) };
-    await this.scope.update(normalized);
-    this.replace(this.scope.get());
+    await this.commit(normalized);
     return this.proxySnapshot();
   }
 
@@ -341,20 +283,17 @@ export class ImageToolPolicy {
   async updateModelCatalog(
     patch: Partial<ModelCatalogPreferences>
   ): Promise<ModelCatalogSettings> {
-    if (this.scope === undefined)
-      throw new Error("OpenAI Codex settings service is unavailable");
     if (patch.models === undefined) return this.modelCatalogSnapshot();
     const availableIds = new Set(this.modelCatalog.map((model) => model.id));
     const unavailableSelections = [
       ...new Set(this.current.models.filter((id) => !availableIds.has(id))),
     ];
-    await this.scope.update({
+    await this.commit({
       models: [
         ...this.normalizeModels(patch.models),
         ...unavailableSelections,
       ],
     });
-    this.replace(this.scope.get());
     return this.modelCatalogSnapshot();
   }
 
@@ -371,10 +310,6 @@ export class ImageToolPolicy {
   }
 
   private replace(next: OpenAICodexPreferences): void {
-    next =
-      next.useStatefulResponses && !next.useWebSocketContextReuse
-        ? { ...next, useWebSocketContextReuse: true }
-        : next;
     // Keep saved ids if the optional Codex cache is temporarily unavailable.
     // Discovery filters against the current catalog without deleting preferences.
     next = { ...next, models: [...next.models] };
@@ -392,6 +327,13 @@ export class ImageToolPolicy {
     if (proxyChanged) {
       for (const listener of this.proxyWatchers) listener();
     }
+  }
+
+  private async commit(patch: Partial<OpenAICodexPreferences>): Promise<void> {
+    if (this.persist === undefined) {
+      throw new Error("OpenAI Codex settings service is unavailable");
+    }
+    await this.persist(patch);
   }
 
   private normalizeModels(models: readonly string[]): string[] {

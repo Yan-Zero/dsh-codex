@@ -52,7 +52,7 @@ const HELP = [
   "  /codex logout",
   "  /codex usage",
   "  /codex config",
-  "  /codex set <backend-fallback|read-image|imagegen-other-models|websocket-context|native-compaction|spark-context-window> <on|off>",
+  "  /codex set <backend-fallback|read-image|imagegen-other-models|websocket-context|native-compaction> <on|off>",
 ].join("\n");
 
 function translatedNode(
@@ -117,11 +117,6 @@ const CODEX_SETTINGS: readonly TuiSubcommandNode[] = [
     "native-compaction",
     "Use Codex V2 Responses compaction",
     "使用 Codex V2 Responses 压缩"
-  ),
-  translatedNode(
-    "spark-context-window",
-    "Apply the context-window override to GPT-5.3 Codex Spark",
-    "将上下文窗口覆盖值应用于 GPT-5.3 Codex Spark"
   ),
 ];
 
@@ -378,10 +373,10 @@ function formatConfig(service: OpenAICodexService): string {
     `backend-fallback: ${fallback.automaticModelFallback ? "on" : "off"}`,
     `read-image: ${image.modifyReadImage ? "on" : "off"}`,
     `imagegen-other-models: ${image.shareImagegenWithOtherModels ? "on" : "off"}`,
+    `imagegen-model: ${image.imageGenerationModel}`,
     `websocket-context: ${responses.useWebSocketContextReuse ? "on" : "off"}`,
     `native-compaction: ${responses.useNativeCompaction ? "on" : "off"}`,
     `context-window: ${contextWindow.contextWindow === null ? "provider-default" : `${contextWindow.contextWindow} tokens`}`,
-    `spark-context-window: ${contextWindow.overrideSparkContextWindow ? "on" : "off"}`,
     `proxy-mode: ${proxy.proxyMode}`,
     `proxy-url: ${formatProxyUrl(proxy.proxyUrl)}`,
     ...models,
@@ -414,11 +409,6 @@ async function updateSetting(
       return;
     case "native-compaction":
       await service.updateResponsePreferences({ useNativeCompaction: enabled });
-      return;
-    case "spark-context-window":
-      await service.updateContextWindowPreferences({
-        overrideSparkContextWindow: enabled,
-      });
       return;
     default:
       throw new Error(`unknown setting ${JSON.stringify(key)}`);

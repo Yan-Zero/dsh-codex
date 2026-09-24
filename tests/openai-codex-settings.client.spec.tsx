@@ -38,17 +38,16 @@ afterEach(() => {
 describe("OpenAI Codex settings model catalog", () => {
   it("renders model toggles and persists the provider-ordered visible subset", async () => {
     const availableModels = [
-      {
-        id: "gpt-5.3-codex-spark",
-        name: "GPT-5.3 Codex Spark",
-        contextWindow: 128_000,
-      },
       { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", contextWindow: 272_000 },
       { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", contextWindow: 272_000 },
     ];
-    let selected = availableModels.slice(1).map((model) => model.id);
+    let selected = availableModels.map((model) => model.id);
     let contextWindow: number | null = null;
-    let overrideSparkContextWindow = false;
+    let imageTools = {
+      modifyReadImage: true,
+      shareImagegenWithOtherModels: true,
+      imageGenerationModel: "gpt-image-2",
+    };
     let fastModeDefault = false;
     let automaticModelFallback = false;
     let proxy = { proxyMode: "off", proxyUrl: "" };
@@ -60,11 +59,15 @@ describe("OpenAI Codex settings model catalog", () => {
         const path = String(input);
         if (path.endsWith("/auth/status"))
           return json({ status: "signed-out" });
-        if (path.endsWith("/image-tools"))
-          return json({
-            modifyReadImage: true,
-            shareImagegenWithOtherModels: true,
-          });
+        if (path.endsWith("/image-tools")) {
+          if (init?.method === "POST") {
+            imageTools = {
+              ...imageTools,
+              ...(JSON.parse(String(init.body)) as Partial<typeof imageTools>),
+            };
+          }
+          return json(imageTools);
+        }
         if (path.endsWith("/response-api"))
           return json({
             useWebSocketContextReuse: false,
@@ -103,14 +106,11 @@ describe("OpenAI Codex settings model catalog", () => {
           if (init?.method === "POST") {
             const patch = JSON.parse(String(init.body)) as Partial<{
               contextWindow: number | null;
-              overrideSparkContextWindow: boolean;
             }>;
             if (patch.contextWindow !== undefined)
               contextWindow = patch.contextWindow;
-            if (patch.overrideSparkContextWindow !== undefined)
-              overrideSparkContextWindow = patch.overrideSparkContextWindow;
           }
-          return json({ contextWindow, overrideSparkContextWindow });
+          return json({ contextWindow });
         }
         if (path.endsWith("/models")) {
           if (init?.method === "POST")
@@ -131,9 +131,6 @@ describe("OpenAI Codex settings model catalog", () => {
       name: /GPT-5\.6 Sol/u,
     });
     expect(
-      screen.getByRole("group", { name: "GPT-5.3 Codex Spark" }).textContent
-    ).toContain("Default window:128K tokens");
-    expect(
       screen.getByRole("group", { name: "GPT-5.6 Luna" }).textContent
     ).toContain("Default window:272K tokens");
     expect(luna.getAttribute("aria-checked")).toBe("true");
@@ -152,16 +149,6 @@ describe("OpenAI Codex settings model catalog", () => {
       models: ["gpt-5.6-sol"],
     });
 
-    const sparkOverride = screen.getByRole<HTMLButtonElement>("switch", {
-      name: en.overrideSparkContextWindow,
-    });
-    expect(sparkOverride.getAttribute("aria-checked")).toBe("false");
-    fireEvent.click(sparkOverride);
-    await waitFor(() => {
-      expect(overrideSparkContextWindow).toBe(true);
-      expect(sparkOverride.getAttribute("aria-checked")).toBe("true");
-    });
-
     const capacity = await screen.findByRole<HTMLInputElement>("spinbutton", {
       name: en.contextWindowInput,
     });
@@ -177,9 +164,6 @@ describe("OpenAI Codex settings model catalog", () => {
           String(input).endsWith("/context-window") && init?.method === "POST"
       );
     expect(JSON.parse(String(contextPosts()[0]?.[1]?.body))).toEqual({
-      overrideSparkContextWindow: true,
-    });
-    expect(JSON.parse(String(contextPosts()[1]?.[1]?.body))).toEqual({
       contextWindow: 512_000,
     });
 
@@ -188,10 +172,29 @@ describe("OpenAI Codex settings model catalog", () => {
     await waitFor(() => {
       expect(contextWindow).toBeNull();
     });
-    expect(JSON.parse(String(contextPosts()[2]?.[1]?.body))).toEqual({
+    expect(JSON.parse(String(contextPosts()[1]?.[1]?.body))).toEqual({
       contextWindow: null,
     });
     expect(screen.getByText(en.contextWindowHint)).toBeDefined();
+
+    const imageModel = await screen.findByRole<HTMLSelectElement>("combobox", {
+      name: en.imageGenerationModel,
+    });
+    expect(imageModel.value).toBe("gpt-image-2");
+    fireEvent.change(imageModel, {
+      target: { value: "gpt-image-2.5-sunburst" },
+    });
+    await waitFor(() => {
+      expect(imageTools.imageGenerationModel).toBe("gpt-image-2.5-sunburst");
+      expect(imageModel.value).toBe("gpt-image-2.5-sunburst");
+    });
+    const imageModelPost = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        String(input).endsWith("/image-tools") && init?.method === "POST"
+    );
+    expect(JSON.parse(String(imageModelPost?.[1]?.body))).toEqual({
+      imageGenerationModel: "gpt-image-2.5-sunburst",
+    });
 
     const scopedProxy = await screen.findByRole<HTMLButtonElement>("radio", {
       name: en.proxyModeScoped,
@@ -265,6 +268,6 @@ describe("OpenAI Codex settings model catalog", () => {
     fireEvent.change(capacity, { target: { value: "1.0001" } });
     fireEvent.click(screen.getByRole("button", { name: en.contextWindowSave }));
     expect(await screen.findByText(en.contextWindowInvalid)).toBeDefined();
-    expect(contextPosts()).toHaveLength(3);
+    expect(contextPosts()).toHaveLength(2);
   });
 });

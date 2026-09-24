@@ -14,7 +14,7 @@ Use a ChatGPT subscription in [DeepSeek Harness](https://github.com/deepseek-ai/
 - streaming, tool calls, reasoning replay, prompt caching, and dsh compaction through the normal LLM service
 - Codex standalone web search through dsh's existing `web_search` tool
 - optional HTTP(S) URL input added to Harness's existing `read_image` tool
-- an `imagegen` tool backed by `gpt-image-2`, with workspace or conversation reference images and automatic workspace output
+- an `imagegen` tool with a selectable GPT Image backend, workspace or conversation reference images, and automatic workspace output
 - browser image input through dsh's existing paste and drop controls
 - a per-conversation Fast Mode switch and compact weekly quota indicator in the Web composer
 - optional backend-authorized model recovery, including hidden Luna Reserve routing
@@ -59,7 +59,7 @@ Codex, Claude Code, and other automation agents should follow [INSTALL.md](INSTA
 
 The bundle selects `openai-codex` / `gpt-5.6-sol` for new agents and selects the Codex search provider. A model already saved in dsh settings still takes precedence; the model picker can select any other Codex model visible to the signed-in account.
 
-Automatic model fallback is off by default. When enabled under **Settings → OpenAI Codex**, the plugin follows only a recovery instruction returned by OpenAI for the current account. Ordinary recovery uses the backend's ordered replacement list; a `luna_reserve` instruction resolves the official hidden `gpt-reserve` route with Luna's context, reasoning, and image capabilities. The decision happens before dsh prepares the retry, so the actual model, context budget, image admission, and Session request header agree. A vision route never falls back to a text-only replacement, keeping attachments, `read_image`, and `imagegen` available. If no compatible fallback exists—or the usage refresh fails—the original quota failure continues through Harness's normal retry path. `imagegen` remains independent and follows Codex's current fixed `gpt-image-2` model.
+Automatic model fallback is off by default. When enabled under **Settings → OpenAI Codex**, the plugin follows only a recovery instruction returned by OpenAI for the current account. Ordinary recovery uses the backend's ordered replacement list; a `luna_reserve` instruction resolves the official hidden `gpt-reserve` route with Luna's context, reasoning, and image capabilities. The decision happens before dsh prepares the retry, so the actual model, context budget, image admission, and Session request header agree. A vision route never falls back to a text-only replacement, keeping attachments, `read_image`, and `imagegen` available. If no compatible fallback exists—or the usage refresh fails—the original quota failure continues through Harness's normal retry path. `imagegen` remains independent and uses the image backend selected in Settings.
 
 ## Model catalog
 
@@ -117,9 +117,9 @@ Image support uses dsh's durable attachment path:
 - PNG, JPEG, WebP, and GIF are accepted within the active dsh attachment limits;
 - only a model that explicitly advertises image input may receive an image.
 
-`imagegen` is available to any vision-capable conversation model. The current model writes an ordinary prompt and may select either `referenced_image_paths` or `num_last_images_to_include`; the plugin reads the bytes from `ctx.fs` or the attachment store and sends them to `gpt-image-2`. The model never emits base64. Every result is shown inline, saved as a durable attachment, and written to the active workspace. `output_path` chooses the destination; omitting it creates a unique `generated-<timestamp>-<id>.png` file. Local saving is included in this plugin, while `dsh-remote-ssh` supplies the remote AHP write path when that plugin owns the workspace.
+`imagegen` is available to any vision-capable conversation model. The current model writes an ordinary prompt and may select either `referenced_image_paths` or `num_last_images_to_include`; the plugin reads the bytes from `ctx.fs` or the attachment store and sends them to the configured GPT Image backend. The model never emits base64. Every result is shown inline, saved as a durable attachment, and written to the active workspace. `output_path` chooses the destination; omitting it creates a unique `generated-<timestamp>-<id>.png` file. Local saving is included in this plugin, while `dsh-remote-ssh` supplies the remote AHP write path when that plugin owns the workspace.
 
-The Settings page has separate **Enhance read_image** and **Image generation for other models** toggles. Both default on. Turning off the first removes the plugin's agent-scoped override and restores Harness's original local-only `read_image` schema. Turning off the second keeps `imagegen` available to Codex vision models and rejects calls from other model providers at execution time.
+The Settings page selects `gpt-image-2` (the current Codex default), `gpt-image-2.5`, `gpt-image-2.5-sunburst`, or `gpt-image-2.5-flare`, and has separate **Enhance read_image** and **Image generation for other models** toggles. Both toggles default on. Turning off the first removes the plugin's agent-scoped override and restores Harness's original local-only `read_image` schema. Turning off the second keeps `imagegen` available to Codex vision models and rejects calls from other model providers at execution time.
 
 `read_image` stores validated bytes as a dsh attachment before returning the actual image block. Local paths are delegated unchanged to Harness, including its configured filesystem and sandbox behavior. The URL extension bounds redirects and bytes, rejects credentials embedded in URLs, rejects local/private/special network targets, and pins each validated public address across the corresponding HTTP hop.
 
@@ -177,7 +177,7 @@ Explicit shared files use in-process serialization, with no `.lock` or refresh-i
 
 ## Compatibility notes
 
-- Version 0.3.0 targets the coherent DSH `0.1.5-rc.2` plugin surfaces and uses its official `dsh-http-proxy` implementation. It uses `@earendil-works/pi-ai` `0.85.1` and still migrates earlier pi-ai replay envelopes while reading history so existing reasoning/tool metadata remains usable after upgrades.
+- Version 0.3.1 targets the coherent DSH `0.1.7-rc.2` plugin surfaces and uses its official volatile settings and `dsh-http-proxy` implementations. It uses `@earendil-works/pi-ai` `0.85.1` and still migrates earlier pi-ai replay envelopes while reading history so existing reasoning/tool metadata remains usable after upgrades.
 - The plugin runs on released dsh plugin surfaces and does not require a modified Harness checkout. It can generate attachments and save local output when installed alone.
 - ChatGPT plan eligibility, model access, quotas, and backend behavior are controlled by OpenAI and may change.
 - The Codex endpoint does not enforce the ordinary Responses `max_output_tokens` field. Compaction works, but its configured summary cap cannot be imposed server-side on this route.

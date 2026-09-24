@@ -13,6 +13,7 @@ import { assertImageCapable } from './image-capability.ts'
 import type { ImageToolPolicy } from './tool-policy.ts'
 import { fetchPublicHttpResource } from './public-http.ts'
 import type { PublicHttpRuntime } from './public-http.ts'
+import { OPENAI_CODEX_MESSAGE_SOURCE } from './message-source.ts'
 
 /** Harness's canonical image-reading tool name. */
 export const READ_IMAGE_TOOL_NAME = 'read_image'
@@ -147,7 +148,7 @@ export function enhancedReadImageTool(
       if (exec.parent !== undefined) {
         exec.deferContext(createUserMessage({
           content: contentOf(value),
-          source: { kind: 'plugin', plugin: 'dsh-openai-codex' },
+          source: OPENAI_CODEX_MESSAGE_SOURCE,
         }))
       }
       return value
@@ -242,7 +243,7 @@ export function installReadImageEnhancement(
 
   // Reconcile through syncAll so the tools/change emitted by a scoped
   // registration cannot re-enter before its installed record is committed.
-  ctx.on('agent/created', () => { syncAll() })
+  ctx.on('agent/created', () => { syncAll(); return undefined })
   ctx.on('agent/disposed', ({ agent }) => { installed.delete(agent) })
   ctx.on('tools/change', () => { syncAll(true) })
   const stopPolicy = policy.watchImagePreferences(() => { syncAll() })

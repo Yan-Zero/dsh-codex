@@ -21,7 +21,7 @@ import type { ResolvedPiAiProviderProfile } from "@deepseek-ai/dsh-llm-pi-ai";
 import type {
   AttachmentStore,
   ImageAttachmentRef,
-  ImageRequestPolicy,
+  ImageRequestTarget,
 } from "@deepseek-ai/dsh-attachment";
 import type { OpenAICodexCredentialStore } from "./store.ts";
 import { OPENAI_CODEX_PROVIDER } from "./store.ts";
@@ -31,9 +31,11 @@ import type {
   ResponseApiPreferences,
 } from "./tool-policy.ts";
 import type { FastModeRegistry } from "./fast-mode.ts";
-import { OpenAICodexModelCatalog } from "./model-catalog.ts";
+import {
+  isSupportedOpenAICodexModel,
+  OpenAICodexModelCatalog,
+} from "./model-catalog.ts";
 
-const GPT_5_3_CODEX_SPARK = "gpt-5.3-codex-spark";
 const GPT_6_ASTRA = "gpt-6-astra";
 const GPT_6_SOL = "gpt-6-sol";
 const GPT_6_LUNA = "gpt-6-luna";
@@ -49,10 +51,7 @@ const OPENAI_CODEX_MODEL_ORDER = new Map<string, number>(
     "gpt-5.6-sol",
     "gpt-5.6-terra",
     GPT_5_6_LUNA,
-    GPT_5_3_CODEX_SPARK,
     "gpt-5.5",
-    "gpt-5.4",
-    "gpt-5.4-mini",
   ].map((id, index) => [id, index])
 );
 
@@ -102,10 +101,14 @@ const CURRENT_CODEX_MODELS = [
 /** Add current Codex releases missing from the compatible pi-ai catalog. */
 export function withCurrentOpenAICodexModels(provider: Provider): Provider {
   const getModels = provider.getModels;
+  let sourceModels: ReturnType<Provider["getModels"]> | undefined;
+  let currentModels: ReturnType<Provider["getModels"]> | undefined;
   return {
     ...provider,
     getModels() {
       const models = getModels.call(provider);
+      if (models === sourceModels && currentModels !== undefined)
+        return currentModels;
       const known = new Set(models.map((model) => model.id));
       const additions = CURRENT_CODEX_MODELS.flatMap((entry) => {
         if (known.has(entry.id)) return [];
@@ -130,7 +133,10 @@ export function withCurrentOpenAICodexModels(provider: Provider): Provider {
           },
         }];
       });
-      return additions.length === 0 ? models : [...models, ...additions];
+      const next = additions.length === 0 ? models : [...models, ...additions];
+      sourceModels = models;
+      currentModels = next;
+      return next;
     },
   };
 }
@@ -191,8 +197,14 @@ function withOpenAICodexLunaReserve(provider: Provider): Provider {
 
 /** Keep bundled models as a fallback and discover new releases from Codex metadata. */
 export function createOpenAICodexModelProvider(requestFetch?: typeof globalThis.fetch): Provider {
+  const upstream = openaiCodexProvider(requestFetch);
   const provider = withOpenAICodexModelOrder(
-    withCurrentOpenAICodexModels(openaiCodexProvider(requestFetch))
+    withCurrentOpenAICodexModels({
+      ...upstream,
+      getModels: () => upstream.getModels().filter((model) =>
+        isSupportedOpenAICodexModel(model.id)
+      ),
+    })
   );
   const catalog = new OpenAICodexModelCatalog(provider.getModels());
   return withOpenAICodexLunaReserve({
@@ -317,21 +329,23 @@ function withOpenAICodexImagePolicy(store: AttachmentStore): AttachmentStore {
       if (property === "readImageRequest") {
         return (
           ref: ImageAttachmentRef,
-          policy: ImageRequestPolicy,
+          targetPolicy: ImageRequestTarget,
           signal?: AbortSignal
-        ) =>
-          target.readImageRequest(
+        ) => {
+          const maxPixels = openAICodexRequestImagePixelBudget(
+            ref.width,
+            ref.height,
+            targetPolicy.width * targetPolicy.height
+          );
+          return target.readImageRequest(
             ref,
             {
-              ...policy,
-              maxPixels: openAICodexRequestImagePixelBudget(
-                ref.width,
-                ref.height,
-                policy.maxPixels
-              ),
+              ...targetPolicy,
+              ...projectedImageDimensions(ref.width, ref.height, maxPixels),
             },
             signal
           );
+        };
       }
       const value = Reflect.get(target, property, target) as unknown;
       return typeof value === "function" ? value.bind(target) : value;
@@ -375,7 +389,7 @@ function migrateReplayHistory(options: GenerateOptions): GenerateOptions {
   let changed = false;
   const messages = options.messages.map((message) => {
     if (
-      message.source.kind !== "model" ||
+      message.role !== "assistant" ||
       message.source.replayState === undefined
     )
       return message;
@@ -452,8 +466,7 @@ export function withOpenAICodexFastMode(
 /** Override provider model capacities without changing request payload fields. */
 function withOpenAICodexContextWindow(
   provider: Provider,
-  contextWindow: number | null | undefined,
-  overrideSparkContextWindow = false
+  contextWindow: number | null | undefined
 ): Provider {
   if (contextWindow === null || contextWindow === undefined) return provider;
   const getModels = provider.getModels;
@@ -464,8 +477,6 @@ function withOpenAICodexContextWindow(
         .call(provider)
         .map((model) =>
           model.id === OPENAI_CODEX_LUNA_RESERVE_MODEL
-            ? model
-            : model.id === GPT_5_3_CODEX_SPARK && !overrideSparkContextWindow
             ? model
             : { ...model, contextWindow }
         );
@@ -582,7 +593,6 @@ export function createOpenAICodexAdapter(
   fastMode?: FastModeRegistry,
   visibleModelIds?: () => readonly string[],
   contextWindow?: () => number | null | undefined,
-  overrideSparkContextWindow?: () => boolean | undefined,
   requestFetch?: FetchFunction,
   fastModeDefault?: () => boolean,
   modelProvider: Provider = createOpenAICodexModelProvider()
@@ -599,24 +609,20 @@ export function createOpenAICodexAdapter(
   );
   const unset = Symbol("unset context window");
   let resolvedContextWindow: number | null | undefined | typeof unset = unset;
-  let resolvedOverrideSparkContextWindow: boolean | undefined;
   let resolvedProfiles: Map<string, ResolvedPiAiProviderProfile> | undefined;
   let resolvedModelCatalog: ReturnType<Provider["getModels"]> | undefined;
   const profiles = (): Map<string, ResolvedPiAiProviderProfile> => {
     const nextModelCatalog = provider.getModels();
     const nextContextWindow = contextWindow?.();
-    const nextOverrideSparkContextWindow = overrideSparkContextWindow?.();
     if (
       resolvedProfiles !== undefined &&
       nextModelCatalog === resolvedModelCatalog &&
-      nextContextWindow === resolvedContextWindow &&
-      nextOverrideSparkContextWindow === resolvedOverrideSparkContextWindow
+      nextContextWindow === resolvedContextWindow
     )
       return resolvedProfiles;
     const configuredProvider = withOpenAICodexContextWindow(
       { ...provider, getModels: () => nextModelCatalog },
-      nextContextWindow,
-      nextOverrideSparkContextWindow
+      nextContextWindow
     );
     const profile: ResolvedPiAiProviderProfile = {
       provider: OPENAI_CODEX_PROVIDER,
@@ -638,7 +644,6 @@ export function createOpenAICodexAdapter(
     };
     resolvedContextWindow = nextContextWindow;
     resolvedModelCatalog = nextModelCatalog;
-    resolvedOverrideSparkContextWindow = nextOverrideSparkContextWindow;
     resolvedProfiles = new Map([[OPENAI_CODEX_PROVIDER, profile]]);
     return resolvedProfiles;
   };

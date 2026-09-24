@@ -17,6 +17,8 @@ import type {
   OpenAICodexProxyMode,
   ProxyPreferences,
 } from "../proxy.ts";
+import { OPENAI_CODEX_IMAGE_MODELS } from "../image-model.ts";
+import type { OpenAICodexImageModel } from "../image-model.ts";
 
 const STATUS_PATH = "/plugins/dsh-openai-codex/auth/status";
 const LOGIN_PATH = "/plugins/dsh-openai-codex/auth/login";
@@ -984,26 +986,6 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
     }
   };
 
-  const updateSparkContextWindowOverride = async (
-    checked: boolean
-  ): Promise<void> => {
-    setContextWindowBusy(true);
-    setContextWindowError(undefined);
-    try {
-      setContextWindow(
-        await jsonRequest<ContextWindowPreferences>(
-          CONTEXT_WINDOW_PATH,
-          "POST",
-          { overrideSparkContextWindow: checked }
-        )
-      );
-    } catch {
-      setContextWindowError(t("contextWindowSettingsFailed"));
-    } finally {
-      setContextWindowBusy(false);
-    }
-  };
-
   const updateProxy = async (
     patch: Partial<ProxyPreferences>
   ): Promise<void> => {
@@ -1311,20 +1293,6 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
             {contextWindowBusy ? t("working") : t("contextWindowSave")}
           </button>
         </div>
-        <div style={toggleRowStyle}>
-          <span style={toggleCopyStyle}>
-            <span style={statusStyle}>{t("overrideSparkContextWindow")}</span>
-            <span style={bodyStyle}>{t("overrideSparkContextWindowHint")}</span>
-          </span>
-          <PreferenceToggle
-            label={t("overrideSparkContextWindow")}
-            disabled={contextWindow === undefined || contextWindowBusy}
-            checked={contextWindow?.overrideSparkContextWindow ?? false}
-            onChange={(checked) => {
-              void updateSparkContextWindowOverride(checked);
-            }}
-          />
-        </div>
         <p style={bodyStyle}>{t("contextWindowHint")}</p>
         {contextWindowError === undefined ? null : (
           <p style={errorStyle}>{contextWindowError}</p>
@@ -1335,6 +1303,30 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
           <h3 style={quotaTitleStyle}>{t("imageTools")}</h3>
           <p style={{ ...bodyStyle, marginTop: 5 }}>{t("imageToolsIntro")}</p>
         </div>
+        <div style={{ ...rowStyle, justifyContent: "flex-start" }}>
+          <label htmlFor="openai-codex-image-model" style={statusStyle}>
+            {t("imageGenerationModel")}
+          </label>
+          <select
+            id="openai-codex-image-model"
+            aria-label={t("imageGenerationModel")}
+            value={imageTools?.imageGenerationModel ?? "gpt-image-2"}
+            disabled={imageTools === undefined || imageToolsBusy}
+            style={{ ...numberInputStyle, width: "auto" }}
+            onChange={(event) => {
+              void updateImageTool({
+                imageGenerationModel: event.currentTarget
+                  .value as OpenAICodexImageModel,
+              });
+            }}>
+            {OPENAI_CODEX_IMAGE_MODELS.map((model) => (
+              <option key={model.id} value={model.id}>
+                {model.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <p style={bodyStyle}>{t("imageGenerationModelHint")}</p>
         <div style={toggleRowStyle}>
           <span style={toggleCopyStyle}>
             <span style={statusStyle}>{t("modifyReadImage")}</span>

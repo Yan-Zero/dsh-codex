@@ -14,7 +14,7 @@
 - 经标准 LLM 服务运行的流式响应、工具调用、推理回放、提示词缓存与 dsh 压缩
 - 通过 dsh 现有 `web_search` 工具使用 Codex 独立联网搜索
 - 为 Harness 现有 `read_image` 工具增加可选的 HTTP(S) URL 输入
-- 由 `gpt-image-2` 执行的 `imagegen` 工具，支持工作区／会话参考图和自动工作区输出
+- 可选择 GPT Image 后端的 `imagegen` 工具，支持工作区／会话参考图和自动工作区输出
 - 复用 dsh Web 输入框的粘贴和拖放图片能力
 - 在 Web 输入框提供按会话生效的 Fast Mode 开关与紧凑的每周额度指示器
 - 可选的后端授权模型恢复，包括隐藏的 Luna Reserve 路由
@@ -59,7 +59,7 @@ Codex、Claude Code 及其他自动化 agent 应直接遵循 [INSTALL.md](INSTAL
 
 bundle 会为新建 agent 选择 `openai-codex` / `gpt-5.6-sol`，并选择 Codex 搜索提供方。dsh settings 中已经保存的模型仍然优先；模型选择器可以切换到当前账号可用的其他 Codex 模型。
 
-自动模型回退默认关闭。启用 **设置 → OpenAI Codex** 中的开关后，插件只会遵循 OpenAI 为当前账号返回的恢复指令：普通恢复按后端给出的替代模型顺序选择；`luna_reserve` 指令则解析官方隐藏的 `gpt-reserve` 路由，并沿用 Luna 的上下文、推理与图片能力。该决定发生在 dsh 准备重试之前，因此实际模型、上下文预算、图片准入与 Session 请求头保持一致。视觉路由绝不会回退到纯文本模型，附件、`read_image` 与 `imagegen` 会继续可用。没有兼容回退或额度刷新失败时，原始额度错误会继续交给 Harness 的正常重试路径。`imagegen` 与该切换相互独立，并跟随 Codex 当前固定的 `gpt-image-2` 模型。
+自动模型回退默认关闭。启用 **设置 → OpenAI Codex** 中的开关后，插件只会遵循 OpenAI 为当前账号返回的恢复指令：普通恢复按后端给出的替代模型顺序选择；`luna_reserve` 指令则解析官方隐藏的 `gpt-reserve` 路由，并沿用 Luna 的上下文、推理与图片能力。该决定发生在 dsh 准备重试之前，因此实际模型、上下文预算、图片准入与 Session 请求头保持一致。视觉路由绝不会回退到纯文本模型，附件、`read_image` 与 `imagegen` 会继续可用。没有兼容回退或额度刷新失败时，原始额度错误会继续交给 Harness 的正常重试路径。`imagegen` 与该切换相互独立，并使用设置页中选定的图片后端。
 
 ## 模型目录
 
@@ -117,9 +117,9 @@ bundle 会为新建 agent 选择 `openai-codex` / `gpt-5.6-sol`，并选择 Code
 - 在当前 dsh 附件限制内支持 PNG、JPEG、WebP 与 GIF；
 - 只有明确声明支持图片输入的模型才能接收图片。
 
-任何支持视觉输入的当前对话模型都可以使用 `imagegen`。当前模型只需编写普通提示词，并在 `referenced_image_paths` 与 `num_last_images_to_include` 中选择一种参考图来源；插件从 `ctx.fs` 或附件存储读取字节，再发送给 `gpt-image-2`。模型不会输出 base64。每个结果都会直接显示在对话中、保存为持久附件，并写入当前工作区。`output_path` 用来指定位置；省略时会创建唯一的 `generated-<时间戳>-<id>.png` 文件。本地保存能力包含在本插件中；当工作区由 `dsh-remote-ssh` 管理时，远程插件负责 AHP 写入路径。
+任何支持视觉输入的当前对话模型都可以使用 `imagegen`。当前模型只需编写普通提示词，并在 `referenced_image_paths` 与 `num_last_images_to_include` 中选择一种参考图来源；插件从 `ctx.fs` 或附件存储读取字节，再发送给配置的 GPT Image 后端。模型不会输出 base64。每个结果都会直接显示在对话中、保存为持久附件，并写入当前工作区。`output_path` 用来指定位置；省略时会创建唯一的 `generated-<时间戳>-<id>.png` 文件。本地保存能力包含在本插件中；当工作区由 `dsh-remote-ssh` 管理时，远程插件负责 AHP 写入路径。
 
-设置页提供独立的 **增强 read_image** 与 **允许其他模型使用生图** 开关，默认均为开启。关闭第一项会撤销插件的 agent-scope 覆盖，恢复 Harness 原本只接受本地路径的 `read_image` Schema。关闭第二项后，Codex 视觉模型仍可使用 `imagegen`，其他模型提供方的调用会在执行入口被拒绝。
+设置页可选择 `gpt-image-2`（当前 Codex 默认）、`gpt-image-2.5`、`gpt-image-2.5-sunburst` 或 `gpt-image-2.5-flare`，并提供独立的 **增强 read_image** 与 **允许其他模型使用生图** 开关，两个开关默认开启。关闭第一项会撤销插件的 agent-scope 覆盖，恢复 Harness 原本只接受本地路径的 `read_image` Schema。关闭第二项后，Codex 视觉模型仍可使用 `imagegen`，其他模型提供方的调用会在执行入口被拒绝。
 
 `read_image` 在返回实际图片块之前，会先验证图片并把字节持久化为 dsh 附件。本地路径原样委托给 Harness，继续沿用当前文件系统和沙箱行为；URL 扩展会限制重定向次数与下载字节数，拒绝内嵌凭据和本地／私网／特殊网络目标，并在每一跳把连接固定到已经验证的公网地址。
 
@@ -177,7 +177,7 @@ dsh 登录默认与 Codex CLI／Desktop 相互独立：
 
 ## 兼容性说明
 
-- 0.3.0 面向成套发布的 DSH `0.1.5-rc.2` 插件表层，并使用其正式的 `dsh-http-proxy` 实现。同时使用 `@earendil-works/pi-ai` `0.85.1`；adapter 仍会在读取历史时迁移旧版 pi-ai replay envelope，因此升级后已有 reasoning／tool 元数据可继续使用。
+- 0.3.1 面向成套发布的 DSH `0.1.7-rc.2` 插件表层，并使用其正式的 volatile settings 与 `dsh-http-proxy` 实现。同时使用 `@earendil-works/pi-ai` `0.85.1`；adapter 仍会在读取历史时迁移旧版 pi-ai replay envelope，因此升级后已有 reasoning／tool 元数据可继续使用。
 - 插件只使用已发布的 dsh 插件表层，不要求修改版 Harness checkout。单独安装时即可生成附件并保存本地输出。
 - ChatGPT 套餐资格、模型权限、配额及后端行为由 OpenAI 控制，可能发生变化。
 - Codex 端点不执行普通 Responses 的 `max_output_tokens` 字段。压缩可以工作，但该路由无法在服务端落实配置的摘要上限。

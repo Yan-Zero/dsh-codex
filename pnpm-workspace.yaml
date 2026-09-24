@@ -8,5 +8,9 @@ allowBuilds:
 
 autoInstallPeers: true
 
+# dsh-codex tracks coordinated Harness release candidates as soon as they ship.
+minimumReleaseAgeExclude:
+  - '@deepseek-ai/*'
+
 overrides:
   '@earendil-works/pi-ai': 0.85.1

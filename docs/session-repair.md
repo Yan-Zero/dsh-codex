@@ -113,7 +113,7 @@ The temporary marker is never persisted. No event is relabelled as a DeepSeek se
 |---|---|
 | `expected a canonical session[.vN]...` | The argument is not an exact canonical generation filename. |
 | `filename and Session header versions disagree` | The filename and embedded physical format version do not match. |
-| `source ... is not older than current` | A v3 file was selected; this command repairs historical v0-v2 generations only. |
+| `source ... is not older than repair target` | A v3 file was selected; this command repairs historical v0-v2 generations only. |
 | `contains no retired Codex search events` | This Session does not need this targeted repair. |
 | `multiple vN generations` | Both raw and Zstandard files exist for the newest historical version; pass the intended file explicitly after investigating. |
 | `unexpected field`, `lacks`, or `is invalid` | The retired payload is not one of the exact known dsh-codex request forms and was left untouched. |
@@ -132,7 +132,7 @@ Never rename the historical source to the v3 target and never edit compressed by
 ## Limitations
 
 - The command repairs only `web/openai-codex-search-llm-request`; it does not bypass corruption or other unknown required events.
-- It does not rewrite already-current v3 files.
+- It does not rewrite v3 files.
 - It materializes the selected compressed bytes, decoded JSONL, and final logical artifact during the operation. Very large Sessions require corresponding free memory.
-- It uses the DSH 0.1.5-rc.2 format catalog bundled as the 0.3.0 dependency baseline. Do not use this release to manufacture a target for a different current Session format.
+- With DSH 0.1.7-rc.2, the repair deliberately still publishes v3. The Harness persistence layer owns the relationship-aware v3-to-v4 migration and can gather the required child-session facts; this standalone repair command must not invent them.
 - dsh-codex 0.3.0 no longer writes new copies of the retired event. The command is temporary compatibility tooling for earlier releases.

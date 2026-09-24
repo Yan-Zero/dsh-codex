@@ -95,10 +95,7 @@ export const en = {
   contextWindowInput: "Capacity (K tokens)",
   contextWindowPlaceholder: "Provider default",
   contextWindowHint:
-    "Provider defaults are shown in the model list above. Leave blank to use them. The override applies to Codex models except Spark unless enabled below; an open conversation’s meter refreshes after its next request. This does not increase the backend’s actual capacity, so an unsupported value can still overflow.",
-  overrideSparkContextWindow: "Override GPT-5.3 Codex Spark",
-  overrideSparkContextWindowHint:
-    "Off by default to keep Spark at its provider-declared 128K window. Enable only if Spark supports the configured override.",
+    "Provider defaults are shown in the model list above. Leave blank to use them. An open conversation’s meter refreshes after its next request. This does not increase the backend’s actual capacity, so an unsupported value can still overflow.",
   contextWindowSave: "Save capacity",
   contextWindowInvalid:
     "Enter a positive capacity in K tokens, or leave the field blank.",
@@ -106,6 +103,9 @@ export const en = {
   imageTools: "Image tools",
   imageToolsIntro:
     "Extend Harness image reading and choose whether other vision models can use image generation.",
+  imageGenerationModel: "Image generation model",
+  imageGenerationModelHint:
+    "Choose the Codex image backend used for new generations and edits. GPT Image 2 remains the official Codex default; the three GPT Image 2.5 routes are available when you opt in.",
   modifyReadImage: "Enhance read_image",
   modifyReadImageHint:
     "Adds HTTP(S) URL input to Harness read_image. Local paths keep using its existing filesystem implementation.",
@@ -233,16 +233,16 @@ export const zh: { [Key in OpenAICodexSettingsKey]: string } = {
   contextWindowInput: "容量（K tokens）",
   contextWindowPlaceholder: "提供方默认值",
   contextWindowHint:
-    "各模型的提供方默认值显示在上方模型列表中；留空会使用这些默认值。覆盖值默认应用于 Spark 之外的 Codex 模型，已打开会话的用量显示会在下一次请求后刷新。该设置不会提高后端的真实容量，超过模型能力时请求仍可能溢出。",
-  overrideSparkContextWindow: "同时覆盖 GPT-5.3 Codex Spark",
-  overrideSparkContextWindowHint:
-    "默认关闭，使 Spark 保持提供方声明的 128K 窗口；仅在确认 Spark 支持所设覆盖值时启用。",
+    "各模型的提供方默认值显示在上方模型列表中；留空会使用这些默认值。已打开会话的用量显示会在下一次请求后刷新。该设置不会提高后端的真实容量，超过模型能力时请求仍可能溢出。",
   contextWindowSave: "保存容量",
   contextWindowInvalid: "请输入以 K tokens 为单位的正数，或留空恢复默认值。",
   contextWindowSettingsFailed: "无法保存上下文窗口设置。",
   imageTools: "图片工具",
   imageToolsIntro:
     "扩展 Harness 的图片读取能力，并选择其他视觉模型能否使用生图。",
+  imageGenerationModel: "图片生成模型",
+  imageGenerationModelHint:
+    "选择新生成和编辑所使用的 Codex 图片后端。GPT Image 2 仍是官方 Codex 默认值；可按需选择三个 GPT Image 2.5 路由。",
   modifyReadImage: "增强 read_image",
   modifyReadImageHint:
     "为 Harness 自带的 read_image 增加 HTTP(S) URL 输入；本地路径继续使用原有文件系统实现。",

@@ -87,9 +87,14 @@ export class OpenAICodexService {
     });
   }
 
-  /** Attach the durable settings document when the active profile provides it. */
-  attachSettings(ctx: Context): void {
-    this.policy.attach(ctx);
+  /** Bind browser writes to the owning plugin entry in the active profile. */
+  attachSettings(ctx: Context, namespace: string, owner: Context["fiber"]): void {
+    this.policy.attach(ctx, namespace, owner);
+  }
+
+  /** Accept values committed in place by Harness's volatile configuration path. */
+  refreshSettings(options: Partial<OpenAICodexServiceOptions>): void {
+    this.policy.refresh(options);
   }
 
   /** Start the provider-native OAuth lifecycle. */

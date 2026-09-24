@@ -11,8 +11,6 @@ import type { OpenAICodexSettingsKey } from './locales.ts'
 const WEEK_SECONDS = 7 * 24 * 60 * 60
 const USAGE_POLL_INTERVAL_MS = 60_000
 const CODEX_PROVIDER = 'openai-codex'
-const SPARK_MODEL = 'gpt-5.3-codex-spark'
-const SPARK_QUOTA_ID = 'codex_bengalfox'
 
 type Translate = (key: OpenAICodexSettingsKey, params?: Record<string, unknown>) => string
 
@@ -60,10 +58,9 @@ function usageFromStatus(value: unknown): OpenAICodexUsage | undefined {
   return usage as unknown as OpenAICodexUsage
 }
 
-function weeklyQuotaOf(usage: OpenAICodexUsage, model: string | undefined): OpenAICodexRateLimitWindow | undefined {
-  const quotaId = model === SPARK_MODEL ? SPARK_QUOTA_ID : 'codex'
+function weeklyQuotaOf(usage: OpenAICodexUsage): OpenAICodexRateLimitWindow | undefined {
   return usage.rateLimits
-    .find(limit => limit.id === quotaId)
+    .find(limit => limit.id === 'codex')
     ?.windows.find(window => window.windowSeconds === WEEK_SECONDS)
 }
 
@@ -165,7 +162,7 @@ export function OpenAICodexQuotaIndicator({ directory, t }: OpenAICodexQuotaIndi
   }, [eligible])
 
   if (!eligible || request.status !== 'ready' || request.usage === undefined) return null
-  const weekly = weeklyQuotaOf(request.usage, directoryState.current?.model)
+  const weekly = weeklyQuotaOf(request.usage)
   if (weekly === undefined) return null
 
   const percent = formatPercent(weekly.remainingPercent)

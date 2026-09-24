@@ -147,8 +147,8 @@ describe('dsh-codex CLI', () => {
         status: 'compatible',
         node: { supported: '^22.19.0 || >=24.0.0', installed: 'v22.19.0', status: 'compatible' },
         packages: {
-          '@deepseek-ai/dsh-llm': { supported: '0.1.5-rc.2', installed: '0.1.5-rc.2', status: 'compatible' },
-          '@deepseek-ai/dsh-llm-pi-ai': { supported: '0.1.5-rc.2', installed: '0.1.5-rc.2', status: 'compatible' },
+          '@deepseek-ai/dsh-llm': { supported: '0.1.7-rc.2', installed: '0.1.7-rc.2', status: 'compatible' },
+          '@deepseek-ai/dsh-llm-pi-ai': { supported: '0.1.7-rc.2', installed: '0.1.7-rc.2', status: 'compatible' },
           '@earendil-works/pi-ai': { supported: '0.85.1', installed: '0.85.1', status: 'compatible' },
         },
       },
@@ -211,8 +211,8 @@ describe('dsh-codex CLI', () => {
         status: 'incompatible',
         node: { supported: '^22.19.0 || >=24.0.0', installed: 'v22.19.0', status: 'compatible' },
         packages: {
-          '@deepseek-ai/dsh-llm': { supported: '0.1.5-rc.2', installed: '0.1.0-rc.6', status: 'incompatible' },
-          '@deepseek-ai/dsh-llm-pi-ai': { supported: '0.1.5-rc.2', installed: '0.1.0-rc.6', status: 'incompatible' },
+          '@deepseek-ai/dsh-llm': { supported: '0.1.7-rc.2', installed: '0.1.0-rc.6', status: 'incompatible' },
+          '@deepseek-ai/dsh-llm-pi-ai': { supported: '0.1.7-rc.2', installed: '0.1.0-rc.6', status: 'incompatible' },
           '@earendil-works/pi-ai': { supported: '0.85.1', installed: '0.84.4', status: 'incompatible' },
         },
       },

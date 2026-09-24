@@ -11,6 +11,7 @@ import {
   OpenAICodexWebAuth,
   OPENAI_CODEX_AUTH_STATUS_PATH,
   OPENAI_CODEX_CONTEXT_WINDOW_SETTINGS_PATH,
+  OPENAI_CODEX_IMAGE_TOOL_SETTINGS_PATH,
   OPENAI_CODEX_MODEL_CATALOG_SETTINGS_PATH,
   OPENAI_CODEX_MODEL_FALLBACK_SETTINGS_PATH,
   OPENAI_CODEX_PROXY_SETTINGS_PATH,
@@ -19,7 +20,7 @@ import {
   trustedRequestDecision,
 } from '../src/auth-routes.ts'
 import type { OpenAICodexCredentialStore } from '../src/store.ts'
-import type { ImageToolPolicy } from '../src/tool-policy.ts'
+import type { ImageToolPolicy, ImageToolPreferences } from '../src/tool-policy.ts'
 import { OpenAICodexTrustedOriginsStore } from '../src/trusted-origins.ts'
 import {
   OPENAI_CODEX_REAUTH_REQUIRED_MESSAGE,
@@ -243,15 +244,46 @@ describe('OpenAI Codex Web OAuth boundary', () => {
     expect(invalidResponse.observed.status).toBe(400)
   })
 
+  it('serves and validates the image generation model', async () => {
+    let current: ImageToolPreferences = {
+      modifyReadImage: true,
+      shareImagegenWithOtherModels: true,
+      imageGenerationModel: 'gpt-image-2',
+    }
+    const preferences = {
+      snapshot: vi.fn(() => ({ ...current })),
+      update: vi.fn(async (patch: Partial<typeof current>) => {
+        current = { ...current, ...patch }
+        return { ...current }
+      }),
+    } as unknown as ImageToolPolicy
+    const route = captureRoutes(emptyTrustedOrigins, preferences)
+      .find(candidate => candidate.path === OPENAI_CODEX_IMAGE_TOOL_SETTINGS_PATH)
+    if (route === undefined) throw new Error('image settings route was not registered')
+
+    const updateResponse = response()
+    await route.handler(request({
+      method: 'POST',
+      body: JSON.stringify({ imageGenerationModel: 'gpt-image-2.5-flare' }),
+    }), updateResponse)
+    expect(updateResponse.observed.status).toBe(200)
+    expect(current.imageGenerationModel).toBe('gpt-image-2.5-flare')
+
+    const invalidResponse = response()
+    await route.handler(request({
+      method: 'POST',
+      body: JSON.stringify({ imageGenerationModel: 'gpt-image-future' }),
+    }), invalidResponse)
+    expect(invalidResponse.observed.status).toBe(400)
+  })
+
   it('serves, updates, resets, and validates the context-window override', async () => {
     let contextWindow: number | null = null
-    let overrideSparkContextWindow = false
     const preferences = {
-      contextWindowSnapshot: vi.fn(() => ({ contextWindow, overrideSparkContextWindow })),
-      updateContextWindow: vi.fn(async (patch: { contextWindow?: number | null, overrideSparkContextWindow?: boolean }) => {
+      contextWindowSnapshot: vi.fn(() => ({ contextWindow })),
+      updateContextWindow: vi.fn(async (patch: { contextWindow?: number | null }) => {
         if (patch.contextWindow !== undefined) contextWindow = patch.contextWindow
-        if (patch.overrideSparkContextWindow !== undefined) overrideSparkContextWindow = patch.overrideSparkContextWindow
-        return { contextWindow, overrideSparkContextWindow }
+        return { contextWindow }
       }),
     } as unknown as ImageToolPolicy
     const route = captureRoutes(emptyTrustedOrigins, preferences)
@@ -262,18 +294,12 @@ describe('OpenAI Codex Web OAuth boundary', () => {
     await route.handler(request({}), getResponse)
     expect(JSON.parse(getResponse.observed.body ?? 'null')).toEqual({
       contextWindow: null,
-      overrideSparkContextWindow: false,
     })
 
     const updateResponse = response()
     await route.handler(request({ method: 'POST', body: JSON.stringify({ contextWindow: 512_000 }) }), updateResponse)
     expect(updateResponse.observed.status).toBe(200)
     expect(contextWindow).toBe(512_000)
-
-    const sparkResponse = response()
-    await route.handler(request({ method: 'POST', body: JSON.stringify({ overrideSparkContextWindow: true }) }), sparkResponse)
-    expect(sparkResponse.observed.status).toBe(200)
-    expect(overrideSparkContextWindow).toBe(true)
 
     const resetResponse = response()
     await route.handler(request({ method: 'POST', body: JSON.stringify({ contextWindow: null }) }), resetResponse)
@@ -285,9 +311,6 @@ describe('OpenAI Codex Web OAuth boundary', () => {
       await route.handler(request({ method: 'POST', body: JSON.stringify({ contextWindow: value }) }), invalidResponse)
       expect(invalidResponse.observed.status).toBe(400)
     }
-    const invalidSparkResponse = response()
-    await route.handler(request({ method: 'POST', body: JSON.stringify({ overrideSparkContextWindow: 'yes' }) }), invalidSparkResponse)
-    expect(invalidSparkResponse.observed.status).toBe(400)
   })
 
   it('returns a stable remote-origin error until the exact effective origin is trusted', async () => {
