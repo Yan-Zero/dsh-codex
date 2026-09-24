@@ -9,6 +9,7 @@ import { ImageToolPolicy } from "../src/tool-policy.ts";
 import type { OpenAICodexCredentialStore } from "../src/store.ts";
 
 const bundled = openaiCodexProvider().getModels();
+const availableBundled = mergeOpenAICodexModels(bundled, undefined);
 const astra = {
   slug: "gpt-6-astra", display_name: "GPT-6-Astra", visibility: "list",
   context_window: 272_000, max_context_window: 872_000,
@@ -49,11 +50,10 @@ describe("Codex model discovery", () => {
         id: "gpt-future-model", input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       });
-    expect(models.slice(0, bundled.length).map((model) => model.id))
-      .toEqual(bundled.map((model) => model.id));
-    expect(models.slice(bundled.length).map((model) => model.id))
+    expect(models.slice(0, availableBundled.length).map((model) => model.id))
+      .toEqual(availableBundled.map((model) => model.id));
+    expect(models.slice(availableBundled.length).map((model) => model.id))
       .toEqual(["gpt-future-model"]);
-    expect(models.some(model => model.id === "gpt-5.4")).toBe(true);
   });
 
   it("ignores hidden, malformed, and duplicate entries and preserves known model prices", () => {
@@ -64,10 +64,10 @@ describe("Codex model discovery", () => {
       { ...astra, slug: "gpt-5.6-sol" },
       { ...astra, slug: "gpt-5.6-sol", context_window: 999 },
     ] });
-    expect(models).toHaveLength(bundled.length);
+    expect(models).toHaveLength(availableBundled.length);
     const sol = models.find((model) => model.id === "gpt-5.6-sol");
     expect(sol?.contextWindow).toBe(272_000);
-    expect(sol?.cost).toEqual(bundled.find(model => model.id === "gpt-5.6-sol")?.cost);
+    expect(sol?.cost).toEqual(availableBundled.find(model => model.id === "gpt-5.6-sol")?.cost);
   });
 
   it("keeps the curated model order and appends unknown cache entries stably", () => {
@@ -80,21 +80,18 @@ describe("Codex model discovery", () => {
       { ...astra, slug: "gpt-5.6-terra" },
       { ...astra, slug: "gpt-5.6-luna" },
       { ...astra, slug: "gpt-5.5" },
-      { ...astra, slug: "gpt-5.4-mini" },
-      { ...astra, slug: "gpt-5.3-codex-spark", input_modalities: ["text"] },
       { ...astra, slug: "gpt-future-a" },
     ]);
 
     expect(createOpenAICodexModelProvider().getModels().map((model) => model.id))
       .toEqual([
         "gpt-6-astra",
+        "gpt-6-sol",
+        "gpt-6-luna",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
-        "gpt-5.3-codex-spark",
         "gpt-5.5",
-        "gpt-5.4",
-        "gpt-5.4-mini",
         "gpt-future-b",
         "gpt-future-a",
         "gpt-reserve",
@@ -111,8 +108,8 @@ describe("Codex model discovery", () => {
 
   it("reloads replacements while retaining the last usable snapshot during missing or corrupt writes", () => {
     const filename = cacheFile();
-    const catalog = new OpenAICodexModelCatalog(bundled, filename);
-    expect(catalog.getModels()).toBe(bundled);
+    const catalog = new OpenAICodexModelCatalog(availableBundled, filename);
+    expect(catalog.getModels()).toBe(availableBundled);
     writeFileSync(filename, '\uFEFF' + JSON.stringify({ models: [astra] }));
     const first = catalog.getModels();
     expect(first.find((model) => model.id === "gpt-6-astra")?.contextWindow)
@@ -144,7 +141,7 @@ describe("Codex model discovery", () => {
       {} as OpenAICodexCredentialStore, () => undefined,
       () => ({ useWebSocketContextReuse: false, useNativeCompaction: false }),
       undefined, () => policy.modelCatalogSnapshot().models,
-      undefined, undefined, undefined, undefined, provider
+      undefined, undefined, undefined, provider
     );
     const first = await adapter.prepareCall("openai-codex", "gpt-6-astra");
     expect(first.model.context?.contextWindow).toBe(272_000);

@@ -331,12 +331,4 @@ describe('read_image enhancement', () => {
     expect(missing.content.find(block => block.type === 'text')?.text).toContain('exactly one')
   })
 
-  it('refuses a URL result for a model without declared image input', async () => {
-    const context = await setup()
-
-    const result = await readImage(context, { url: 'https://images.example/pixel' }, 'gpt-5.3-codex-spark')
-
-    expect(result.isError).toBe(true)
-    expect(result.content.find(block => block.type === 'text')?.text).toContain('does not declare image input')
-  })
 })

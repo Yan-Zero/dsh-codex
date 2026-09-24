@@ -7,10 +7,10 @@ import { resolve } from 'node:path'
 const preferences = {
   modifyReadImage: true,
   shareImagegenWithOtherModels: true,
+  imageGenerationModel: 'gpt-image-2' as const,
   useWebSocketContextReuse: false,
   useNativeCompaction: false,
   contextWindow: null,
-  overrideSparkContextWindow: false,
   fastModeDefault: false,
   automaticModelFallback: false,
   proxyMode: 'off' as const,

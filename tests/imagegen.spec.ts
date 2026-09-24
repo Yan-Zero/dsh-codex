@@ -129,10 +129,13 @@ describe('imagegen', () => {
 
     await expect(client.generate('A tiny red pixel', [], signal)).resolves.toEqual(PNG_1X1)
     expect(requestFetch).toHaveBeenCalledOnce()
+    const [, init] = requestFetch.mock.calls[0] as unknown as [string, RequestInit]
+    expect(JSON.parse(String(init.body)).model)
+      .toBe(OpenAICodex.OPENAI_CODEX_IMAGE_MODEL)
   })
 
   it('generates an attachment and optionally publishes the same PNG to the workspace', async () => {
-    const ctx = await setup()
+    const ctx = await setup({ imageGenerationModel: 'gpt-image-2.5-sunburst' })
     const fetchMock = successfulFetch()
     vi.stubGlobal('fetch', fetchMock)
 
@@ -160,7 +163,7 @@ describe('imagegen', () => {
     expect(JSON.parse(init.body as string)).toEqual({
       prompt: 'A tiny red pixel',
       background: 'auto',
-      model: 'gpt-image-2',
+      model: 'gpt-image-2.5-sunburst',
       quality: 'auto',
       size: 'auto',
     })
@@ -231,18 +234,6 @@ describe('imagegen', () => {
 
     expect(result.isError).toBe(true)
     expect(result.content.find(block => block.type === 'text')?.text).toContain('provide only one')
-    expect(fetchMock).not.toHaveBeenCalled()
-  })
-
-  it('refuses a text-only caller before generated image bytes enter its history', async () => {
-    const ctx = await setup()
-    const fetchMock = successfulFetch()
-    vi.stubGlobal('fetch', fetchMock)
-
-    const result = await generate(ctx, { prompt: 'A tiny pixel' }, [], 'gpt-5.3-codex-spark')
-
-    expect(result.isError).toBe(true)
-    expect(result.content.find(block => block.type === 'text')?.text).toContain('does not declare image input')
     expect(fetchMock).not.toHaveBeenCalled()
   })
 

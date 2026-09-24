@@ -113,7 +113,7 @@ dsh plugin --profile web exec dsh-codex repair-session --apply
 |---|---|
 | `expected a canonical session[.vN]...` | 参数不是准确的规范 generation 文件名。 |
 | `filename and Session header versions disagree` | 文件名与内部物理格式版本不一致。 |
-| `source ... is not older than current` | 选择了 v3 文件；本命令只修复历史 v0-v2 generation。 |
+| `source ... is not older than repair target` | 选择了 v3 文件；本命令只修复历史 v0-v2 generation。 |
 | `contains no retired Codex search events` | 该 Session 不需要这项定向修复。 |
 | `multiple vN generations` | 最新历史版本同时存在原始与 Zstandard 文件；调查后显式传入希望处理的文件。 |
 | `unexpected field`、`lacks` 或 `is invalid` | 旧 payload 不是已知的准确 dsh-codex 请求格式，因此保持不动。 |
@@ -132,7 +132,7 @@ dsh plugin --profile web exec dsh-codex repair-session --apply
 ## 限制
 
 - 命令只修复 `web/openai-codex-search-llm-request`，不会绕过文件损坏或其他未知 required event。
-- 不重写已经属于当前格式的 v3 文件。
+- 不重写 v3 文件。
 - 执行期间会物化所选压缩字节、解码后的 JSONL 与最终逻辑产物；超大 Session 需要相应的可用内存。
-- 使用作为 0.3.0 依赖基线的 DSH 0.1.5-rc.2 格式目录。不要用该版本为其他当前 Session 格式制造目标文件。
+- 配合 DSH 0.1.7-rc.2 时，修复命令仍有意发布 v3。需要收集子 Session 事实、理解父子关系的 v3→v4 迁移属于 Harness 持久化层；这个独立修复命令不会伪造这些事实。
 - dsh-codex 0.3.0 不再写入新的旧事件；该命令只是为早期版本提供的临时兼容工具。

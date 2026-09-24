@@ -16,6 +16,7 @@ function fakeService(): OpenAICodexService {
   let imagePreferences = {
     modifyReadImage: true,
     shareImagegenWithOtherModels: true,
+    imageGenerationModel: "gpt-image-2" as const,
   };
   let responsePreferences = {
     useWebSocketContextReuse: false,
@@ -23,7 +24,6 @@ function fakeService(): OpenAICodexService {
   };
   let contextWindowPreferences = {
     contextWindow: null,
-    overrideSparkContextWindow: false,
   };
   let proxyPreferences = {
     proxyMode: "off" as const,
@@ -65,11 +65,6 @@ function fakeService(): OpenAICodexService {
     modelCatalogSettings: vi.fn(() => ({
       models: ["gpt-5.6-luna"],
       availableModels: [
-        {
-          id: "gpt-5.3-codex-spark",
-          name: "GPT-5.3 Codex Spark",
-          contextWindow: 128_000,
-        },
         { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", contextWindow: 272_000 },
       ],
     })),
@@ -161,7 +156,6 @@ describe("UI-neutral command with optional dsh-tui completion", () => {
       "imagegen-other-models",
       "websocket-context",
       "native-compaction",
-      "spark-context-window",
     ]);
     expect(
       commandTree
@@ -185,16 +179,8 @@ describe("UI-neutral command with optional dsh-tui completion", () => {
       kind: "success",
       text: expect.stringContaining("read-image: on"),
     });
-    expect(config.text).toContain("spark-context-window: off");
     expect(config.text).toContain("backend-fallback: off");
-    expect(config.text).toContain(
-      [
-        "model: GPT-5.3 Codex Spark",
-        "  id: gpt-5.3-codex-spark",
-        "  default-window: 128K tokens",
-        "  enabled: off",
-      ].join("\n")
-    );
+    expect(config.text).toContain("imagegen-model: gpt-image-2");
     expect(config.text).toContain(
       [
         "model: GPT-5.6 Luna",
@@ -211,15 +197,6 @@ describe("UI-neutral command with optional dsh-tui completion", () => {
     });
     expect(service.updateResponsePreferences).toHaveBeenCalledWith({
       useNativeCompaction: true,
-    });
-    await expect(
-      definition.handler({ rawInput: " set spark-context-window on" } as never)
-    ).resolves.toMatchObject({
-      kind: "success",
-      text: expect.stringContaining("spark-context-window: on"),
-    });
-    expect(service.updateContextWindowPreferences).toHaveBeenCalledWith({
-      overrideSparkContextWindow: true,
     });
     await expect(
       definition.handler({ rawInput: " set backend-fallback on" } as never)

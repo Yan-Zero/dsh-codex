@@ -7,6 +7,7 @@ import type { OpenAICodexCredentialStore } from "../src/store.ts";
 import { OPENAI_CODEX_PROVIDER } from "../src/store.ts";
 import {
   createOpenAICodexAdapter,
+  createOpenAICodexModelProvider,
   openAICodexModelCatalog,
   OPENAI_CODEX_HIGH_DETAIL_MAX_PATCHES,
   OPENAI_CODEX_HIGH_DETAIL_MAX_DIMENSION,
@@ -16,28 +17,21 @@ import {
   OPENAI_CODEX_REQUEST_IMAGE_PIXEL_BUDGET,
   OPENAI_CODEX_RETRY_POLICY,
   openAICodexRequestImagePixelBudget,
+  withCurrentOpenAICodexModels,
 } from "../src/adapter.ts";
 import { Config } from "../src/index.ts";
 
 describe("OpenAI Codex adapter policy", () => {
   it("validates optional catalog and context-window configuration", () => {
-    expect(Config({}).models).toBeUndefined();
-    expect(Config({}).contextWindow).toBeUndefined();
-    expect(Config({}).overrideSparkContextWindow).toBe(false);
-    expect(Config({}).automaticModelFallback).toBe(false);
-    expect(Config({}).proxyMode).toBe("off");
-    expect(Config({}).proxyUrl).toBe("");
-    expect(
-      Config({
-        models: [],
-        contextWindow: 512_000,
-        overrideSparkContextWindow: true,
-      })
-    ).toMatchObject({
-      models: [],
-      contextWindow: 512_000,
-      overrideSparkContextWindow: true,
-    });
+    const defaults = Config({});
+    expect(defaults.models.get()).toBeUndefined();
+    expect(defaults.contextWindow.get()).toBeUndefined();
+    expect(defaults.automaticModelFallback.get()).toBe(false);
+    expect(defaults.proxyMode.get()).toBe("off");
+    expect(defaults.proxyUrl.get()).toBe("");
+    const configured = Config({ models: [], contextWindow: 512_000 });
+    expect(configured.models.get()).toEqual([]);
+    expect(configured.contextWindow.get()).toBe(512_000);
     expect(() => Config({ contextWindow: 0 })).toThrow();
     expect(() => Config({ proxyMode: "sometimes" as never })).toThrow();
   });
@@ -129,14 +123,16 @@ describe("OpenAI Codex adapter policy", () => {
     const ref = { width: 8192, height: 512 } as ImageAttachmentRef;
 
     await resolved?.readImageRequest(ref, {
-      maxPixels: OPENAI_CODEX_REQUEST_IMAGE_PIXEL_BUDGET,
+      width: 6400,
+      height: 400,
       maxBytes: OPENAI_CODEX_PROMPT_IMAGE_INPUT_GUARD_BYTES,
     });
 
     expect(readImageRequest).toHaveBeenCalledWith(
       ref,
       {
-        maxPixels: 2048 * 128,
+        width: 2048,
+        height: 128,
         maxBytes: OPENAI_CODEX_PROMPT_IMAGE_INPUT_GUARD_BYTES,
       },
       undefined
@@ -184,10 +180,10 @@ describe("OpenAI Codex adapter policy", () => {
     ]);
 
     await expect(
-      adapter.resolveModel(OPENAI_CODEX_PROVIDER, "gpt-5.4")
+      adapter.resolveModel(OPENAI_CODEX_PROVIDER, "gpt-5.5")
     ).resolves.toMatchObject({
       provider: OPENAI_CODEX_PROVIDER,
-      id: "gpt-5.4",
+      id: "gpt-5.5",
     });
   });
 
@@ -224,15 +220,13 @@ describe("OpenAI Codex adapter policy", () => {
 
   it("rotates snapshot-consistent profiles when the client-side capacity changes", async () => {
     let contextWindow: number | null = null;
-    let overrideSparkContextWindow = false;
     const adapter = createOpenAICodexAdapter(
       {} as OpenAICodexCredentialStore,
       () => undefined,
       () => ({ useWebSocketContextReuse: false, useNativeCompaction: false }),
       undefined,
       undefined,
-      () => contextWindow,
-      () => overrideSparkContextWindow
+      () => contextWindow
     );
 
     const profileLoader = (
@@ -282,11 +276,6 @@ describe("OpenAI Codex adapter policy", () => {
       context: { contextWindow: 512_000 },
     });
     await expect(
-      adapter.resolveModel(OPENAI_CODEX_PROVIDER, "gpt-5.3-codex-spark")
-    ).resolves.toMatchObject({
-      context: { contextWindow: 128_000 },
-    });
-    await expect(
       adapter.resolveModel(
         OPENAI_CODEX_PROVIDER,
         OPENAI_CODEX_LUNA_RESERVE_MODEL
@@ -294,36 +283,78 @@ describe("OpenAI Codex adapter policy", () => {
     ).resolves.toMatchObject({
       context: { contextWindow: 272_000 },
     });
-
-    overrideSparkContextWindow = true;
-    const thirdProfiles = profileLoader();
-    expect(thirdProfiles).not.toBe(secondProfiles);
-    await expect(
-      adapter.resolveModel(OPENAI_CODEX_PROVIDER, "gpt-5.3-codex-spark")
-    ).resolves.toMatchObject({
-      context: { contextWindow: 512_000 },
-    });
   });
 
   it("projects provider context capacities into the settings catalog", () => {
     const catalog = openAICodexModelCatalog();
     expect(catalog.map((model) => model.id)).toEqual([
       "gpt-6-astra",
+      "gpt-6-sol",
+      "gpt-6-luna",
       "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",
-      "gpt-5.3-codex-spark",
       "gpt-5.5",
-      "gpt-5.4",
-      "gpt-5.4-mini",
     ]);
     expect(catalog.find((model) => model.id === "gpt-6-astra")).toMatchObject({
       name: "GPT-6 Astra",
       contextWindow: 272_000,
     });
-    expect(catalog.find((model) => model.id === "gpt-5.6-sol")).toMatchObject({
+    expect(catalog.find((model) => model.id === "gpt-6-sol")).toMatchObject({
+      name: "GPT-6 Sol",
       contextWindow: 272_000,
     });
+    expect(catalog.find((model) => model.id === "gpt-6-luna")).toMatchObject({
+      name: "GPT-6 Luna",
+      contextWindow: 272_000,
+    });
+    const models = createOpenAICodexModelProvider().getModels();
+    expect(models.find((model) => model.id === "gpt-6-sol")).toMatchObject({
+      maxTokens: 128_000,
+      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+      thinkingLevelMap: { off: "none", low: "low", max: "max" },
+    });
+    expect(models.find((model) => model.id === "gpt-6-luna")).toMatchObject({
+      maxTokens: 128_000,
+      cost: { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
+      thinkingLevelMap: { off: "none", low: "low", max: "max" },
+    });
+  });
+
+  it("uses the current generation as a fallback when legacy templates disappear", () => {
+    const current = createOpenAICodexModelProvider();
+    const astra = current.getModels().find((model) => model.id === "gpt-6-astra");
+    expect(astra).toBeDefined();
+    const legacy = astra === undefined ? [] : [astra];
+    const provider = withCurrentOpenAICodexModels({
+      ...current,
+      getModels: () => legacy,
+    });
+    const supplemented = provider.getModels();
+
+    expect(supplemented.map((model) => model.id)).toEqual([
+      "gpt-6-astra",
+      "gpt-6-sol",
+      "gpt-6-luna",
+    ]);
+    expect(provider.getModels()).toBe(supplemented);
+    expect(withCurrentOpenAICodexModels({ ...current, getModels: () => [] }).getModels())
+      .toEqual([]);
+  });
+
+  it("keeps authoritative catalog entries when pi-ai gains the current models", () => {
+    const current = createOpenAICodexModelProvider();
+    const models = current.getModels().map((model) =>
+      model.id === "gpt-6-sol" ? { ...model, name: "Upstream GPT-6 Sol" } : model
+    );
+    const supplemented = withCurrentOpenAICodexModels({
+      ...current,
+      getModels: () => models,
+    }).getModels();
+
+    expect(supplemented.filter((model) => model.id === "gpt-6-sol")).toHaveLength(1);
+    expect(supplemented.find((model) => model.id === "gpt-6-sol")?.name)
+      .toBe("Upstream GPT-6 Sol");
   });
 
   it("advertises the full provider catalog when no model list is configured", async () => {
@@ -337,7 +368,8 @@ describe("OpenAI Codex adapter policy", () => {
     expect(models.map((model) => model.id)).toEqual(
       expect.arrayContaining([
         "gpt-6-astra",
-        "gpt-5.4",
+        "gpt-6-luna",
+        "gpt-6-sol",
         "gpt-5.6-luna",
         "gpt-5.6-sol",
         "gpt-5.6-terra",

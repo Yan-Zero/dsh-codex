@@ -19,6 +19,7 @@ function directoryState(model: string, provider = 'openai-codex'): ModelDirector
     routable: true,
     groups: [],
     failures: [],
+    pending: null,
     status: 'ready',
     error: null,
   }

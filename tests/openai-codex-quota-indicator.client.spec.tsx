@@ -29,6 +29,7 @@ function directoryState(model: string, provider = 'openai-codex'): ModelDirector
     routable: true,
     groups: [],
     failures: [],
+    pending: null,
     status: 'ready',
     error: null,
   }
@@ -45,31 +46,6 @@ function usage(resetAt?: number, remainingPercent = 72.5): unknown {
         ...resetAt === undefined ? {} : { resetAt },
       }],
     }],
-  }
-}
-
-function usageWithSparkBucket(resetAt?: number): unknown {
-  return {
-    rateLimits: [
-      {
-        id: 'codex',
-        name: 'Codex',
-        windows: [{
-          remainingPercent: 72.5,
-          windowSeconds: 7 * 24 * 60 * 60,
-          ...resetAt === undefined ? {} : { resetAt },
-        }],
-      },
-      {
-        id: 'codex_bengalfox',
-        name: 'GPT-5.3-Codex-Spark',
-        windows: [{
-          remainingPercent: 18.5,
-          windowSeconds: 7 * 24 * 60 * 60,
-          ...resetAt === undefined ? {} : { resetAt },
-        }],
-      },
-    ],
   }
 }
 
@@ -147,45 +123,6 @@ describe('OpenAI Codex Composer weekly quota', () => {
     expect(focusTooltip.textContent).toContain(localReset)
     fireEvent.blur(indicator)
     await waitFor(() => { expect(screen.queryByRole('tooltip')).toBeNull() })
-  })
-
-  it('selects Spark quota for the exact model and follows directory model changes', async () => {
-    const fetchMock = vi.fn(async () => json({ status: 'signed-in', usage: usageWithSparkBucket() }))
-    vi.stubGlobal('fetch', fetchMock)
-    const directory = directoryStore(directoryState('gpt-5.3-codex-spark'))
-
-    render(<OpenAICodexQuotaIndicator directory={directory} t={t} />)
-    let indicator = await screen.findByRole('status')
-    expect(indicator.getAttribute('aria-label')).toContain('18.5%')
-    expect(indicator.querySelector<HTMLElement>('[data-openai-codex-quota-progress="weekly"]')?.style.width).toBe('18.5%')
-
-    directory.set(directoryState('gpt-5-codex'))
-    await waitFor(() => {
-      indicator = screen.getByRole('status')
-      expect(indicator.getAttribute('aria-label')).toContain('72.5%')
-    })
-    expect(indicator.querySelector<HTMLElement>('[data-openai-codex-quota-progress="weekly"]')?.style.width).toBe('72.5%')
-  })
-
-  it('hides the exact Spark model when its bucket is missing without falling back', async () => {
-    const fetchMock = vi.fn(async () => json({ status: 'signed-in', usage: usage() }))
-    vi.stubGlobal('fetch', fetchMock)
-    const directory = directoryStore(directoryState('gpt-5.3-codex-spark'))
-
-    render(<OpenAICodexQuotaIndicator directory={directory} t={t} />)
-    await waitFor(() => { expect(fetchMock).toHaveBeenCalledOnce() })
-    await waitFor(() => { expect(screen.queryByRole('status')).toBeNull() })
-  })
-
-  it('does not treat a model name containing the Spark id as an exact match', async () => {
-    const fetchMock = vi.fn(async () => json({ status: 'signed-in', usage: usageWithSparkBucket() }))
-    vi.stubGlobal('fetch', fetchMock)
-    const directory = directoryStore(directoryState('gpt-5.3-codex-spark-preview'))
-
-    render(<OpenAICodexQuotaIndicator directory={directory} t={t} />)
-    const indicator = await screen.findByRole('status')
-    expect(indicator.getAttribute('aria-label')).toContain('72.5%')
-    expect(indicator.querySelector<HTMLElement>('[data-openai-codex-quota-progress="weekly"]')?.style.width).toBe('72.5%')
   })
 
   it.each([

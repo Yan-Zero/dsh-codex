@@ -3,6 +3,15 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Api, Model, ThinkingLevelMap } from "@earendil-works/pi-ai";
 
+/** Keep retired GPT generations out while allowing later and non-versioned routes. */
+export function isSupportedOpenAICodexModel(id: string): boolean {
+  const version = /^gpt-(\d+)(?:\.(\d+))?(?:-|$)/u.exec(id);
+  if (version === null) return true;
+  const major = Number(version[1]);
+  const minor = Number(version[2] ?? 0);
+  return major > 5 || (major === 5 && minor >= 5);
+}
+
 /** Only model metadata is shared with Codex; its credentials are never read. */
 export function openAICodexModelsCachePath(): string {
   return process.env["DSH_CODEX_MODELS_CACHE"]?.trim() ||
@@ -23,17 +32,20 @@ export function mergeOpenAICodexModels(
   bundled: readonly Model<Api>[],
   document: unknown
 ): readonly Model<Api>[] {
+  const filtered = bundled.filter((model) => isSupportedOpenAICodexModel(model.id));
+  const available = filtered.length === bundled.length ? bundled : filtered;
   const entries = record(document)?.["models"];
-  const transport = bundled[0];
-  if (!Array.isArray(entries) || transport === undefined) return bundled;
-  const known = new Map(bundled.map(model => [model.id, model]));
+  const transport = available[0];
+  if (!Array.isArray(entries) || transport === undefined) return available;
+  const known = new Map(available.map(model => [model.id, model]));
   const discovered = new Map<string, Model<Api>>();
   for (const value of entries) {
     const entry = record(value);
     const id = entry?.["slug"];
     const contextWindow = entry?.["context_window"];
     if (!entry || entry["visibility"] !== "list" ||
-      typeof id !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(id) ||
+      typeof id !== "string" || !isSupportedOpenAICodexModel(id) ||
+      !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(id) ||
       !positiveInteger(contextWindow) || discovered.has(id)) continue;
     const existing = known.get(id);
     const modalities = entry["input_modalities"];
@@ -73,10 +85,10 @@ export function mergeOpenAICodexModels(
       ...(efforts === undefined ? {} : { thinkingLevelMap }),
     });
   }
-  if (discovered.size === 0) return bundled;
-  const bundledIds = new Set(bundled.map((model) => model.id));
+  if (discovered.size === 0) return available;
+  const bundledIds = new Set(available.map((model) => model.id));
   return [
-    ...bundled.map((model) => discovered.get(model.id) ?? model),
+    ...available.map((model) => discovered.get(model.id) ?? model),
     ...[...discovered.values()].filter((model) => !bundledIds.has(model.id)),
   ];
 }
@@ -85,12 +97,15 @@ export function mergeOpenAICodexModels(
 export class OpenAICodexModelCatalog {
   private signature: string | undefined;
   private current: readonly Model<Api>[];
+  private readonly bundled: readonly Model<Api>[];
 
   constructor(
-    private readonly bundled: readonly Model<Api>[],
+    bundled: readonly Model<Api>[],
     private readonly filename = openAICodexModelsCachePath()
   ) {
-    this.current = bundled;
+    const available = bundled.filter((model) => isSupportedOpenAICodexModel(model.id));
+    this.bundled = available.length === bundled.length ? bundled : available;
+    this.current = this.bundled;
   }
 
   getModels(): readonly Model<Api>[] {

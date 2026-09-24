@@ -6,7 +6,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { constants, zstdCompress, zstdDecompress } from 'node:zlib'
 import { promisify } from 'node:util'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
-import { sessionFormatCatalog } from '@deepseek-ai/dsh-session-format-catalog'
+import { historicalSessionFormatCatalog as repairFormatCatalog } from '@deepseek-ai/dsh-session-format-catalog'
 import { OPENAI_CODEX_SEARCH_MODEL_REQUEST_EVENT } from './search-event.ts'
 import { OPENAI_CODEX_SEARCH_URL } from './search.ts'
 
@@ -18,7 +18,7 @@ const compress = promisify(zstdCompress)
 const decompress = promisify(zstdDecompress)
 
 type JsonRecord = Record<string, unknown>
-type Artifact = ReturnType<ReturnType<typeof sessionFormatCatalog.createRestore>['finish']>
+type Artifact = ReturnType<ReturnType<typeof repairFormatCatalog.createRestore>['finish']>
 
 export interface SessionRepairResult {
   readonly source: string
@@ -193,7 +193,7 @@ function migrate(lines: readonly string[], sourceVersion: number): { artifact: A
   if (lines.length < 2) throw new Error('repair-session: Session generation has no event rows')
   const header = parseLine(lines[0]!, 'Session header')
   if (header.version !== sourceVersion) throw new Error('repair-session: filename and Session header versions disagree')
-  const restore = sessionFormatCatalog.createRestore(header, {
+  const restore = repairFormatCatalog.createRestore(header, {
     recovery: 'strict', validation: 'transformed',
   })
   const token = `${PLACEHOLDER_PREFIX}${randomUUID()}:`
@@ -210,7 +210,7 @@ function migrate(lines: readonly string[], sourceVersion: number): { artifact: A
   }
   if (originals.size === 0) throw new SessionRepairNotNeededError('repair-session: generation contains no retired Codex search events')
   const migrated = restore.finish()
-  if (migrated.header.version !== sessionFormatCatalog.currentVersion || sourceVersion >= migrated.header.version) {
+  if (migrated.header.version !== repairFormatCatalog.currentVersion || sourceVersion >= migrated.header.version) {
     throw new Error('repair-session: source is not an older supported Session generation')
   }
   const recovered = new Set<string>()
@@ -230,11 +230,11 @@ function migrate(lines: readonly string[], sourceVersion: number): { artifact: A
 }
 
 function validateCurrent(artifact: Artifact): void {
-  const restore = sessionFormatCatalog.createRestore(
-    sessionFormatCatalog.encodeCurrentHeader(artifact.header, artifact.inheritedEventCount),
+  const restore = repairFormatCatalog.createRestore(
+    repairFormatCatalog.encodeCurrentHeader(artifact.header, artifact.inheritedEventCount),
     { recovery: 'strict', validation: 'current' },
   )
-  for (const event of artifact.events) restore.decodeRow(sessionFormatCatalog.encodeCurrentEvent(event))
+  for (const event of artifact.events) restore.decodeRow(repairFormatCatalog.encodeCurrentEvent(event))
   restore.finish()
 }
 
@@ -242,7 +242,7 @@ async function validatePhysical(path: string, compression: Generation['compressi
   const decoded = await plaintext(await readFile(path), compression)
   if (!decoded.endsWith('\n')) throw new Error('repair-session: staged generation ends inside a JSONL row')
   const lines = decoded.slice(0, -1).split(/\r?\n/u)
-  const restore = sessionFormatCatalog.createRestore(parseLine(lines[0]!, 'staged Session header'), {
+  const restore = repairFormatCatalog.createRestore(parseLine(lines[0]!, 'staged Session header'), {
     recovery: 'strict', validation: 'current',
   })
   for (let index = 1; index < lines.length; index += 1) {
@@ -298,12 +298,12 @@ async function writeArtifact(
   let handle: Awaited<ReturnType<typeof open>> | undefined
   try {
     handle = await open(temporary, 'wx', 0o600)
-    const header = `${JSON.stringify(sessionFormatCatalog.encodeCurrentHeader(artifact.header, artifact.inheritedEventCount))}\n`
+    const header = `${JSON.stringify(repairFormatCatalog.encodeCurrentHeader(artifact.header, artifact.inheritedEventCount))}\n`
     await writeData(handle, header, compression)
     let chunk = ''
     let chunkBytes = 0
     for (const event of artifact.events) {
-      const line = `${JSON.stringify(sessionFormatCatalog.encodeCurrentEvent(event))}\n`
+      const line = `${JSON.stringify(repairFormatCatalog.encodeCurrentEvent(event))}\n`
       const lineBytes = Buffer.byteLength(line)
       if (chunk.length > 0 && chunkBytes + lineBytes > FRAME_CHUNK_BYTES) {
         await writeData(handle, chunk, compression)
@@ -341,15 +341,15 @@ export async function repairOpenAICodexSession(
 ): Promise<SessionRepairResult> {
   const source = resolve(sourcePath)
   const selected = generation(basename(source))
-  if (selected.version >= sessionFormatCatalog.currentVersion) {
-    throw new Error(`repair-session: source v${selected.version} is not older than current v${sessionFormatCatalog.currentVersion}`)
+  if (selected.version >= repairFormatCatalog.currentVersion) {
+    throw new Error(`repair-session: source v${selected.version} is not older than repair target v${repairFormatCatalog.currentVersion}`)
   }
   const sourceInfo = await lstat(source)
   if (!sourceInfo.isFile() || sourceInfo.nlink !== 1) throw new Error('repair-session: source must be a single-link regular file')
   if (process.platform !== 'win32' && (sourceInfo.mode & 0o077) !== 0) throw new Error('repair-session: source must be owner-only (chmod 600)')
   const before = identity(await stat(source))
-  const target = join(dirname(source), `session.v${sessionFormatCatalog.currentVersion}.jsonl${selected.compression === 'zstd' ? '.zstd' : ''}`)
-  const alternate = join(dirname(source), `session.v${sessionFormatCatalog.currentVersion}.jsonl${selected.compression === 'zstd' ? '' : '.zstd'}`)
+  const target = join(dirname(source), `session.v${repairFormatCatalog.currentVersion}.jsonl${selected.compression === 'zstd' ? '.zstd' : ''}`)
+  const alternate = join(dirname(source), `session.v${repairFormatCatalog.currentVersion}.jsonl${selected.compression === 'zstd' ? '' : '.zstd'}`)
   if (await exists(target) || await exists(alternate)) throw new Error('repair-session: a current Session generation already exists')
   const sourceBytes = await readFile(source)
   const decoded = await plaintext(sourceBytes, selected.compression)
@@ -367,7 +367,7 @@ export async function repairOpenAICodexSession(
   }
   return {
     source, target, sourceVersion: selected.version,
-    targetVersion: sessionFormatCatalog.currentVersion,
+    targetVersion: repairFormatCatalog.currentVersion,
     sessionId: String(artifact.header.id), repairedEvents: repaired, applied: apply,
   }
 }
@@ -413,7 +413,7 @@ async function discoverGenerations(root: string): Promise<DiscoveryResult> {
   const failures: SessionRepairFailure[] = []
   let currentSessions = 0
   for (const [directory, values] of [...groups].sort(([left], [right]) => left.localeCompare(right))) {
-    if (values.some(value => value.version >= sessionFormatCatalog.currentVersion)) {
+    if (values.some(value => value.version >= repairFormatCatalog.currentVersion)) {
       currentSessions += 1
       continue
     }
