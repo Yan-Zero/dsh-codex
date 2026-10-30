@@ -41,6 +41,11 @@ export interface ModelCatalogPreferences {
   models: string[];
 }
 
+/** Composer quota display preference. */
+export interface ComposerQuotaPreferences {
+  composerQuota: "five-hour" | "weekly" | "both";
+}
+
 /** Fast Mode behavior applied to every Codex session. */
 export interface FastModePreferences {
   /** Force the priority service tier on all sessions without the per-session toggle. */
@@ -65,6 +70,7 @@ interface OpenAICodexPreferences
     ModelCatalogPreferences,
     ContextWindowPreferences,
     FastModePreferences,
+    ComposerQuotaPreferences,
     ModelFallbackPreferences,
     ProxyPreferences {}
 
@@ -123,6 +129,7 @@ export class ImageToolPolicy {
       ...DEFAULT_RESPONSE_API_PREFERENCES,
       ...DEFAULT_CONTEXT_WINDOW_PREFERENCES,
       ...DEFAULT_FAST_MODE_PREFERENCES,
+      composerQuota: "weekly",
       ...DEFAULT_MODEL_FALLBACK_PREFERENCES,
       ...DEFAULT_PROXY_PREFERENCES,
       ...base,
@@ -226,6 +233,16 @@ export class ImageToolPolicy {
   ): Promise<FastModePreferences> {
     await this.commit(patch);
     return this.fastModeSnapshot();
+  }
+
+  /** Read and persist the composer quota display choice. */
+  composerQuotaSnapshot(): ComposerQuotaPreferences {
+    return { composerQuota: this.current.composerQuota };
+  }
+
+  async updateComposerQuota(patch: ComposerQuotaPreferences): Promise<ComposerQuotaPreferences> {
+    await this.commit(patch);
+    return this.composerQuotaSnapshot();
   }
 
   /** Return whether backend-authorized automatic model recovery is enabled. */

@@ -1,10 +1,11 @@
-/** Compact weekly Codex quota indicator for the Composer tool row. */
+/** Configurable Codex quota indicators for the Composer tool row. */
 
 import { useEffect, useId, useSyncExternalStore, useState } from 'react'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { ModelDirectoryState } from '@deepseek-ai/dsh-client-ui-model-selection/client'
 import type { OpenAICodexUsage, OpenAICodexRateLimitWindow } from '../usage.ts'
-import { OPENAI_CODEX_AUTH_STATUS_PATH } from '../auth-paths.ts'
+import { OPENAI_CODEX_AUTH_STATUS_PATH, OPENAI_CODEX_COMPOSER_QUOTA_PATH } from '../auth-paths.ts'
+import type { ComposerQuotaPreferences } from '../tool-policy.ts'
 import { formatOpenAICodexResetAt } from './OpenAICodexSettings.tsx'
 import type { OpenAICodexSettingsKey } from './locales.ts'
 
@@ -58,10 +59,40 @@ function usageFromStatus(value: unknown): OpenAICodexUsage | undefined {
   return usage as unknown as OpenAICodexUsage
 }
 
-function weeklyQuotaOf(usage: OpenAICodexUsage): OpenAICodexRateLimitWindow | undefined {
-  return usage.rateLimits
-    .find(limit => limit.id === 'codex')
-    ?.windows.find(window => window.windowSeconds === WEEK_SECONDS)
+function quotaOf(usage: OpenAICodexUsage, seconds: number): OpenAICodexRateLimitWindow | undefined {
+  return usage.rateLimits.find(limit => limit.id === 'codex')?.windows.find(window => window.windowSeconds === seconds)
+}
+
+// All mounted eligible composers share one request and timer.
+const usageListeners = new Set<(state: UsageRequestState) => void>()
+let sharedUsage: UsageRequestState = { status: 'loading' }
+let stopPolling: (() => void) | undefined
+function subscribeUsage(listener: (state: UsageRequestState) => void): () => void {
+  usageListeners.add(listener)
+  if (stopPolling === undefined) {
+    const controller = new AbortController()
+    let inFlight = false
+    const refresh = async () => {
+      if (inFlight) return
+      inFlight = true
+      try {
+        const response = await fetch(OPENAI_CODEX_AUTH_STATUS_PATH, { method: 'GET', credentials: 'same-origin', headers: { accept: 'application/json' }, signal: controller.signal })
+        const value: unknown = await response.json().catch(() => undefined)
+        const usage = response.ok ? usageFromStatus(value) : undefined
+        if (!controller.signal.aborted) sharedUsage = usage === undefined ? { status: 'hidden' } : { status: 'ready', usage }
+      } catch {
+        if (!controller.signal.aborted) sharedUsage = { status: 'hidden' }
+      } finally {
+        inFlight = false
+        if (!controller.signal.aborted) for (const notify of usageListeners) notify(sharedUsage)
+      }
+    }
+    void refresh()
+    const timer = window.setInterval(() => { void refresh() }, USAGE_POLL_INTERVAL_MS)
+    stopPolling = () => { window.clearInterval(timer); controller.abort(); sharedUsage = { status: 'loading' }; stopPolling = undefined }
+  }
+  listener(sharedUsage)
+  return () => { usageListeners.delete(listener); if (usageListeners.size === 0) stopPolling?.() }
 }
 
 function isGptModel(state: ModelDirectoryState): boolean {
@@ -115,66 +146,49 @@ export function OpenAICodexQuotaIndicator({ directory, t }: OpenAICodexQuotaIndi
   )
   const eligible = isGptModel(directoryState)
   const [request, setRequest] = useState<UsageRequestState>({ status: 'loading' })
+  const [choice, setChoice] = useState<ComposerQuotaPreferences['composerQuota']>('weekly')
+  useEffect(() => {
+    if (!eligible) return
+    return subscribeUsage(setRequest)
+  }, [eligible])
+  useEffect(() => {
+    if (!eligible) return
+    let disposed = false
+    const refreshChoice = () => {
+      void fetch(OPENAI_CODEX_COMPOSER_QUOTA_PATH, { credentials: 'same-origin' })
+        .then(response => response.ok ? response.json() : undefined)
+        .then((value: unknown) => {
+          if (!disposed && isRecord(value) && (value['composerQuota'] === 'weekly' || value['composerQuota'] === 'five-hour' || value['composerQuota'] === 'both')) setChoice(value['composerQuota'])
+        }).catch(() => undefined)
+    }
+    refreshChoice()
+    window.addEventListener('dsh-codex-composer-quota-changed', refreshChoice)
+    return () => { disposed = true; window.removeEventListener('dsh-codex-composer-quota-changed', refreshChoice) }
+  }, [eligible])
+  if (!eligible || request.status !== 'ready' || request.usage === undefined) return null
+  const windows = [
+    ...(choice === 'five-hour' || choice === 'both' ? [{ kind: 'five-hour' as const, window: quotaOf(request.usage, 5 * 60 * 60) }] : []),
+    ...(choice === 'weekly' || choice === 'both' ? [{ kind: 'weekly' as const, window: quotaOf(request.usage, WEEK_SECONDS) }] : []),
+  ]
+  return <span style={{ display: 'inline-flex', gap: '8px' }}>{windows.map(({ kind, window }) => window === undefined ? null : <QuotaWindow key={kind} kind={kind} quota={window} t={t} />)}</span>
+}
+
+function QuotaWindow({ kind, quota, t }: { kind: 'five-hour' | 'weekly'; quota: OpenAICodexRateLimitWindow; t: Translate }) {
   const [isHovered, setIsHovered] = useState(false)
   const [isFocused, setIsFocused] = useState(false)
   const tooltipId = useId()
-
-  useEffect(() => {
-    if (!eligible) {
-      setRequest({ status: 'hidden' })
-      return
-    }
-
-    const controller = new AbortController()
-    let inFlight = false
-    let disposed = false
-
-    const refresh = async (): Promise<void> => {
-      if (inFlight || disposed) return
-      inFlight = true
-      try {
-        const response = await fetch(OPENAI_CODEX_AUTH_STATUS_PATH, {
-          method: 'GET',
-          credentials: 'same-origin',
-          headers: { accept: 'application/json' },
-          signal: controller.signal,
-        })
-        const value: unknown = await response.json().catch(() => undefined)
-        const usage = response.ok ? usageFromStatus(value) : undefined
-        if (!disposed && !controller.signal.aborted) {
-          setRequest(usage === undefined ? { status: 'hidden' } : { status: 'ready', usage })
-        }
-      } catch {
-        if (!disposed && !controller.signal.aborted) setRequest({ status: 'hidden' })
-      } finally {
-        inFlight = false
-      }
-    }
-
-    setRequest({ status: 'loading' })
-    void refresh()
-    const timer = window.setInterval(() => { void refresh() }, USAGE_POLL_INTERVAL_MS)
-    return () => {
-      disposed = true
-      window.clearInterval(timer)
-      controller.abort()
-    }
-  }, [eligible])
-
-  if (!eligible || request.status !== 'ready' || request.usage === undefined) return null
-  const weekly = weeklyQuotaOf(request.usage)
-  if (weekly === undefined) return null
-
-  const percent = formatPercent(weekly.remainingPercent)
-  const fullResetTime = formatOpenAICodexResetAt(weekly.resetAt) ?? t('resetUnavailable')
-  const summary = t('composerWeeklyQuotaSummary', { percent, time: fullResetTime })
-  const boundedPercent = boundedQuotaPercent(weekly.remainingPercent)
-  const progressColor = quotaProgressColor(weekly.remainingPercent)
+  const percent = formatPercent(quota.remainingPercent)
+  const fullResetTime = formatOpenAICodexResetAt(quota.resetAt)
+  const summary = fullResetTime === undefined
+    ? t(kind === 'weekly' ? 'composerWeeklyQuotaNoReset' : 'composerFiveHourQuotaNoReset', { percent })
+    : t(kind === 'weekly' ? 'composerWeeklyQuotaSummary' : 'composerFiveHourQuotaSummary', { percent, time: fullResetTime })
+  const boundedPercent = boundedQuotaPercent(quota.remainingPercent)
+  const progressColor = quotaProgressColor(quota.remainingPercent)
   const tooltipVisible = isHovered || isFocused
   return (
     <span
       role="status"
-      data-openai-codex-quota="weekly"
+      data-openai-codex-quota={kind}
       aria-label={summary}
       aria-describedby={tooltipVisible ? tooltipId : undefined}
       tabIndex={0}
@@ -184,16 +198,17 @@ export function OpenAICodexQuotaIndicator({ directory, t }: OpenAICodexQuotaIndi
       onBlur={() => { setIsFocused(false) }}
       style={{
         display: 'inline-flex',
-        width: `${QUOTA_PROGRESS_WIDTH_PX}px`,
+        gap: '4px',
         height: '28px',
         position: 'relative',
         alignItems: 'center',
         justifyContent: 'center',
       }}
     >
+      <span aria-hidden="true" style={{ fontSize: '11px', whiteSpace: 'nowrap' }}>{t(kind === 'weekly' ? 'composerQuotaWeekly' : 'composerQuotaFiveHour')}</span>
       <span
         aria-hidden="true"
-        data-openai-codex-quota-track="weekly"
+        data-openai-codex-quota-track={kind}
         style={{
           display: 'block',
           width: `${QUOTA_PROGRESS_WIDTH_PX}px`,
@@ -205,7 +220,7 @@ export function OpenAICodexQuotaIndicator({ directory, t }: OpenAICodexQuotaIndi
       >
         <span
           aria-hidden="true"
-          data-openai-codex-quota-progress="weekly"
+          data-openai-codex-quota-progress={kind}
           data-openai-codex-quota-color={progressColor.name}
           style={{
             display: 'block',
@@ -220,7 +235,7 @@ export function OpenAICodexQuotaIndicator({ directory, t }: OpenAICodexQuotaIndi
         <span
           id={tooltipId}
           role="tooltip"
-          data-openai-codex-quota-tooltip="weekly"
+          data-openai-codex-quota-tooltip={kind}
           style={{
             position: 'absolute',
             bottom: 'calc(100% + 6px)',

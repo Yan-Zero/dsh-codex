@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import type { OpenAICodexUsage } from "../usage.ts";
+import { OPENAI_CODEX_COMPOSER_QUOTA_PATH } from "../auth-paths.ts";
+import type { ComposerQuotaPreferences } from "../tool-policy.ts";
 import type {
   ContextWindowPreferences,
   FastModePreferences,
@@ -726,6 +728,9 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   const [contextWindowError, setContextWindowError] = useState<
     string | undefined
   >();
+  const [composerQuota, setComposerQuota] = useState<ComposerQuotaPreferences | undefined>();
+  const [composerQuotaBusy, setComposerQuotaBusy] = useState(false);
+  const [composerQuotaError, setComposerQuotaError] = useState<string | undefined>();
   const [fastMode, setFastMode] = useState<FastModePreferences | undefined>();
   const [fastModeBusy, setFastModeBusy] = useState(false);
   const [fastModeError, setFastModeError] = useState<string | undefined>();
@@ -808,6 +813,12 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
       () => {
         setContextWindowError(t("contextWindowSettingsFailed"));
       }
+    );
+  }, [t]);
+  useEffect(() => {
+    void jsonRequest<ComposerQuotaPreferences>(OPENAI_CODEX_COMPOSER_QUOTA_PATH).then(
+      setComposerQuota,
+      () => setComposerQuotaError(t("composerQuotaSettingsFailed"))
     );
   }, [t]);
   useEffect(() => {
@@ -1019,6 +1030,20 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
       );
     } finally {
       setProxyBusy(false);
+    }
+  };
+
+  const updateComposerQuota = async (choice: ComposerQuotaPreferences["composerQuota"]): Promise<void> => {
+    setComposerQuotaBusy(true);
+    setComposerQuotaError(undefined);
+    try {
+      const saved = await jsonRequest<ComposerQuotaPreferences>(OPENAI_CODEX_COMPOSER_QUOTA_PATH, "POST", { composerQuota: choice });
+      setComposerQuota(saved);
+      window.dispatchEvent(new Event("dsh-codex-composer-quota-changed"));
+    } catch {
+      setComposerQuotaError(t("composerQuotaSettingsFailed"));
+    } finally {
+      setComposerQuotaBusy(false);
     }
   };
 
@@ -1431,6 +1456,17 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
         {responseApiError === undefined ? null : (
           <p style={errorStyle}>{responseApiError}</p>
         )}
+      </div>
+      <div style={cardStyle}>
+        <label htmlFor="codex-composer-quota" style={statusStyle}>{t("composerQuotaSetting")}</label>
+        <select id="codex-composer-quota" disabled={composerQuota === undefined || composerQuotaBusy}
+          value={composerQuota?.composerQuota ?? "weekly"}
+          onChange={event => { void updateComposerQuota(event.target.value as ComposerQuotaPreferences["composerQuota"]); }}>
+          <option value="five-hour">{t("composerQuotaFiveHour")}</option>
+          <option value="weekly">{t("composerQuotaWeekly")}</option>
+          <option value="both">{t("composerQuotaBoth")}</option>
+        </select>
+        {composerQuotaError === undefined ? null : <p style={errorStyle}>{composerQuotaError}</p>}
       </div>
       <div style={cardStyle}>
         <div>

@@ -48,6 +48,7 @@ describe("OpenAI Codex settings model catalog", () => {
       shareImagegenWithOtherModels: true,
       imageGenerationModel: "gpt-image-2",
     };
+    let composerQuota = "weekly";
     let fastModeDefault = false;
     let automaticModelFallback = false;
     let authStatus = "signed-out";
@@ -85,6 +86,12 @@ describe("OpenAI Codex settings model catalog", () => {
             useWebSocketContextReuse: false,
             useNativeCompaction: false,
           });
+        if (path.endsWith("/composer-quota")) {
+          if (init?.method === "POST") {
+            composerQuota = (JSON.parse(String(init.body)) as { composerQuota: string }).composerQuota;
+          }
+          return json({ composerQuota });
+        }
         if (path.endsWith("/fast-mode-default")) {
           if (init?.method === "POST") {
             const patch = JSON.parse(String(init.body)) as Partial<{
@@ -237,6 +244,25 @@ describe("OpenAI Codex settings model catalog", () => {
     expect(JSON.parse(String(proxyPosts[1]?.[1]?.body))).toEqual({
       proxyUrl: "http://127.0.0.1:7890",
     });
+
+    const quotaChanged = vi.fn();
+    window.addEventListener("dsh-codex-composer-quota-changed", quotaChanged);
+    const quotaSelector = await screen.findByRole<HTMLSelectElement>("combobox", { name: en.composerQuotaSetting });
+    expect(quotaSelector.value).toBe("weekly");
+    for (const choice of ["five-hour", "both", "weekly"]) {
+      fireEvent.change(quotaSelector, { target: { value: choice } });
+      await waitFor(() => {
+        expect(composerQuota).toBe(choice);
+        expect(quotaSelector.value).toBe(choice);
+      });
+    }
+    const quotaPosts = fetchMock.mock.calls.filter(([input, init]) =>
+      String(input).endsWith("/composer-quota") && init?.method === "POST");
+    expect(quotaPosts.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([
+      { composerQuota: "five-hour" }, { composerQuota: "both" }, { composerQuota: "weekly" },
+    ]);
+    expect(quotaChanged).toHaveBeenCalledTimes(3);
+    window.removeEventListener("dsh-codex-composer-quota-changed", quotaChanged);
 
     const fastModeToggle = await screen.findByRole<HTMLButtonElement>(
       "switch",

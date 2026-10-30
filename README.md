@@ -16,7 +16,7 @@ Use a ChatGPT subscription in [DeepSeek Harness](https://github.com/deepseek-ai/
 - optional HTTP(S) URL input added to Harness's existing `read_image` tool
 - an `imagegen` tool with a selectable GPT Image backend, workspace or conversation reference images, and automatic workspace output
 - browser image input through dsh's existing paste and drop controls
-- a per-conversation Fast Mode switch and compact weekly quota indicator in the Web composer
+- a per-conversation Fast Mode switch and configurable five-hour and weekly quota indicators in the Web composer
 - optional backend-authorized model recovery, including hidden Luna Reserve routing
 - a three-scope HTTP(S) proxy control for Codex-only or process-wide routing
 
@@ -123,7 +123,7 @@ The Settings page selects `gpt-image-2` (the current Codex default), `gpt-image-
 
 `read_image` stores validated bytes as a dsh attachment before returning the actual image block. Local paths are delegated unchanged to Harness, including its configured filesystem and sandbox behavior. The URL extension bounds redirects and bytes, rejects credentials embedded in URLs, rejects local/private/special network targets, and pins each validated public address across the corresponding HTTP hop.
 
-For an eligible Codex GPT conversation, the Web composer also exposes a session-local Fast Mode switch. Enabling it adds the provider's priority service tier only to that conversation; it does not change saved model settings. A neighboring quota bar shows the applicable weekly limit and provider-declared reset time. The Settings page also has a **Force 1.5× speed by default** switch (off by default) that applies Fast Mode to every conversation without the per-conversation toggle; quota is consumed faster while it is on.
+For an eligible Codex GPT conversation, the Web composer also exposes a session-local Fast Mode switch. Enabling it adds the provider's priority service tier only to that conversation; it does not change saved model settings. The neighboring quota indicator can show the five-hour limit, the weekly limit, or both; choose the display in **Settings → OpenAI Codex**. Each bar shows its remaining quota and provider-declared reset time on hover. The default remains the weekly limit. The Settings page also has a **Force 1.5× speed by default** switch (off by default) that applies Fast Mode to every conversation without the per-conversation toggle; quota is consumed faster while it is on.
 
 ## Search
 

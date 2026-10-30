@@ -1,4 +1,6 @@
-import type { Context } from '@deepseek-ai/cordis'
+import { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-settings'
+import { OPENAI_CODEX_COMPOSER_QUOTA_PATH } from '../src/auth-paths.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -8,7 +10,7 @@ import {
 } from '../src/auth-routes.ts'
 import { FastModeRegistry } from '../src/fast-mode.ts'
 import type { OpenAICodexCredentialStore } from '../src/store.ts'
-import type { ImageToolPolicy } from '../src/tool-policy.ts'
+import { ImageToolPolicy } from '../src/tool-policy.ts'
 
 const store = {} as OpenAICodexCredentialStore
 
@@ -80,6 +82,49 @@ function fastRoute(registry?: FastModeRegistry, policy?: ImageToolPolicy): Captu
 function bodyOf(responseValue: { body?: string }): unknown {
   return JSON.parse(responseValue.body ?? 'null') as unknown
 }
+
+describe('OpenAI Codex composer quota settings route', () => {
+  it('authorizes GET and POST, persists each choice, and rejects invalid writes', async () => {
+    const policy = new ImageToolPolicy()
+    const settings = { configure: () => () => {}, update: vi.fn(async (_namespace: string, _patch: Record<string, unknown>) => {}) }
+    const ctx = new Context()
+    ctx.provide('settings', settings as never)
+    policy.attach(ctx, 'llm-openai-codex', ctx.fiber)
+    try {
+      const route = routes(new FastModeRegistry(), policy).find(candidate => candidate.path === OPENAI_CODEX_COMPOSER_QUOTA_PATH)
+      if (route === undefined) throw new Error('Composer quota route was not registered')
+      const invoke = async (method: string, options: { body?: string; origin?: string; remoteAddress?: string } = {}) => {
+        const res = response()
+        await route.handler(request({ method, url: OPENAI_CODEX_COMPOSER_QUOTA_PATH, contentType: 'application/json', ...options }), res)
+        return res
+      }
+      for (const method of ['GET', 'POST']) {
+        const denied = await invoke(method, { remoteAddress: '192.168.1.8', origin: 'http://192.168.1.20:3081', body: JSON.stringify({ composerQuota: 'both' }) })
+        expect(denied.status).toBe(403)
+      }
+      expect(settings.update).not.toHaveBeenCalled()
+      const initial = await invoke('GET')
+      expect(initial.status).toBe(200)
+      expect(bodyOf(initial)).toEqual({ composerQuota: 'weekly' })
+      for (const composerQuota of ['five-hour', 'weekly', 'both'] as const) {
+        const saved = await invoke('POST', { body: JSON.stringify({ composerQuota }) })
+        expect(saved.status).toBe(200)
+        expect(bodyOf(saved)).toEqual({ composerQuota })
+        expect(settings.update).toHaveBeenLastCalledWith('llm-openai-codex', { composerQuota })
+        expect(bodyOf(await invoke('GET'))).toEqual({ composerQuota })
+      }
+      const writes = settings.update.mock.calls.length
+      for (const body of ['{}', '{', '[]', 'null', JSON.stringify({ composerQuota: 'daily' }), JSON.stringify({ composerQuota: 1 }), JSON.stringify({ composerQuota: 'weekly', extra: true })]) {
+        expect((await invoke('POST', { body })).status).toBe(400)
+      }
+      expect(settings.update).toHaveBeenCalledTimes(writes)
+      expect(bodyOf(await invoke('GET'))).toEqual({ composerQuota: 'both' })
+      expect((await invoke('PUT')).status).toBe(405)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+})
 
 describe('OpenAI Codex Fast Mode routes', () => {
   it('defaults off, isolates sessions, and disables by deletion', async () => {
