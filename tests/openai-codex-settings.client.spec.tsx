@@ -247,15 +247,23 @@ describe("OpenAI Codex settings model catalog", () => {
 
     const quotaChanged = vi.fn();
     window.addEventListener("dsh-codex-composer-quota-changed", quotaChanged);
-    const quotaSelector = await screen.findByRole<HTMLSelectElement>("combobox", { name: en.composerQuotaSetting });
-    expect(quotaSelector.value).toBe("weekly");
-    for (const choice of ["five-hour", "both", "weekly"]) {
-      fireEvent.change(quotaSelector, { target: { value: choice } });
+    const quotaSelector = await screen.findByRole("radiogroup", { name: en.composerQuotaSetting });
+    const choices = [
+      ["five-hour", en.composerQuotaFiveHour],
+      ["both", en.composerQuotaBoth],
+      ["weekly", en.composerQuotaWeekly],
+    ] as const;
+    expect(screen.getByRole("radio", { name: en.composerQuotaWeekly }).getAttribute("aria-checked")).toBe("true");
+    for (const [choice, label] of choices) {
+      const button = screen.getByRole<HTMLButtonElement>("radio", { name: label });
+      await waitFor(() => { expect(button.disabled).toBe(false); });
+      fireEvent.click(button);
       await waitFor(() => {
         expect(composerQuota).toBe(choice);
-        expect(quotaSelector.value).toBe(choice);
+        expect(button.getAttribute("aria-checked")).toBe("true");
       });
     }
+    expect(quotaSelector.querySelectorAll('[role="radio"]')).toHaveLength(3);
     const quotaPosts = fetchMock.mock.calls.filter(([input, init]) =>
       String(input).endsWith("/composer-quota") && init?.method === "POST");
     expect(quotaPosts.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([

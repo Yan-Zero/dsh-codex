@@ -345,6 +345,57 @@ function PreferenceToggle({
   );
 }
 
+function ComposerQuotaControl({ value, disabled, onChange, t }: {
+  value: ComposerQuotaPreferences["composerQuota"];
+  disabled: boolean;
+  onChange(value: ComposerQuotaPreferences["composerQuota"]): void;
+  t: OpenAICodexSettingsInjected["t"];
+}) {
+  const options = [
+    { value: "five-hour", label: "composerQuotaFiveHour" },
+    { value: "weekly", label: "composerQuotaWeekly" },
+    { value: "both", label: "composerQuotaBoth" },
+  ] as const;
+  return (
+    <div
+      style={proxyModeStyle}
+      role="radiogroup"
+      aria-label={t("composerQuotaSetting")}
+      onKeyDown={(event) => {
+        if (disabled || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+        event.preventDefault();
+        const direction = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : -1;
+        const nextIndex = (options.findIndex((option) => option.value === value) + direction + options.length) % options.length;
+        const nextOption = options[nextIndex];
+        if (nextOption === undefined) return;
+        onChange(nextOption.value);
+        event.currentTarget.querySelectorAll("button").item(nextIndex).focus();
+      }}>
+      {options.map((option, index) => {
+        const selected = value === option.value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            tabIndex={selected ? 0 : -1}
+            disabled={disabled}
+            style={{
+              ...proxyModeButtonStyle,
+              opacity: disabled ? 0.55 : 1,
+              ...(index === 0 ? {} : { borderInlineStart: "1px solid var(--dsw-alias-border-l2)" }),
+              ...(selected ? { background: "var(--dsw-alias-button-primary-fill)", color: "var(--dsw-alias-label-primary-foreground)" } : {}),
+            }}
+            onClick={() => { if (!selected) onChange(option.value); }}>
+            {t(option.label)}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function ProxyModeControl({
   value,
   disabled,
@@ -1458,14 +1509,13 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
         )}
       </div>
       <div style={cardStyle}>
-        <label htmlFor="codex-composer-quota" style={statusStyle}>{t("composerQuotaSetting")}</label>
-        <select id="codex-composer-quota" disabled={composerQuota === undefined || composerQuotaBusy}
+        <h3 style={quotaTitleStyle}>{t("composerQuotaSetting")}</h3>
+        <ComposerQuotaControl
           value={composerQuota?.composerQuota ?? "weekly"}
-          onChange={event => { void updateComposerQuota(event.target.value as ComposerQuotaPreferences["composerQuota"]); }}>
-          <option value="five-hour">{t("composerQuotaFiveHour")}</option>
-          <option value="weekly">{t("composerQuotaWeekly")}</option>
-          <option value="both">{t("composerQuotaBoth")}</option>
-        </select>
+          disabled={composerQuota === undefined || composerQuotaBusy}
+          onChange={(choice) => { void updateComposerQuota(choice); }}
+          t={t}
+        />
         {composerQuotaError === undefined ? null : <p style={errorStyle}>{composerQuotaError}</p>}
       </div>
       <div style={cardStyle}>
