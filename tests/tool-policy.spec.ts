@@ -4,7 +4,7 @@ import type {} from "@deepseek-ai/dsh-settings";
 import { ImageToolPolicy } from "../src/tool-policy.ts";
 
 class MemorySettings {
-  private stored: Record<string, unknown> = {};
+  stored: Record<string, unknown> = {};
 
   configure(): () => void {
     return () => {};
@@ -30,6 +30,22 @@ afterEach(async () => {
 });
 
 describe("ImageToolPolicy", () => {
+  it("defaults the composer quota to weekly and persists each choice in settings", async () => {
+    const policy = new ImageToolPolicy();
+    const settings = new MemorySettings();
+    context = new Context();
+    context.provide("settings", settings as never);
+    policy.attach(context, "llm-openai-codex", context.fiber);
+
+    expect(policy.composerQuotaSnapshot()).toEqual({ composerQuota: "weekly" });
+    for (const composerQuota of ["five-hour", "weekly", "both"] as const) {
+      await policy.updateComposerQuota({ composerQuota });
+      expect(policy.composerQuotaSnapshot()).toEqual({ composerQuota });
+      expect(settings.stored["llm-openai-codex"]).toEqual({ composerQuota });
+      expect(new ImageToolPolicy({ composerQuota }).composerQuotaSnapshot()).toEqual({ composerQuota });
+    }
+  });
+
   it("persists independent live toggles through the dsh settings seam", async () => {
     const policy = new ImageToolPolicy();
     context = attach(policy);

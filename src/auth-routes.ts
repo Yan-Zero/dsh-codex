@@ -18,6 +18,7 @@ import {
 } from "./usage.ts";
 import type { OpenAICodexUsage } from "./usage.ts";
 import {
+  OPENAI_CODEX_COMPOSER_QUOTA_PATH,
   OPENAI_CODEX_AUTH_CANCEL_PATH,
   OPENAI_CODEX_AUTH_LOGIN_PATH,
   OPENAI_CODEX_AUTH_LOGOUT_PATH,
@@ -1067,6 +1068,26 @@ export function registerOpenAICodexAuthRoutes(
                       modelCatalogPatch(await readSettingsBody(req))
                     )
                   );
+                } catch (error: unknown) {
+                  return json(res, 400, { error: safeMessage(error) });
+                }
+              },
+            }),
+            ctx.webServer.register({
+              kind: "exact",
+              path: OPENAI_CODEX_COMPOSER_QUOTA_PATH,
+              handler: async (req, res) => {
+                if (!(await authorize(req, res))) return;
+                if (req.method === "GET") return json(res, 200, imageTools.composerQuotaSnapshot());
+                if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+                try {
+                  const body = await readSettingsBody(req);
+                  const choice = body["composerQuota"];
+                  if (Object.keys(body).some(key => key !== "composerQuota") ||
+                    (choice !== "five-hour" && choice !== "weekly" && choice !== "both")) {
+                    throw new TypeError("Invalid composer quota choice");
+                  }
+                  return json(res, 200, await imageTools.updateComposerQuota({ composerQuota: choice }));
                 } catch (error: unknown) {
                   return json(res, 400, { error: safeMessage(error) });
                 }

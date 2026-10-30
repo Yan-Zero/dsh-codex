@@ -199,6 +199,8 @@ export interface Config {
   useNativeCompaction?: boolean;
   /** Force the priority service tier on every Codex session. */
   fastModeDefault?: boolean;
+  /** Quota windows displayed in the composer. */
+  composerQuota?: "five-hour" | "weekly" | "both";
   /** Follow only model recovery explicitly authorized by the account backend. */
   automaticModelFallback?: boolean;
   /** How this plugin applies its proxy URL. */
@@ -238,6 +240,7 @@ export const Config = z.object({
   useWebSocketContextReuse: z.boolean().default(false).volatile(),
   useNativeCompaction: z.boolean().default(false).volatile(),
   fastModeDefault: z.boolean().default(false).volatile(),
+  composerQuota: z.union(["five-hour", "weekly", "both"] as const).default("weekly").volatile(),
   automaticModelFallback: z.boolean().default(false).volatile(),
   proxyMode: z
     .union(["off", "scoped", "global"] as const)
@@ -280,6 +283,7 @@ export function apply(ctx: Context, config: Config): void {
     useWebSocketContextReuse: liveValue(config.useWebSocketContextReuse, false),
     useNativeCompaction: liveValue(config.useNativeCompaction, false),
     fastModeDefault: liveValue(config.fastModeDefault, false),
+    composerQuota: liveValue(config.composerQuota, "weekly"),
     automaticModelFallback: liveValue(config.automaticModelFallback, false),
     proxyMode: liveValue(config.proxyMode, DEFAULT_PROXY_PREFERENCES.proxyMode),
     proxyUrl: liveValue(config.proxyUrl, DEFAULT_PROXY_PREFERENCES.proxyUrl),

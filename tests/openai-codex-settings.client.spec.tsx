@@ -48,6 +48,7 @@ describe("OpenAI Codex settings model catalog", () => {
       shareImagegenWithOtherModels: true,
       imageGenerationModel: "gpt-image-2",
     };
+    let composerQuota = "weekly";
     let fastModeDefault = false;
     let automaticModelFallback = false;
     let authStatus = "signed-out";
@@ -85,6 +86,12 @@ describe("OpenAI Codex settings model catalog", () => {
             useWebSocketContextReuse: false,
             useNativeCompaction: false,
           });
+        if (path.endsWith("/composer-quota")) {
+          if (init?.method === "POST") {
+            composerQuota = (JSON.parse(String(init.body)) as { composerQuota: string }).composerQuota;
+          }
+          return json({ composerQuota });
+        }
         if (path.endsWith("/fast-mode-default")) {
           if (init?.method === "POST") {
             const patch = JSON.parse(String(init.body)) as Partial<{
@@ -237,6 +244,33 @@ describe("OpenAI Codex settings model catalog", () => {
     expect(JSON.parse(String(proxyPosts[1]?.[1]?.body))).toEqual({
       proxyUrl: "http://127.0.0.1:7890",
     });
+
+    const quotaChanged = vi.fn();
+    window.addEventListener("dsh-codex-composer-quota-changed", quotaChanged);
+    const quotaSelector = await screen.findByRole("radiogroup", { name: en.composerQuotaSetting });
+    const choices = [
+      ["five-hour", en.composerQuotaFiveHour],
+      ["both", en.composerQuotaBoth],
+      ["weekly", en.composerQuotaWeekly],
+    ] as const;
+    expect(screen.getByRole("radio", { name: en.composerQuotaWeekly }).getAttribute("aria-checked")).toBe("true");
+    for (const [choice, label] of choices) {
+      const button = screen.getByRole<HTMLButtonElement>("radio", { name: label });
+      await waitFor(() => { expect(button.disabled).toBe(false); });
+      fireEvent.click(button);
+      await waitFor(() => {
+        expect(composerQuota).toBe(choice);
+        expect(button.getAttribute("aria-checked")).toBe("true");
+      });
+    }
+    expect(quotaSelector.querySelectorAll('[role="radio"]')).toHaveLength(3);
+    const quotaPosts = fetchMock.mock.calls.filter(([input, init]) =>
+      String(input).endsWith("/composer-quota") && init?.method === "POST");
+    expect(quotaPosts.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([
+      { composerQuota: "five-hour" }, { composerQuota: "both" }, { composerQuota: "weekly" },
+    ]);
+    expect(quotaChanged).toHaveBeenCalledTimes(3);
+    window.removeEventListener("dsh-codex-composer-quota-changed", quotaChanged);
 
     const fastModeToggle = await screen.findByRole<HTMLButtonElement>(
       "switch",

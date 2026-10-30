@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import type { OpenAICodexUsage } from "../usage.ts";
+import { OPENAI_CODEX_COMPOSER_QUOTA_PATH } from "../auth-paths.ts";
+import type { ComposerQuotaPreferences } from "../tool-policy.ts";
 import type {
   ContextWindowPreferences,
   FastModePreferences,
@@ -340,6 +342,57 @@ function PreferenceToggle({
         }}
       />
     </button>
+  );
+}
+
+function ComposerQuotaControl({ value, disabled, onChange, t }: {
+  value: ComposerQuotaPreferences["composerQuota"];
+  disabled: boolean;
+  onChange(value: ComposerQuotaPreferences["composerQuota"]): void;
+  t: OpenAICodexSettingsInjected["t"];
+}) {
+  const options = [
+    { value: "five-hour", label: "composerQuotaFiveHour" },
+    { value: "weekly", label: "composerQuotaWeekly" },
+    { value: "both", label: "composerQuotaBoth" },
+  ] as const;
+  return (
+    <div
+      style={proxyModeStyle}
+      role="radiogroup"
+      aria-label={t("composerQuotaSetting")}
+      onKeyDown={(event) => {
+        if (disabled || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+        event.preventDefault();
+        const direction = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : -1;
+        const nextIndex = (options.findIndex((option) => option.value === value) + direction + options.length) % options.length;
+        const nextOption = options[nextIndex];
+        if (nextOption === undefined) return;
+        onChange(nextOption.value);
+        event.currentTarget.querySelectorAll("button").item(nextIndex).focus();
+      }}>
+      {options.map((option, index) => {
+        const selected = value === option.value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            tabIndex={selected ? 0 : -1}
+            disabled={disabled}
+            style={{
+              ...proxyModeButtonStyle,
+              opacity: disabled ? 0.55 : 1,
+              ...(index === 0 ? {} : { borderInlineStart: "1px solid var(--dsw-alias-border-l2)" }),
+              ...(selected ? { background: "var(--dsw-alias-button-primary-fill)", color: "var(--dsw-alias-label-primary-foreground)" } : {}),
+            }}
+            onClick={() => { if (!selected) onChange(option.value); }}>
+            {t(option.label)}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -726,6 +779,9 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   const [contextWindowError, setContextWindowError] = useState<
     string | undefined
   >();
+  const [composerQuota, setComposerQuota] = useState<ComposerQuotaPreferences | undefined>();
+  const [composerQuotaBusy, setComposerQuotaBusy] = useState(false);
+  const [composerQuotaError, setComposerQuotaError] = useState<string | undefined>();
   const [fastMode, setFastMode] = useState<FastModePreferences | undefined>();
   const [fastModeBusy, setFastModeBusy] = useState(false);
   const [fastModeError, setFastModeError] = useState<string | undefined>();
@@ -808,6 +864,12 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
       () => {
         setContextWindowError(t("contextWindowSettingsFailed"));
       }
+    );
+  }, [t]);
+  useEffect(() => {
+    void jsonRequest<ComposerQuotaPreferences>(OPENAI_CODEX_COMPOSER_QUOTA_PATH).then(
+      setComposerQuota,
+      () => setComposerQuotaError(t("composerQuotaSettingsFailed"))
     );
   }, [t]);
   useEffect(() => {
@@ -1019,6 +1081,20 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
       );
     } finally {
       setProxyBusy(false);
+    }
+  };
+
+  const updateComposerQuota = async (choice: ComposerQuotaPreferences["composerQuota"]): Promise<void> => {
+    setComposerQuotaBusy(true);
+    setComposerQuotaError(undefined);
+    try {
+      const saved = await jsonRequest<ComposerQuotaPreferences>(OPENAI_CODEX_COMPOSER_QUOTA_PATH, "POST", { composerQuota: choice });
+      setComposerQuota(saved);
+      window.dispatchEvent(new Event("dsh-codex-composer-quota-changed"));
+    } catch {
+      setComposerQuotaError(t("composerQuotaSettingsFailed"));
+    } finally {
+      setComposerQuotaBusy(false);
     }
   };
 
@@ -1431,6 +1507,16 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
         {responseApiError === undefined ? null : (
           <p style={errorStyle}>{responseApiError}</p>
         )}
+      </div>
+      <div style={cardStyle}>
+        <h3 style={quotaTitleStyle}>{t("composerQuotaSetting")}</h3>
+        <ComposerQuotaControl
+          value={composerQuota?.composerQuota ?? "weekly"}
+          disabled={composerQuota === undefined || composerQuotaBusy}
+          onChange={(choice) => { void updateComposerQuota(choice); }}
+          t={t}
+        />
+        {composerQuotaError === undefined ? null : <p style={errorStyle}>{composerQuotaError}</p>}
       </div>
       <div style={cardStyle}>
         <div>
